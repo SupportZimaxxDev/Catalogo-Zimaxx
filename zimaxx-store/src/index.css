@@ -1,0 +1,122 @@
+@import "tailwindcss";
+
+/* Modo oscuro por clase .dark en <html> (ver src/theme.js) */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Identidad Zimaxx: tinta negra cálida + dorado del logo + crema editorial.
+   En Tailwind v4, @theme genera utilidades: bg-primary, text-secondary, etc.
+
+   Semántica de tokens (clave para el modo oscuro):
+   - ink / ink-soft : superficies de marca SIEMPRE oscuras (header, botones).
+   - primary        : color de texto principal — se invierte de noche.
+   - surface        : fondo de tarjetas/tablas (blanco de día, carbón de noche).
+   - bg / line      : fondo de página y hairlines — se ajustan de noche. */
+@theme {
+  --color-primary: #16130d;
+  --color-ink: #16130d;
+  --color-ink-soft: #372f1e;
+  --color-secondary: #c9a227;
+  --color-secondary-dark: #a3821a;
+  --color-gold-pale: #f0e6c8;
+  --color-bg: #f6f3ec;
+  --color-surface: #ffffff;
+  --color-line: #e6e0d2;
+  --font-brand: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --font-sans: 'Outfit', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+/* Alias legibles pedidos por el spec */
+:root {
+  --color-primary: #16130d;
+  --color-secondary: #c9a227;
+  --color-bg: #f6f3ec;
+  color-scheme: light;
+}
+
+/* Noche: mismas utilidades, otra piel. La tinta (ink) no cambia: el
+   chrome de marca negro+dorado es idéntico en ambos modos. */
+.dark {
+  --color-primary: #ece7d8;
+  --color-secondary-dark: #d9b54a;
+  --color-gold-pale: #33290f;
+  --color-bg: #121008;
+  --color-surface: #1d1912;
+  --color-line: #322b1c;
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-primary);
+  font-family: 'Outfit', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.25s ease;
+}
+
+::selection {
+  background: var(--color-secondary);
+  color: #16130d;
+}
+
+/* Scrollbar discreto acorde a la paleta (WebKit) */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d4cdba;
+  border-radius: 5px;
+  border: 2px solid var(--color-bg);
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #4a4128;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-secondary);
+}
+
+/* Foco accesible en dorado, sin el ring azul por defecto */
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--color-secondary);
+  outline-offset: 1px;
+}
+
+/* Ocultar la flecha nativa de <details> (se dibuja una propia) */
+summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Micro-entrada para drawer y secciones */
+@keyframes slide-in-right {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+@keyframes fade-up {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+.animate-drawer {
+  animation: slide-in-right 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.animate-fade-up {
+  animation: fade-up 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
