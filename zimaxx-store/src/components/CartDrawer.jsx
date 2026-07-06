@@ -15,6 +15,7 @@ export default function CartDrawer({ token, client, specialMode }) {
   const { t } = useI18n()
   const cart = useCart()
   const [sent, setSent] = useState(false)
+  const [saveWarn, setSaveWarn] = useState(false)
 
   if (!cart.open) return null
 
@@ -23,22 +24,30 @@ export default function CartDrawer({ token, client, specialMode }) {
   const belowMin = !isQuote && cart.hasPrices && cart.total < MIN_ORDER
 
   const saveOrder = async () => {
-    // Respaldo de auditoría; si falla no bloquea el envío por WhatsApp.
+    // Respaldo de auditoría; si falla no bloquea el envío por WhatsApp,
+    // pero se avisa. El RPC devuelve null si el token o los items no valen.
     try {
-      await supabase.rpc('create_order', {
+      const { data, error } = await supabase.rpc('create_order', {
         p_token: token,
         p_items: cart.items,
         p_total: isQuote ? null : cart.total,
         p_kind: isQuote ? 'quote' : 'order',
       })
+      if (error || !data) {
+        console.warn('No se pudo registrar la orden:', error)
+        return false
+      }
+      return true
     } catch (e) {
       console.warn('No se pudo registrar la orden:', e)
+      return false
     }
   }
 
   const handleCheckout = async () => {
     if (cart.items.length === 0 || belowMin) return
-    await saveOrder()
+    const saved = await saveOrder()
+    setSaveWarn(!saved)
     const msg = buildOrderMessage({
       t,
       clientName,
@@ -169,7 +178,14 @@ export default function CartDrawer({ token, client, specialMode }) {
                 {t('clearCart')}
               </button>
             </div>
-            {sent && <p className="text-center text-xs font-medium text-green-700 dark:text-green-400">{t('orderSent')}</p>}
+            {sent && !saveWarn && (
+              <p className="text-center text-xs font-medium text-green-700 dark:text-green-400">{t('orderSent')}</p>
+            )}
+            {sent && saveWarn && (
+              <p className="rounded-lg bg-gold-pale/60 p-3 text-center text-xs font-medium leading-relaxed">
+                {t('orderSaveWarn')}
+              </p>
+            )}
           </div>
         )}
       </aside>

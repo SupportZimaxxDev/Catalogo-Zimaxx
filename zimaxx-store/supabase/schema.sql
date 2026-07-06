@@ -68,6 +68,11 @@ create table if not exists public.orders (
   created_at timestamptz not null default now()
 );
 
+-- Ciclo de vida del pedido en el panel admin: 'new' (sin atender) | 'done'.
+alter table public.orders
+  add column if not exists status text not null default 'new'
+  check (status in ('new', 'done'));
+
 create table if not exists public.admins (
   user_id uuid primary key references auth.users (id) on delete cascade
 );
@@ -269,6 +274,12 @@ grant execute on function public.get_flash_sales() to anon, authenticated;
 -- INSERT público de pedidos, pero validado por token (más estricto que
 -- abrir INSERT directo sobre la tabla). El cliente nunca puede leer,
 -- actualizar ni borrar orders.
+--
+-- El navegador solo aporta producto, cantidad y si venía de flash sale:
+-- precio unitario y total se recalculan aquí con la lista del cliente
+-- (y flash sales vigentes), así la tabla orders es fuente de verdad
+-- aunque alguien manipule el payload. p_total se ignora; se mantiene en
+-- la firma para no romper clientes ya desplegados.
 create or replace function public.create_order(
   p_token text,
   p_items jsonb,
@@ -281,20 +292,101 @@ security definer
 set search_path = public
 as $$
 declare
-  v_client_id uuid;
+  v_client    public.clients%rowtype;
+  v_list_code text;
+  v_kind      text;
+  v_item      jsonb;
+  v_id        uuid;
+  v_qty       int;
+  v_flash     boolean;
+  v_product   public.products%rowtype;
+  v_price     numeric;
+  v_items     jsonb   := '[]'::jsonb;
+  v_total     numeric := 0;
+  v_has_price boolean := false;
   v_order_id  uuid;
 begin
-  select id into v_client_id from public.clients where token = p_token;
-  if v_client_id is null then
+  select * into v_client from public.clients where token = p_token;
+  if not found then
     return null; -- token inválido: no registra ni explica
   end if;
 
-  if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+  if p_items is null or jsonb_typeof(p_items) <> 'array'
+     or jsonb_array_length(p_items) = 0
+     or jsonb_array_length(p_items) > 200 then
+    return null;
+  end if;
+
+  select code into v_list_code from public.price_lists where id = v_client.price_list_id;
+
+  -- La lista 'special' siempre cotiza (sin precios); el resto respeta p_kind.
+  v_kind := case
+    when v_list_code = 'special' then 'quote'
+    when p_kind = 'quote'        then 'quote'
+    else 'order'
+  end;
+
+  for v_item in select value from jsonb_array_elements(p_items) loop
+    begin
+      v_id    := (v_item->>'id')::uuid;
+      v_qty   := floor((v_item->>'qty')::numeric)::int;
+      v_flash := coalesce((v_item->>'flash')::boolean, false);
+    exception when others then
+      continue; -- ítem malformado: se descarta, no tumba el pedido
+    end;
+    -- ojo: least/greatest ignoran null, por eso el chequeo va antes del tope
+    if v_qty is null or v_qty < 1 then continue; end if;
+    if v_qty > 9999 then v_qty := 9999; end if;
+
+    select * into v_product from public.products where id = v_id and active;
+    if not found then continue; end if;
+
+    v_price := null;
+    if v_kind = 'order' then
+      if v_flash then
+        select fs.price into v_price
+        from public.flash_sales fs
+        where fs.product_id = v_id
+          and fs.active
+          and now() >= fs.starts_at
+          and now() < fs.expires_at
+        order by fs.price
+        limit 1;
+      end if;
+      -- Sin flash vigente (o expiró entre carrito y checkout): precio de lista.
+      if v_price is null then
+        select pp.price into v_price
+        from public.product_prices pp
+        where pp.product_id = v_id
+          and pp.price_list_id = v_client.price_list_id;
+      end if;
+    end if;
+
+    v_items := v_items || jsonb_build_object(
+      'id',    v_product.id,
+      'sku',   v_product.sku,
+      'name',  v_product.name,
+      'qty',   v_qty,
+      'price', v_price,
+      'flash', v_flash
+    );
+    if v_price is not null then
+      v_total     := v_total + v_price * v_qty;
+      v_has_price := true;
+    end if;
+  end loop;
+
+  if jsonb_array_length(v_items) = 0 then
     return null;
   end if;
 
   insert into public.orders (client_id, items, total, kind)
-  values (v_client_id, p_items, p_total, coalesce(nullif(p_kind, ''), 'order'))
+  values (
+    v_client.id,
+    v_items,
+    case when v_kind = 'order' and v_has_price then round(v_total, 2) else null end,
+    v_kind
+  )
   returning id into v_order_id;
 
   return v_order_id;

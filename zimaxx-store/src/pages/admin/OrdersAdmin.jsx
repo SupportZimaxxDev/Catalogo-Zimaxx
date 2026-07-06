@@ -3,7 +3,8 @@ import { supabase } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { money } from '../../utils/format'
 
-// Vista de solo lectura de orders: respaldo para verificar que el checkout funciona.
+// Bandeja de pedidos: cada uno se marca atendido para no depender de la
+// memoria del chat de WhatsApp.
 export default function OrdersAdmin() {
   const { t } = useI18n()
   const [orders, setOrders] = useState([])
@@ -17,6 +18,11 @@ export default function OrdersAdmin() {
       .limit(200)
       .then(({ data }) => setOrders(data ?? []))
   }, [])
+
+  const setStatus = async (id, status) => {
+    const { error } = await supabase.from('orders').update({ status }).eq('id', id)
+    if (!error) setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status } : o)))
+  }
 
   if (orders.length === 0) {
     return (
@@ -39,6 +45,7 @@ export default function OrdersAdmin() {
               <th className="p-3">{t('type')}</th>
               <th className="p-3">{t('items')}</th>
               <th className="p-3 text-right">{t('total')}</th>
+              <th className="p-3">{t('status')}</th>
             </tr>
           </thead>
           <tbody>
@@ -87,6 +94,26 @@ export default function OrdersAdmin() {
                 </td>
                 <td className="p-3 text-right font-bold">
                   {o.total != null ? money(o.total) : '—'}
+                </td>
+                <td className="whitespace-nowrap p-3">
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                      o.status === 'done'
+                        ? 'bg-primary/10 text-primary/50'
+                        : 'bg-gold-pale text-secondary-dark'
+                    }`}
+                  >
+                    {o.status === 'done' ? t('statusDone') : t('statusNew')}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setStatus(o.id, o.status === 'done' ? 'new' : 'done')
+                    }}
+                    className="ml-2 rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
+                  >
+                    {o.status === 'done' ? t('markNew') : t('markDone')}
+                  </button>
                 </td>
               </tr>
             ))}

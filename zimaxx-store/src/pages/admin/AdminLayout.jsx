@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import ThemeToggle from '../../components/ThemeToggle'
@@ -67,8 +67,10 @@ function Login() {
 
 export default function AdminLayout() {
   const { t } = useI18n()
+  const location = useLocation()
   const [session, setSession] = useState(undefined) // undefined = cargando
   const [isAdmin, setIsAdmin] = useState(null)
+  const [newOrders, setNewOrders] = useState(0)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null))
@@ -86,6 +88,16 @@ export default function AdminLayout() {
       .then(({ data }) => setIsAdmin(!!data))
       .catch(() => setIsAdmin(false))
   }, [session])
+
+  // Pedidos sin atender para el badge del menú; se refresca al cambiar de pestaña.
+  useEffect(() => {
+    if (!isAdmin) return
+    supabase
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'new')
+      .then(({ count }) => setNewOrders(count ?? 0))
+  }, [isAdmin, location.pathname])
 
   if (session === undefined) {
     return <p className="py-16 text-center text-primary/60">{t('loading')}</p>
@@ -113,7 +125,7 @@ export default function AdminLayout() {
     { to: '/admin/prices', label: t('prices') },
     { to: '/admin/clients', label: t('clients') },
     { to: '/admin/flash', label: t('flashSales') },
-    { to: '/admin/orders', label: t('orders') },
+    { to: '/admin/orders', label: t('orders'), badge: newOrders },
   ]
 
   return (
@@ -154,6 +166,11 @@ export default function AdminLayout() {
               }
             >
               {tab.label}
+              {tab.badge > 0 && (
+                <span className="ml-1.5 rounded-full bg-secondary px-1.5 py-0.5 text-[10px] font-bold leading-none text-ink">
+                  {tab.badge}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>

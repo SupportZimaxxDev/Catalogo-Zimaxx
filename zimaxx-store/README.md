@@ -69,7 +69,7 @@ Login con email/password (Supabase Auth) + verificación contra la tabla
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 6 listas) con buscador y filtro "solo sin precios". |
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), botón copiar link, carga por Excel. |
 | **Flash Sales** | Crear ofertas con precio promo y vencimiento; visibles para todos con countdown; se ocultan solas al expirar. |
-| **Pedidos** | Solo lectura, últimos 200, con detalle expandible. |
+| **Pedidos** | Últimos 200 con detalle expandible; cada pedido se marca **Nuevo/Atendido** y el menú muestra el contador de pedidos sin atender. |
 
 Las tablas grandes usan **scroll infinito** (lotes de 100) y todas las
 consultas están **paginadas** para superar el límite de 1,000 filas por
@@ -198,11 +198,20 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
     **No expone el SKU.**
   - `get_flash_sales()` — pública, solo ofertas vigentes, sin SKU.
   - `create_order(p_token, ...)` — inserta pedidos validando token; el
-    cliente nunca puede leer/modificar `orders`.
+    cliente nunca puede leer/modificar `orders`. **Los precios y el total se
+    recalculan en el servidor** con la lista del cliente y las flash sales
+    vigentes: el payload del navegador solo aporta producto, cantidad y flag
+    flash (máx. 200 ítems, qty 1–9999). La tabla `orders` es fuente de
+    verdad aunque se manipule el request.
 - Escritura solo para usuarios autenticados presentes en `admins`
   (`is_admin()`).
 - Tokens de cliente: 10 caracteres, `crypto.getRandomValues`, sin caracteres
   ambiguos.
+- **`Referrer-Policy: no-referrer`** (meta + header en `netlify.toml`): el
+  token viaja en la URL y las imágenes de producto son de dominios externos;
+  sin esto el token se fugaría en el header `Referer`. Netlify además envía
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` y
+  `X-Robots-Tag: noindex`.
 
 ---
 

@@ -48,6 +48,8 @@ const dict = {
     product: 'Producto',
     unitPrice: 'Precio unit.',
     orderSent: 'Pedido registrado. Se abrió WhatsApp para enviarlo.',
+    orderSaveWarn:
+      'El pedido se envió por WhatsApp, pero no pudimos registrarlo en el sistema. Confirma con tu vendedora que lo recibió.',
     orderGreeting: 'Hola! Te envío mi pedido:',
     quoteGreeting: 'Hola! Quiero cotizar estos productos:',
 
@@ -127,6 +129,11 @@ const dict = {
     order: 'Pedido',
     quote: 'Cotización',
     items: 'Ítems',
+    status: 'Estado',
+    statusNew: 'Nuevo',
+    statusDone: 'Atendido',
+    markDone: 'Marcar atendido',
+    markNew: 'Reabrir',
   },
   en: {
     search: 'Search products...',
@@ -170,6 +177,8 @@ const dict = {
     product: 'Product',
     unitPrice: 'Unit price',
     orderSent: 'Order saved. WhatsApp was opened to send it.',
+    orderSaveWarn:
+      'Your order was sent via WhatsApp, but we could not save it in the system. Please confirm with your sales rep that it arrived.',
     orderGreeting: 'Hello! Here is my order:',
     quoteGreeting: 'Hello! I would like a quote for these products:',
 
@@ -247,6 +256,11 @@ const dict = {
     order: 'Order',
     quote: 'Quote',
     items: 'Items',
+    status: 'Status',
+    statusNew: 'New',
+    statusDone: 'Done',
+    markDone: 'Mark as done',
+    markNew: 'Reopen',
   },
 }
 

@@ -10,9 +10,18 @@ const ClientsAdmin = lazy(() => import('./pages/admin/ClientsAdmin'))
 const FlashSalesAdmin = lazy(() => import('./pages/admin/FlashSalesAdmin'))
 const OrdersAdmin = lazy(() => import('./pages/admin/OrdersAdmin'))
 
+// Fallback de Suspense: sin esto, /admin queda en blanco mientras baja el chunk.
+function PageLoader() {
+  return (
+    <div className="flex min-h-screen items-center justify-center">
+      <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-secondary/25 border-t-secondary" />
+    </div>
+  )
+}
+
 export default function App() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<PageLoader />}>
       <Routes>
         <Route path="/" element={<Catalog />} />
         <Route path="/admin" element={<AdminLayout />}>

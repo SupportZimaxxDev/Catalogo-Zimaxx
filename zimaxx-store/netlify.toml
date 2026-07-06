@@ -7,3 +7,13 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+# Headers de seguridad. Referrer-Policy es el crítico: el token del cliente
+# viaja en la URL y las imágenes de producto vienen de dominios externos.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Referrer-Policy = "no-referrer"
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    X-Robots-Tag = "noindex"
