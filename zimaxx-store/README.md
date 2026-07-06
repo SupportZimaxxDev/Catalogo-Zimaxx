@@ -14,7 +14,7 @@ RPC) · SheetJS (Excel) · jsPDF · Netlify (deploy).
 
 ### Listas de precios (niveles por inversión)
 
-Dos regiones × dos niveles + una lista de cotización general:
+Dos regiones × dos niveles + una lista Special general (sin región):
 
 | Código | Lista | Quién |
 |---|---|---|
@@ -22,17 +22,17 @@ Dos regiones × dos niveles + una lista de cotización general:
 | `us_wholesale` | US Wholesale | Invierte $2,000 – $14,999 |
 | `ve_min` | VE Minimum Order | Ídem, facturado en Venezuela |
 | `ve_wholesale` | VE Wholesale | Ídem, facturado en Venezuela |
-| `special` | Special Order | Invierte $15,000+ (**cualquier región**): ve el catálogo **sin precios** y pide cotización personalizada |
+| `special` | Special Order | Invierte $15,000+ (**cualquier región**), precio propio |
 
 - **Región**: `ve_*` es exclusivamente para clientes facturados en Venezuela;
   `us_*` abarca todo el resto del mundo (aunque envíen a Miami). **Special no
-  distingue región**: a partir de $15,000 siempre es cotización
-  personalizada, sea cual sea el país.
+  distingue región**: a partir de $15,000 es la misma lista sea cual sea el
+  país del cliente.
 - **El token no cambia al cambiar de lista**: identifica al cliente, y la
   lista se resuelve al abrir el catálogo. Cambiar la lista en el admin
   actualiza al instante lo que ve el mismo link.
 - **Pedido mínimo $800**: el checkout se bloquea por debajo (configurable
-  con `VITE_MIN_ORDER` en `.env`). No aplica a cotizaciones Special Order.
+  con `VITE_MIN_ORDER` en `.env`). Aplica también a Special.
 
 ### Productos
 
@@ -42,7 +42,7 @@ Dos regiones × dos niveles + una lista de cotización general:
   con badge dorado "Pre-Order" en el catálogo y se pueden pedir igual; el
   estado viaja en el mensaje de WhatsApp.
 - Un producto **solo aparece** en el catálogo de un cliente si tiene precio
-  cargado en su lista (excepto Special Order, que ve todo sin precios).
+  cargado en su lista (las 5 listas, incluida Special, se tratan igual).
 - El tamaño va dentro del nombre (ej. "Khamrah 3.4 Oz Edp Unisex"); la
   categoría es la marca (Brand).
 
@@ -66,7 +66,7 @@ Login con email/password (Supabase Auth) + verificación contra la tabla
 | Pestaña | Qué hace |
 |---|---|
 | **Productos** | Tabla completa con buscador (nombre/SKU), filtros (categoría, activo/inactivo/sin foto/pre-order), contadores clickeables de "sin foto" y "Pre-Order", miniaturas, alta/edición manual, y dos cargas por Excel (productos y fotos). |
-| **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 4 listas regionales; Special no tiene precio fijo) con buscador y botones con contador "con precios" / "sin precios". |
+| **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador y botones con contador "con precios" / "sin precios". |
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), botón copiar link, carga por Excel. |
 | **Vendedoras** | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. |
 | **Flash Sales** | Crear ofertas con precio promo y vencimiento; visibles para todos con countdown; se ocultan solas al expirar. |
@@ -113,10 +113,10 @@ Excel con SKU y/o nombre + columna con el link directo a la imagen
 
 Dos formatos:
 1. **Multi-lista**: columna SKU + una columna por lista (`US Minimum Order`,
-   `US Wholesale`, `VE Minimum Order`, `VE Wholesale`). Celdas vacías se
-   ignoran. Special Order no tiene columna: nunca usa precio fijo.
+   `US Wholesale`, `VE Minimum Order`, `VE Wholesale`, `Special`). Celdas
+   vacías se ignoran.
 2. **Lista general** (una sola columna `Price`): elegir la **lista destino**
-   en el selector antes de subir.
+   en el selector antes de subir (Special es una opción más).
 
 La matriz de precios tiene botones con contador para ver solo productos
 **con precio** o **sin precio** (según la lista seleccionada en el filtro).

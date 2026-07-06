@@ -71,8 +71,7 @@ function resolveRegion(row) {
 // "Inactive" no resuelve a ninguna lista: esa fila se descarta entera
 // (no tiene sentido generarle un link de catálogo activo a alguien dado
 // de baja). Special (distribuidor/gran mayorista/especial) es una sola
-// lista general: a partir de $15,000 la región no aplica, siempre es
-// cotización personalizada.
+// lista general: a partir de $15,000 la región no aplica.
 function resolvePriceListCode(row) {
   const comments = normalizeHeader(row.comments ?? '')
   if (/inactiv/.test(comments)) return null
@@ -88,8 +87,7 @@ function resolvePriceListCode(row) {
 
 // Umbrales de inversión → nivel de lista (regla del negocio): el mínimo
 // de orden es $800; desde $2,000 aplica precio mayorista. Desde $15,000
-// es Special: una sola lista general (sin región), siempre cotización
-// personalizada.
+// es Special: una sola lista general con precio propio (sin región).
 export function tierForInvestment(amount) {
   if (amount >= 15000) return 'special'
   if (amount >= 2000) return 'wholesale'
@@ -317,7 +315,8 @@ export default function ClientsAdmin() {
 
   // Monto que el cliente dice que va a invertir → nivel dentro de su
   // región actual (us_/ve_), salvo que el nivel resultante sea 'special':
-  // esa lista es general, sin región (siempre cotización personalizada).
+  // esa lista es general, sin región. Una vez en 'special' no se
+  // reasigna solo: si hay que bajarlo de nivel, se hace a mano.
   const applyInvestment = (client, raw) => {
     const amount = Number(String(raw).replace(/[$,\s]/g, ''))
     if (!Number.isFinite(amount) || amount <= 0) return

@@ -1,17 +1,17 @@
 import { cleanPhone, money } from './format'
 
-// Construye el mensaje de pedido/cotización y el link wa.me a la vendedora.
-export function buildOrderMessage({ t, clientName, items, total, isQuote }) {
+// Construye el mensaje de pedido y el link wa.me a la vendedora.
+export function buildOrderMessage({ t, clientName, items, total }) {
   const lines = []
-  lines.push(`*${t(isQuote ? 'quoteTitle' : 'orderTitle')}*`)
+  lines.push(`*${t('orderTitle')}*`)
   lines.push(`${t('client')}: ${clientName}`)
   lines.push('')
-  lines.push(t(isQuote ? 'quoteGreeting' : 'orderGreeting'))
+  lines.push(t('orderGreeting'))
   lines.push('')
 
   items.forEach((i, n) => {
     const tags = `${i.flash ? ' ⚡' : ''}${i.preorder ? ' (Pre-Order)' : ''}`
-    if (isQuote || i.price == null) {
+    if (i.price == null) {
       lines.push(`${n + 1}. ${i.name} x${i.qty}${tags}`)
     } else {
       lines.push(
@@ -20,10 +20,8 @@ export function buildOrderMessage({ t, clientName, items, total, isQuote }) {
     }
   })
 
-  if (!isQuote) {
-    lines.push('')
-    lines.push(`*${t('total')}: ${money(total)}*`)
-  }
+  lines.push('')
+  lines.push(`*${t('total')}: ${money(total)}*`)
 
   return lines.join('\n')
 }

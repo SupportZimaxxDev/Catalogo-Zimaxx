@@ -6,13 +6,12 @@ import { money } from '../../utils/format'
 import { SearchIcon, inputCls, useInfiniteRows } from './ui'
 
 // Alias aceptados por lista para las columnas del Excel de precios.
-// 'special' no tiene columna propia: nunca usa precio fijo (siempre
-// cotización personalizada), así que no participa de esta carga.
 const LIST_ALIASES = {
   us_min: ['us minimum order', 'us min', 'us minimum', 'us_min'],
   us_wholesale: ['us wholesale', 'us_wholesale'],
   ve_min: ['ve minimum order', 've min', 've minimum', 've_min'],
   ve_wholesale: ['ve wholesale', 've_wholesale'],
+  special: ['special', 'special order', 'us special', 've special'],
 }
 const SKU_ALIASES = ['sku', 'codigo', 'código', 'code', 'productid']
 
@@ -22,7 +21,7 @@ const SKU_ALIASES = ['sku', 'codigo', 'código', 'code', 'productid']
 const GENERIC_PRICE_ALIASES = ['price', 'precio', 'precio unitario', 'unit price']
 
 // Orden fijo de columnas en la matriz de precios.
-const LIST_ORDER = ['us_min', 'us_wholesale', 've_min', 've_wholesale']
+const LIST_ORDER = ['us_min', 'us_wholesale', 've_min', 've_wholesale', 'special']
 
 export default function PricesUpload() {
   const { t } = useI18n()
@@ -65,10 +64,7 @@ export default function PricesUpload() {
   }, [])
 
   const orderedLists = useMemo(
-    () =>
-      priceLists
-        .filter((l) => l.code !== 'special')
-        .sort((a, b) => LIST_ORDER.indexOf(a.code) - LIST_ORDER.indexOf(b.code)),
+    () => [...priceLists].sort((a, b) => LIST_ORDER.indexOf(a.code) - LIST_ORDER.indexOf(b.code)),
     [priceLists],
   )
 

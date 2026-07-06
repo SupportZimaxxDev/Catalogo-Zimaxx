@@ -3,7 +3,7 @@ import { useCart } from '../context/CartContext'
 import { money } from '../utils/format'
 import ProductImage from './ProductImage'
 
-export default function ProductCard({ product, specialMode }) {
+export default function ProductCard({ product }) {
   const { t } = useI18n()
   const cart = useCart()
 
@@ -22,13 +22,13 @@ export default function ProductCard({ product, specialMode }) {
           </p>
         )}
         <h3 className="flex-1 text-sm font-medium leading-snug text-primary">{product.name}</h3>
-        {!specialMode && product.price != null && (
+        {product.price != null && (
           <p className="font-brand text-xl font-semibold text-primary">
             {money(product.price)}
           </p>
         )}
         <button
-          onClick={() => cart.add(product, specialMode ? null : Number(product.price))}
+          onClick={() => cart.add(product, Number(product.price))}
           className="mt-1.5 rounded-xl bg-ink py-2.5 text-sm font-semibold text-secondary transition-colors duration-200 hover:bg-secondary hover:text-ink"
         >
           {t('add')}

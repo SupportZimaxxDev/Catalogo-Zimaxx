@@ -2,8 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 
 // Carrito en memoria + localStorage. Ítems: {id, name, price, qty, flash}
 // La clave es el id del producto (el SKU es interno y ya no viaja al
-// catálogo del cliente). En modo Special Order, price es null y solo
-// cuentan las cantidades.
+// catálogo del cliente).
 const CartContext = createContext(null)
 
 const STORAGE_KEY = 'zimaxx_cart'

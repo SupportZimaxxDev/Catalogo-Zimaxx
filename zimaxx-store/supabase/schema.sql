@@ -221,8 +221,8 @@ end $$;
 
 -- ---------- RPC: get_catalog ----------
 -- Resuelve el cliente por token y devuelve SOLO los precios de su lista.
--- Token inválido => null (sin error descriptivo).
--- Clientes con lista 'special' reciben el catálogo sin precios (modo cotización).
+-- Token inválido => null (sin error descriptivo). 'special' es una lista
+-- de precio normal (2026-07-06): ya no tiene trato especial acá.
 create or replace function public.get_catalog(p_token text)
 returns jsonb
 language plpgsql
@@ -270,9 +270,7 @@ begin
     on pp.product_id = p.id
    and pp.price_list_id = v_client.price_list_id
   where p.active
-    -- lista 'special': todos los productos, sin precio.
-    -- listas normales: solo productos con precio cargado en su lista.
-    and (v_code = 'special' or pp.price is not null);
+    and pp.price is not null;
 
   return jsonb_build_object(
     'client', jsonb_build_object(
@@ -347,7 +345,6 @@ set search_path = public
 as $$
 declare
   v_client    public.clients%rowtype;
-  v_list_code text;
   v_kind      text;
   v_item      jsonb;
   v_id        uuid;
@@ -371,14 +368,7 @@ begin
     return null;
   end if;
 
-  select code into v_list_code from public.price_lists where id = v_client.price_list_id;
-
-  -- La lista 'special' siempre cotiza (sin precios); el resto respeta p_kind.
-  v_kind := case
-    when v_list_code = 'special' then 'quote'
-    when p_kind = 'quote'        then 'quote'
-    else 'order'
-  end;
+  v_kind := case when p_kind = 'quote' then 'quote' else 'order' end;
 
   for v_item in select value from jsonb_array_elements(p_items) loop
     begin

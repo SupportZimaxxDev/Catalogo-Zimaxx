@@ -2,8 +2,8 @@
 
 > Documento de referencia para retomar el trabajo en cualquier sesión.
 > Creado: 2026-07-02. Actualizado: 2026-07-06 (endurecimiento pre-producción,
-> fix Special Order region-indiferente, tabla `vendedores` normalizada).
-> Proyecto construido y build verificado.
+> Special como lista de precio real region-indiferente, tabla `vendedores`
+> normalizada). Proyecto construido y build verificado.
 
 ---
 
@@ -29,10 +29,17 @@ C:\Users\First Choice Online\Documents\Archivos JEsus\Catalogo Zimaxx\zimaxx-sto
   falló por "Failed to fetch" — el build se había compilado sin las
   variables `VITE_*`; se resolvió agregándolas y forzando un redeploy con
   cache limpia)
-- [x] Fix Special Order (2026-07-06): ya **no** se divide por región
-  (eliminadas `us_special`/`ve_special`); es una sola lista general —
-  ver sección "Base de datos" más abajo. Pestaña Precios: botones con
-  contador para ver solo productos con/sin precio.
+- [x] Fix Special Order (2026-07-06, en dos pasos):
+  1. Ya **no** se divide por región (eliminadas `us_special`/`ve_special`);
+     es una sola lista general — ver sección "Base de datos" más abajo.
+  2. A pedido del usuario, dejó de ser "cotización sin precio": ahora es
+     una **lista de precio real** más, se le sube Excel igual que a las
+     otras 4 y el cliente hace checkout normal con total. Se quitó todo
+     el modo "Pedido especial" del catálogo (`specialMode`/`isQuote` en
+     `Catalog.jsx`, `ProductCard.jsx`, `CartDrawer.jsx`, `whatsapp.js`,
+     `pdf.js`) y el bypass de precio en `get_catalog`.
+  Pestaña Precios: botones con contador para ver solo productos con/sin
+  precio.
 - [x] Tabla `vendedores` normalizada (2026-07-06): antes `vendedora`/
   `vendedora_phone` eran texto libre repetido en cada fila de `clients`;
   ahora `clients.vendedora_id` referencia una tabla propia. Nueva pestaña
@@ -44,12 +51,18 @@ C:\Users\First Choice Online\Documents\Archivos JEsus\Catalogo Zimaxx\zimaxx-sto
 - [x] Primer usuario admin registrado en Supabase (login verificado en producción)
 - [x] Deploy en Netlify
 - [ ] **Pendiente: re-ejecutar `supabase/schema.sql`** en el SQL Editor de
-  Supabase — trae la migración de `status` en `orders`, la fusión de
-  `us_special`/`ve_special` en `special`, y la migración de vendedora a la
-  tabla `vendedores` (2026-07-06). Es idempotente, seguro re-correrlo
-  aunque ya haya datos.
+  Supabase — el usuario ya lo corrió una vez (2026-07-06) para `status` en
+  `orders`, la fusión de `us_special`/`ve_special` y la tabla `vendedores`,
+  pero **después** se volvió a tocar `get_catalog`/`create_order` para que
+  Special use precio real, así que hace falta correrlo una vez más. Es
+  idempotente, seguro re-correrlo aunque ya haya datos.
 - [ ] Ajustar `og:image` en `index.html` con el dominio/URL final de Netlify
-- [ ] Excel de clientes reales cargado
+- [ ] Excel de clientes reales cargado (incluyendo precios Special)
+- [ ] **Pendiente: commitear y desplegar en Netlify** el código de esta
+  sesión (fix región-indiferente de Special, tabla vendedores, Special con
+  precio real) — hasta ahora solo se corrió el SQL contra Supabase; el
+  sitio en producción puede seguir sirviendo el JS viejo hasta el próximo
+  deploy.
 
 ---
 
@@ -154,11 +167,14 @@ negro+dorado es idéntico en ambos modos).
 | `us_wholesale` | US Wholesale ($2,000+) |
 | `ve_min` | VE Minimum Order |
 | `ve_wholesale` | VE Wholesale |
-| `special` | Special Order ($15,000+, **cualquier región** — cotización sin precios) |
+| `special` | Special Order ($15,000+, **cualquier región**, precio fijo real) |
 
-Corregido 2026-07-06: Special ya **no** se divide por región (antes existían
-`us_special`/`ve_special` con precio fijo); a partir de $15,000 siempre es
-esta única lista de cotización, sin importar el país del cliente.
+Corregido 2026-07-06 (en dos pasos): (1) Special ya **no** se divide por
+región (antes existían `us_special`/`ve_special`); a partir de $15,000 es
+esta única lista sin importar el país del cliente. (2) A pedido del
+usuario, Special dejó de ser "cotización sin precio" — ahora se le sube
+Excel de precios igual que a las otras 4 y el cliente hace checkout
+normal con total, como cualquier otro nivel.
 
 ---
 
@@ -167,7 +183,8 @@ esta única lista de cotización, sin importar el país del cliente.
 ### `get_catalog(p_token text) → jsonb`
 - Acceso: `anon` y `authenticated`
 - Resuelve el cliente por token. Token inválido → `null` (sin mensaje).
-- Lista `special` → catálogo sin precios (modo cotización).
+- Todas las listas (incluida `special`) se tratan igual: un producto solo
+  aparece si tiene precio cargado en `product_prices` para esa lista.
 - **No expone el SKU** (es interno).
 - Devuelve (mismo contrato JSON de siempre; `vendedora`/`vendedora_phone`
   se resuelven ahora con un join a `vendedores` en vez de leerse directo
@@ -192,7 +209,11 @@ esta única lista de cotización, sin importar el país del cliente.
   ítem; `p_total` se ignora (se mantiene en la firma por compatibilidad).
 - Límites: máx. 200 ítems, qty 1–9999; ítems malformados o de productos
   inactivos se descartan sin tumbar el pedido. Si no sobrevive ninguno → `null`.
-- `p_kind`: `'order'` o `'quote'`; la lista `special` fuerza `'quote'` (sin precios).
+- `p_kind`: `'order'` o `'quote'`, tal cual lo pida el caller (por defecto
+  `'order'`). Ya no hay lista que fuerce `'quote'` — el frontend actual
+  nunca pide `'quote'`, queda para un eventual flujo de cotización manual
+  futuro. Pedidos viejos con `kind = 'quote'` (de cuando Special era
+  cotización) siguen mostrándose como tal en `/admin/orders`.
 - Los ítems guardados incluyen el SKU real del producto (solo visible en el admin).
 - Devuelve el `id` del pedido creado; el frontend (`CartDrawer`) revisa el
   retorno y avisa al cliente si el registro falló (WhatsApp sale igual).
@@ -315,7 +336,7 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 
 ## Decisiones de diseño no explícitas en el spec
 
-1. **Special Order es una lista más** (`price_list_code = 'special'`), no una lógica separada. Simplifica el modelo de datos.
+1. **Special Order es una lista más** (`price_list_code = 'special'`), no una lógica separada. Simplifica el modelo de datos. (Originalmente sin precio fijo/cotización personalizada; revertido en el punto 11 a pedido del usuario.)
 2. **`vendedora_phone` en `clients`** — el spec solo pedía el nombre de la vendedora; el número es necesario para el link `wa.me`.
 3. **`create_order` como RPC** en vez de policy INSERT directa — más estricto: no se puede insertar sin token válido.
 4. **Imágenes como URL** — sin upload de archivos por ahora; usar cualquier hosting o Supabase Storage pegando la URL pública.
@@ -325,3 +346,4 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 8. **Ciclo de vida del pedido** (2026-07-06) — columna `status` ('new'/'done'), botón Marcar atendido/Reabrir en `/admin/orders` y badge con el conteo de pendientes en el menú del admin.
 9. **Open Graph** (2026-07-06) — el link compartido por WhatsApp genera tarjeta de vista previa con logo. `og:image` exige URL absoluta: apunta a `https://zimaxx-store.netlify.app/zimaxx.png`; ajustar en `index.html` si el dominio final es otro.
 10. **Tabla `vendedores` normalizada** (2026-07-06) — antes `vendedora`/`vendedora_phone` eran texto libre repetido en cada fila de `clients` (mismo nombre podía escribirse distinto en cada Excel). Ahora es una tabla propia con `clients.vendedora_id` como FK: el teléfono se edita en un solo lugar y se refleja al instante en el link de WhatsApp de todos sus clientes. `get_catalog` resuelve el join pero devuelve el mismo JSON de siempre, así que el frontend del catálogo no cambió.
+11. **Special pasó a tener precio fijo real** (2026-07-06, a pedido del usuario) — hasta entonces `special` era la única lista sin precio ("catálogo sin precios, checkout = cotización"), y por eso la pestaña Precios no ofrecía subirle Excel. El usuario pidió poder cargarle precios como a cualquier otra lista, así que se quitó el modo "Pedido especial" por completo: `get_catalog` ya no bypassea el requisito de precio para `special`, y se eliminó `specialMode`/`isQuote` de `Catalog.jsx`, `ProductCard.jsx`, `CartDrawer.jsx`, `whatsapp.js` y `pdf.js`. El checkout de un cliente Special ahora es idéntico al de cualquier otro nivel (total, mínimo de $800, mensaje de WhatsApp normal). El `kind`/`p_kind` ('order'/'quote') de `create_order` se mantiene en el schema por si se quiere un flujo de cotización manual más adelante, pero ya nada lo dispara automáticamente.

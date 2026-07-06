@@ -61,8 +61,6 @@ export default function Catalog() {
     }
   }, [token])
 
-  const specialMode = client?.price_list_code === 'special'
-
   const categories = useMemo(
     () => [...new Set(products.map((p) => p.category).filter(Boolean))].sort(),
     [products],
@@ -82,7 +80,7 @@ export default function Catalog() {
       <Header clientName={client?.name} />
 
       <main className="mx-auto max-w-6xl px-4 py-6">
-        <FlashSaleSection sales={flashSales} canOrder={validClient && !specialMode} />
+        <FlashSaleSection sales={flashSales} canOrder={validClient} />
 
         {loading ? (
           <div className="flex flex-col items-center gap-3 py-20">
@@ -97,13 +95,6 @@ export default function Catalog() {
           </div>
         ) : (
           <>
-            {specialMode && (
-              <div className="mb-5 animate-fade-up rounded-2xl border border-secondary/40 bg-gold-pale/40 p-4">
-                <p className="font-brand font-semibold italic">✨ {t('specialMode')}</p>
-                <p className="mt-0.5 text-sm text-primary/70">{t('specialHint')}</p>
-              </div>
-            )}
-
             {/* Buscador + categorías */}
             <div className="mb-6 space-y-3">
               <div className="relative">
@@ -154,7 +145,7 @@ export default function Catalog() {
                 </p>
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-3 md:gap-4 lg:grid-cols-4">
                   {filtered.slice(0, visible).map((p) => (
-                    <ProductCard key={p.id} product={p} specialMode={specialMode} />
+                    <ProductCard key={p.id} product={p} />
                   ))}
                 </div>
                 {filtered.length > visible && (
@@ -169,7 +160,7 @@ export default function Catalog() {
       </main>
 
       <CartBar />
-      <CartDrawer token={token} client={client} specialMode={specialMode} />
+      <CartDrawer token={token} client={client} />
     </div>
   )
 }

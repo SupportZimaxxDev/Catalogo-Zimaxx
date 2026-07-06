@@ -43,7 +43,6 @@ const dict = {
     checkout: 'Enviar pedido por WhatsApp',
     downloadPdf: 'Descargar PDF',
     orderTitle: 'Pedido Zimaxx Store',
-    quoteTitle: 'Solicitud de cotización',
     client: 'Cliente',
     product: 'Producto',
     unitPrice: 'Precio unit.',
@@ -51,13 +50,6 @@ const dict = {
     orderSaveWarn:
       'El pedido se envió por WhatsApp, pero no pudimos registrarlo en el sistema. Confirma con tu vendedora que lo recibió.',
     orderGreeting: 'Hola! Te envío mi pedido:',
-    quoteGreeting: 'Hola! Quiero cotizar estos productos:',
-
-    // Special order
-    specialMode: 'Pedido especial',
-    specialHint:
-      'Arma tu lista de productos deseados y solicita tu cotización personalizada. Tu vendedora te responderá con los precios.',
-    requestQuote: 'Solicitar cotización personalizada',
 
     // Admin
     adminTitle: 'Panel admin',
@@ -84,7 +76,7 @@ const dict = {
     uploadExcel: 'Subir Excel',
     processing: 'Procesando...',
     priceUploadHint:
-      'Excel/CSV con columna SKU y una columna por lista de precio (US Minimum Order, US Wholesale, VE Minimum Order, VE Wholesale).',
+      'Excel/CSV con columna SKU y una columna por lista de precio (US Minimum Order, US Wholesale, VE Minimum Order, VE Wholesale, Special).',
     productUploadHint:
       'Excel/CSV con columnas: nombre (o Title Product), categoría (o Brand), imagen (URL), Type (Available / Pre Order), activo y opcional SKU. Acepta las listas wholesale con membrete: detecta la fila de encabezados y la columna de fotos automáticamente. El SKU es interno, nunca se muestra al cliente; si falta se genera uno. Actualiza existentes por SKU y crea los nuevos; los campos que el archivo no trae no se tocan.',
     imageUploadHint:
@@ -180,7 +172,6 @@ const dict = {
     checkout: 'Send order via WhatsApp',
     downloadPdf: 'Download PDF',
     orderTitle: 'Zimaxx Store Order',
-    quoteTitle: 'Quote request',
     client: 'Client',
     product: 'Product',
     unitPrice: 'Unit price',
@@ -188,12 +179,6 @@ const dict = {
     orderSaveWarn:
       'Your order was sent via WhatsApp, but we could not save it in the system. Please confirm with your sales rep that it arrived.',
     orderGreeting: 'Hello! Here is my order:',
-    quoteGreeting: 'Hello! I would like a quote for these products:',
-
-    specialMode: 'Special order',
-    specialHint:
-      'Build your wishlist and request a personalized quote. Your sales rep will reply with prices.',
-    requestQuote: 'Request personalized quote',
 
     adminTitle: 'Admin panel',
     email: 'Email',
@@ -219,7 +204,7 @@ const dict = {
     uploadExcel: 'Upload Excel',
     processing: 'Processing...',
     priceUploadHint:
-      'Excel/CSV with a SKU column plus one column per price list (US Minimum Order, US Wholesale, VE Minimum Order, VE Wholesale).',
+      'Excel/CSV with a SKU column plus one column per price list (US Minimum Order, US Wholesale, VE Minimum Order, VE Wholesale, Special).',
     productUploadHint:
       'Excel/CSV with columns: name (or Title Product), category (or Brand), image (URL), Type (Available / Pre Order), active, and optional SKU. Accepts letterhead wholesale lists: header row and photo column are detected automatically. SKU is internal and never shown to clients; missing SKUs are generated. Updates existing products by SKU and creates new ones; fields the file lacks are left untouched.',
     imageUploadHint:
