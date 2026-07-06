@@ -23,15 +23,17 @@ export const inputCls =
 
 // Zona de carga de Excel colapsable: los uploads son ocasionales y no
 // deben robarle espacio a la tabla, que es el trabajo diario.
+// min-w-0/overflow-hidden: como ítem de grid, sin esto el contenido largo
+// del hint estira el cuadro más allá del ancho del teléfono.
 export function UploadZone({ icon, title, hint, busy, result, onFile }) {
   return (
-    <details className="group rounded-2xl border border-line bg-surface shadow-sm">
-      <summary className="flex cursor-pointer select-none items-center gap-3 p-4">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gold-pale/60 text-lg">
+    <details className="group min-w-0 max-w-full overflow-hidden rounded-2xl border border-line bg-surface shadow-sm">
+      <summary className="flex cursor-pointer select-none list-none items-center gap-3 p-4 [&::-webkit-details-marker]:hidden">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gold-pale/60 text-lg">
           {icon}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold">{title}</p>
+          <p className="truncate text-sm font-semibold">{title}</p>
           <p className="truncate text-xs text-primary/50">{hint}</p>
         </div>
         <svg
@@ -47,14 +49,14 @@ export function UploadZone({ icon, title, hint, busy, result, onFile }) {
         </svg>
       </summary>
       <div className="space-y-3 px-4 pb-4">
-        <p className="text-xs leading-relaxed text-primary/60">{hint}</p>
-        <label className="block cursor-pointer rounded-xl border-2 border-dashed border-secondary/50 p-6 text-center transition-colors hover:border-secondary hover:bg-gold-pale/20">
+        <p className="break-words text-xs leading-relaxed text-primary/60">{hint}</p>
+        <label className="block cursor-pointer rounded-xl border-2 border-dashed border-secondary/50 px-4 py-6 text-center transition-colors hover:border-secondary hover:bg-gold-pale/20">
           <input type="file" accept=".xlsx,.xls,.csv" onChange={onFile} className="hidden" />
-          <p className="text-sm font-semibold text-primary/80">{busy ? '…' : title}</p>
+          <p className="break-words text-sm font-semibold text-primary/80">{busy ? '…' : title}</p>
         </label>
         {result && (
           <p
-            className={`rounded-lg p-3 text-xs leading-relaxed ${
+            className={`break-words rounded-lg p-3 text-xs leading-relaxed ${
               result.ok ? 'bg-green-50 text-green-800 dark:bg-green-950/50 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300'
             }`}
           >
