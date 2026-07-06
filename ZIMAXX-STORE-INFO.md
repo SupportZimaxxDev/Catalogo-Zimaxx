@@ -1,7 +1,9 @@
 # Zimaxx Store — Referencia completa del proyecto
 
 > Documento de referencia para retomar el trabajo en cualquier sesión.
-> Creado: 2026-07-02. Proyecto construido y build verificado.
+> Creado: 2026-07-02. Actualizado: 2026-07-06 (endurecimiento pre-producción:
+> precios server-side en `create_order`, estado de pedidos, headers de
+> seguridad, Open Graph). Proyecto construido y build verificado.
 
 ---
 
@@ -14,13 +16,18 @@ C:\Users\First Choice Online\Documents\Archivos JEsus\Catalogo Zimaxx\zimaxx-sto
 ## Estado actual
 
 - [x] Código fuente completo (React + Vite + Tailwind v4)
-- [x] `npm run build` pasa limpio (bundle gzip ~116 kB initial chunk)
+- [x] `npm run build` pasa limpio (bundle gzip ~121 kB initial chunk)
 - [x] SQL de Supabase listo en `supabase/schema.sql`
-- [x] `netlify.toml` configurado
+- [x] `netlify.toml` configurado (incluye headers de seguridad)
+- [x] Endurecimiento pre-producción (2026-07-06):
+  - `create_order` recalcula precios y total **en el servidor** (ignora el payload)
+  - Pedidos con estado Nuevo/Atendido + contador en el menú admin
+  - `Referrer-Policy: no-referrer` (el token no se fuga a los hosts de imágenes)
+  - Open Graph para la vista previa del link en WhatsApp + spinner de carga
 - [ ] Proyecto Supabase creado y schema ejecutado
 - [ ] Variables de entorno en `.env` (local) y en Netlify
 - [ ] Primer usuario admin registrado en Supabase
-- [ ] Deploy en Netlify
+- [ ] Deploy en Netlify (al conocer el dominio final, ajustar `og:image` en `index.html`)
 - [ ] Excel de clientes reales cargado
 
 ---
@@ -88,14 +95,19 @@ zimaxx-store/
 
 ## Colores de marca (variables CSS)
 
-| Variable | Hex | Uso |
+| Variable | Hex (día) | Uso |
 |---|---|---|
-| `--color-primary` | `#0D0D0D` | Negro principal |
-| `--color-secondary` | `#D4AF37` | Dorado (botones, acentos) |
-| `--color-secondary-dark` | `#B8962E` | Dorado hover |
-| `--color-bg` | `#F7F6F2` | Fondo blanco roto |
+| `--color-primary` / `--color-ink` | `#16130d` | Tinta negra cálida (texto / chrome de marca) |
+| `--color-secondary` | `#c9a227` | Dorado (botones, acentos) |
+| `--color-secondary-dark` | `#a3821a` | Dorado hover |
+| `--color-gold-pale` | `#f0e6c8` | Fondos dorados suaves (badges, avisos) |
+| `--color-bg` | `#f6f3ec` | Fondo crema de página |
+| `--color-surface` | `#ffffff` | Tarjetas / tablas |
 
 En Tailwind: `bg-primary`, `text-secondary`, `hover:bg-secondary-dark`, etc.
+Modo oscuro por clase `.dark` en `<html>` (ver `src/theme.js`): `primary`,
+`bg`, `surface`, `line` y `gold-pale` cambian de piel; `ink` no (el chrome
+negro+dorado es idéntico en ambos modos).
 
 ---
 
@@ -103,22 +115,24 @@ En Tailwind: `bg-primary`, `text-secondary`, `hover:bg-secondary-dark`, etc.
 
 | Tabla | Descripción |
 |---|---|
-| `price_lists` | Listas de precio fijas (5 registros ya sembrados) |
-| `clients` | Clientes con token único, lista asignada y vendedora |
-| `products` | Catálogo de productos |
+| `price_lists` | Listas de precio fijas (7 registros ya sembrados) |
+| `clients` | Clientes con token único, lista asignada, vendedora y `vendedora_phone` |
+| `products` | Catálogo de productos (`availability`: 'available' \| 'preorder') |
 | `product_prices` | Precio por producto+lista (clave compuesta) |
 | `flash_sales` | Ofertas con fecha de expiración |
-| `orders` | Pedidos registrados al hacer checkout (auditoría) |
+| `orders` | Pedidos del checkout — fuente de verdad (precios recalculados en el servidor) con `status` 'new' \| 'done' |
 | `admins` | user_id de Supabase Auth autorizados como admin |
 
 ### Listas de precio sembradas por el schema
 
 | code | label |
 |---|---|
-| `us_min` | US Minimum Order |
-| `us_wholesale` | US Wholesale |
+| `us_min` | US Minimum Order ($800+) |
+| `us_wholesale` | US Wholesale ($2,000+) |
+| `us_special` | US Special ($15,000+) |
 | `ve_min` | VE Minimum Order |
 | `ve_wholesale` | VE Wholesale |
+| `ve_special` | VE Special |
 | `special` | Special Order (cotización sin precios) |
 
 ---
@@ -129,11 +143,12 @@ En Tailwind: `bg-primary`, `text-secondary`, `hover:bg-secondary-dark`, etc.
 - Acceso: `anon` y `authenticated`
 - Resuelve el cliente por token. Token inválido → `null` (sin mensaje).
 - Lista `special` → catálogo sin precios (modo cotización).
+- **No expone el SKU** (es interno).
 - Devuelve:
   ```json
   {
     "client": { "name", "vendedora", "vendedora_phone", "price_list_code" },
-    "products": [ { "id", "sku", "name", "category", "image_url", "price" } ]
+    "products": [ { "id", "name", "category", "image_url", "availability", "price" } ]
   }
   ```
 
@@ -144,8 +159,16 @@ En Tailwind: `bg-primary`, `text-secondary`, `hover:bg-secondary-dark`, etc.
 ### `create_order(p_token, p_items, p_total, p_kind) → uuid`
 - Acceso: `anon` y `authenticated`.
 - Valida el token; si es inválido devuelve `null` sin registrar.
-- `p_kind`: `'order'` (con precios) o `'quote'` (Special Order sin precios).
-- Devuelve el `id` del pedido creado.
+- **Los precios y el total se recalculan en el servidor** con la lista del
+  cliente y las flash sales vigentes (fallback a precio de lista si la
+  oferta expiró). Del payload solo se usan `id`, `qty` y `flash` de cada
+  ítem; `p_total` se ignora (se mantiene en la firma por compatibilidad).
+- Límites: máx. 200 ítems, qty 1–9999; ítems malformados o de productos
+  inactivos se descartan sin tumbar el pedido. Si no sobrevive ninguno → `null`.
+- `p_kind`: `'order'` o `'quote'`; la lista `special` fuerza `'quote'` (sin precios).
+- Los ítems guardados incluyen el SKU real del producto (solo visible en el admin).
+- Devuelve el `id` del pedido creado; el frontend (`CartDrawer`) revisa el
+  retorno y avisa al cliente si el registro falló (WhatsApp sale igual).
 
 ### `is_admin() → boolean`
 - Acceso: solo `authenticated`.
@@ -159,6 +182,11 @@ En Tailwind: `bg-primary`, `text-secondary`, `hover:bg-secondary-dark`, etc.
 - Todo acceso público es vía las RPC SECURITY DEFINER.
 - **`authenticated` + `is_admin() = true`**: acceso total (policy `admin_all` en todas las tablas).
 - No hay políticas para `anon` sobre las tablas → denegado implícitamente.
+- **Headers** (meta en `index.html` + `netlify.toml`): `Referrer-Policy:
+  no-referrer` — crítico porque el token viaja en la URL (`?c=<token>`) y
+  las imágenes de producto se cargan de dominios externos; sin esto el token
+  se fugaría en el header `Referer`. Además `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff` y `X-Robots-Tag: noindex` (+ meta robots).
 
 ---
 
@@ -251,5 +279,8 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 2. **`vendedora_phone` en `clients`** — el spec solo pedía el nombre de la vendedora; el número es necesario para el link `wa.me`.
 3. **`create_order` como RPC** en vez de policy INSERT directa — más estricto: no se puede insertar sin token válido.
 4. **Imágenes como URL** — sin upload de archivos por ahora; usar cualquier hosting o Supabase Storage pegando la URL pública.
-5. **Admin lazy-loaded** — todo el panel admin (SheetJS, jsPDF, etc.) se carga solo cuando se navega a `/admin`, no pesa en el bundle del cliente.
+5. **Admin lazy-loaded** — todo el panel admin (SheetJS, jsPDF, etc.) se carga solo cuando se navega a `/admin`, no pesa en el bundle del cliente. El `Suspense` muestra un spinner dorado mientras baja el chunk.
 6. **Carrito persistente en `localStorage`** — sobrevive a cerrar la pestaña y recargar.
+7. **Precios server-side en `create_order`** (2026-07-06) — el navegador nunca dicta precios ni total; la tabla `orders` es fuente de verdad aunque se manipule el request.
+8. **Ciclo de vida del pedido** (2026-07-06) — columna `status` ('new'/'done'), botón Marcar atendido/Reabrir en `/admin/orders` y badge con el conteo de pendientes en el menú del admin.
+9. **Open Graph** (2026-07-06) — el link compartido por WhatsApp genera tarjeta de vista previa con logo. `og:image` exige URL absoluta: apunta a `https://zimaxx-store.netlify.app/zimaxx.png`; ajustar en `index.html` si el dominio final es otro.
