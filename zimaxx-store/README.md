@@ -14,20 +14,20 @@ RPC) · SheetJS (Excel) · jsPDF · Netlify (deploy).
 
 ### Listas de precios (niveles por inversión)
 
-Dos regiones × tres niveles + una lista de cotización:
+Dos regiones × dos niveles + una lista de cotización general:
 
 | Código | Lista | Quién |
 |---|---|---|
 | `us_min` | US Minimum Order | Invierte $800 – $1,999 |
 | `us_wholesale` | US Wholesale | Invierte $2,000 – $14,999 |
-| `us_special` | US Special | Invierte $15,000+ |
 | `ve_min` | VE Minimum Order | Ídem, facturado en Venezuela |
 | `ve_wholesale` | VE Wholesale | Ídem, facturado en Venezuela |
-| `ve_special` | VE Special | Ídem, facturado en Venezuela |
-| `special` | Special Order | Cotización personalizada: ve el catálogo **sin precios** y pide cotización |
+| `special` | Special Order | Invierte $15,000+ (**cualquier región**): ve el catálogo **sin precios** y pide cotización personalizada |
 
 - **Región**: `ve_*` es exclusivamente para clientes facturados en Venezuela;
-  `us_*` abarca todo el resto del mundo (aunque envíen a Miami).
+  `us_*` abarca todo el resto del mundo (aunque envíen a Miami). **Special no
+  distingue región**: a partir de $15,000 siempre es cotización
+  personalizada, sea cual sea el país.
 - **El token no cambia al cambiar de lista**: identifica al cliente, y la
   lista se resuelve al abrir el catálogo. Cambiar la lista en el admin
   actualiza al instante lo que ve el mismo link.
@@ -66,8 +66,9 @@ Login con email/password (Supabase Auth) + verificación contra la tabla
 | Pestaña | Qué hace |
 |---|---|
 | **Productos** | Tabla completa con buscador (nombre/SKU), filtros (categoría, activo/inactivo/sin foto/pre-order), contadores clickeables de "sin foto" y "Pre-Order", miniaturas, alta/edición manual, y dos cargas por Excel (productos y fotos). |
-| **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 6 listas) con buscador y filtro "solo sin precios". |
+| **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 4 listas regionales; Special no tiene precio fijo) con buscador y botones con contador "con precios" / "sin precios". |
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), botón copiar link, carga por Excel. |
+| **Vendedoras** | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. |
 | **Flash Sales** | Crear ofertas con precio promo y vencimiento; visibles para todos con countdown; se ocultan solas al expirar. |
 | **Pedidos** | Últimos 200 con detalle expandible; cada pedido se marca **Nuevo/Atendido** y el menú muestra el contador de pedidos sin atender. |
 
@@ -112,9 +113,13 @@ Excel con SKU y/o nombre + columna con el link directo a la imagen
 
 Dos formatos:
 1. **Multi-lista**: columna SKU + una columna por lista (`US Minimum Order`,
-   `US Wholesale`, `US Special`, `VE ...`). Celdas vacías se ignoran.
+   `US Wholesale`, `VE Minimum Order`, `VE Wholesale`). Celdas vacías se
+   ignoran. Special Order no tiene columna: nunca usa precio fijo.
 2. **Lista general** (una sola columna `Price`): elegir la **lista destino**
    en el selector antes de subir.
+
+La matriz de precios tiene botones con contador para ver solo productos
+**con precio** o **sin precio** (según la lista seleccionada en el filtro).
 
 ### Clientes (pestaña Clientes)
 
@@ -123,9 +128,14 @@ Acepta el Excel simple (`nombre`, `telefono`, `lista de precio`, `vendedora`,
 FirstName+LastName, Phone/Phone1, SalesMan, Country, Comments):
 
 - `Comments` mapea el nivel: Minorista → min · Mayorista → wholesale ·
-  Distribuidor/Gran Mayorista → special · Especial → Special Order ·
-  **Inactive → se excluye**.
-- `Country` = Venezuela → listas `ve_*`; cualquier otro país → `us_*`.
+  Distribuidor/Gran Mayorista/Especial → **special** (una sola lista, sin
+  región) · **Inactive → se excluye**.
+- `Country` = Venezuela → listas `ve_*`; cualquier otro país → `us_*`
+  (no aplica a Special, que es la misma lista para cualquier país).
+- `vendedora`/`telefono vendedora` (o `SalesMan`) resuelven contra la tabla
+  `vendedores` por nombre (sin distinguir mayúsculas): si no existe una con
+  ese nombre se crea sobre la marcha. Re-subir un archivo sin esa columna
+  **no borra** la vendedora ya asignada al cliente.
 - Match por **teléfono**: crea nuevos (token automático) y actualiza
   existentes. **Nunca borra** clientes. Cuentas de prueba ("Test...",
   "NO USAR") se excluyen.
@@ -139,7 +149,9 @@ FirstName+LastName, Phone/Phone1, SalesMan, Country, Comments):
 1. Crear proyecto en [supabase.com](https://supabase.com).
 2. Ejecutar completo [`supabase/schema.sql`](supabase/schema.sql) en el SQL
    Editor. **Es idempotente**: se re-ejecuta sin romper datos, e incluye las
-   migraciones (p. ej. renombre distribuidor → special).
+   migraciones (p. ej. fusión de distribuidor/us_special/ve_special en la
+   lista general `special`, y el paso de `vendedora`/`vendedora_phone`
+   —texto libre en `clients`— a la tabla `vendedores` con relación).
 3. Crear el primer admin: **Authentication → Users → Add user**, luego:
 
    ```sql
@@ -258,6 +270,7 @@ src/
       ProductsAdmin.jsx Productos + carga Excel + fotos Excel
       PricesUpload.jsx  Precios Excel + matriz por lista
       ClientsAdmin.jsx  Clientes + niveles por inversión
+      VendedoresAdmin.jsx  Alta manual de vendedoras + teléfono
       FlashSalesAdmin.jsx
       OrdersAdmin.jsx
       ui.jsx            Piezas compartidas (UploadZone, SearchIcon, ...)

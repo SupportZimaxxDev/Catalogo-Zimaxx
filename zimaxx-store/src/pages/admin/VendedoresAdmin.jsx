@@ -1,0 +1,196 @@
+import { useEffect, useMemo, useState } from 'react'
+import { supabase, fetchAll } from '../../lib/supabase'
+import { useI18n } from '../../i18n'
+import { cleanPhone } from '../../utils/format'
+import { inputCls } from './ui'
+
+const EMPTY = { name: '', phone: '' }
+
+// Gestión de vendedoras: reemplaza el texto libre que antes vivía repetido
+// en cada cliente. El teléfono se edita en un solo lugar y se refleja al
+// instante en el link de WhatsApp de todos sus clientes.
+export default function VendedoresAdmin() {
+  const { t } = useI18n()
+  const [vendedoras, setVendedoras] = useState([])
+  const [clients, setClients] = useState([])
+  const [form, setForm] = useState(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [editingId, setEditingId] = useState(null)
+  const [editPhone, setEditPhone] = useState('')
+
+  const load = async () => {
+    try {
+      const [vs, cs] = await Promise.all([
+        fetchAll('vendedores', '*', 'name'),
+        fetchAll('clients', 'id, vendedora_id'),
+      ])
+      setVendedoras(vs)
+      setClients(cs)
+    } catch {
+      /* la tabla queda como estaba; el próximo load reintenta */
+    }
+  }
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  const clientCount = useMemo(() => {
+    const map = new Map()
+    for (const c of clients) {
+      if (!c.vendedora_id) continue
+      map.set(c.vendedora_id, (map.get(c.vendedora_id) ?? 0) + 1)
+    }
+    return map
+  }, [clients])
+
+  const save = async (e) => {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    const { error } = await supabase.from('vendedores').insert({
+      name: form.name.trim(),
+      phone: cleanPhone(form.phone) || null,
+    })
+    if (error) {
+      setError(error.message)
+    } else {
+      setForm(null)
+      await load()
+    }
+    setBusy(false)
+  }
+
+  const startEdit = (v) => {
+    setEditingId(v.id)
+    setEditPhone(v.phone ?? '')
+  }
+
+  const savePhone = async (id) => {
+    const phone = cleanPhone(editPhone) || null
+    const { error } = await supabase.from('vendedores').update({ phone }).eq('id', id)
+    if (!error) {
+      setVendedoras((prev) => prev.map((v) => (v.id === id ? { ...v, phone } : v)))
+    }
+    setEditingId(null)
+  }
+
+  const remove = async (id) => {
+    const { error } = await supabase.from('vendedores').delete().eq('id', id)
+    if (error) {
+      setError(t('vendedoraInUse'))
+    } else {
+      setError('')
+      setVendedoras((prev) => prev.filter((v) => v.id !== id))
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="font-brand text-2xl font-semibold">
+          {t('vendedoras')}
+          <span className="ml-2 text-base font-normal text-primary/40">{vendedoras.length}</span>
+        </h2>
+        <button
+          onClick={() => setForm({ ...EMPTY })}
+          className="rounded-full bg-ink px-5 py-2 text-sm font-semibold text-secondary transition-colors hover:bg-ink-soft"
+        >
+          + {t('newVendedora')}
+        </button>
+      </div>
+
+      {form && (
+        <form
+          onSubmit={save}
+          className="grid animate-fade-up gap-3 rounded-2xl border border-secondary/40 bg-surface p-5 shadow-sm md:grid-cols-2"
+        >
+          <input
+            required
+            placeholder={t('name')}
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            className={inputCls}
+          />
+          <input
+            placeholder={t('phone')}
+            value={form.phone}
+            onChange={(e) => setForm({ ...form, phone: e.target.value })}
+            className={inputCls}
+          />
+          {error && <p className="text-sm text-red-600 dark:text-red-400 md:col-span-2">{error}</p>}
+          <div className="flex gap-2 md:col-span-2">
+            <button
+              disabled={busy}
+              className="rounded-full bg-secondary px-6 py-2 text-sm font-bold text-ink transition-colors hover:bg-secondary-dark disabled:opacity-50"
+            >
+              {t('save')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setForm(null)}
+              className="rounded-full border border-line px-6 py-2 text-sm transition-colors hover:border-primary/40"
+            >
+              {t('cancel')}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {error && !form && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+
+      <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-sm">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-line text-left text-[11px] uppercase tracking-wider text-primary/45">
+              <th className="p-3">{t('name')}</th>
+              <th className="p-3">{t('phone')}</th>
+              <th className="p-3">{t('assignedClients')}</th>
+              <th className="p-3" />
+            </tr>
+          </thead>
+          <tbody>
+            {vendedoras.map((v) => (
+              <tr key={v.id} className="border-b border-line/60 transition-colors hover:bg-gold-pale/20">
+                <td className="p-3 font-medium">{v.name}</td>
+                <td className="p-3 font-mono text-xs">
+                  {editingId === v.id ? (
+                    <input
+                      autoFocus
+                      value={editPhone}
+                      onChange={(e) => setEditPhone(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && savePhone(v.id)}
+                      onBlur={() => savePhone(v.id)}
+                      placeholder="13055551234"
+                      className="w-36 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
+                    />
+                  ) : (
+                    <button
+                      onClick={() => startEdit(v)}
+                      className="text-primary/70 hover:text-secondary-dark hover:underline"
+                    >
+                      {v.phone || <span className="italic text-primary/35">{t('noPhone')}</span>}
+                    </button>
+                  )}
+                </td>
+                <td className="p-3 text-primary/60">{clientCount.get(v.id) ?? 0}</td>
+                <td className="p-3 text-right">
+                  <button
+                    onClick={() => remove(v.id)}
+                    className="text-xs font-semibold text-red-600 hover:underline dark:text-red-400"
+                  >
+                    {t('remove')}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {vendedoras.length === 0 && (
+          <p className="p-6 text-center text-sm text-primary/50">{t('noVendedoras')}</p>
+        )}
+      </div>
+    </div>
+  )
+}

@@ -124,6 +124,7 @@ export default function AdminLayout() {
     { to: '/admin', label: t('products'), end: true },
     { to: '/admin/prices', label: t('prices') },
     { to: '/admin/clients', label: t('clients') },
+    { to: '/admin/vendedoras', label: t('vendedoras') },
     { to: '/admin/flash', label: t('flashSales') },
     { to: '/admin/orders', label: t('orders'), badge: newOrders },
   ]

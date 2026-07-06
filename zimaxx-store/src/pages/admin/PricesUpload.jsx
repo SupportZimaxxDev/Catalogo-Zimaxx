@@ -6,13 +6,13 @@ import { money } from '../../utils/format'
 import { SearchIcon, inputCls, useInfiniteRows } from './ui'
 
 // Alias aceptados por lista para las columnas del Excel de precios.
+// 'special' no tiene columna propia: nunca usa precio fijo (siempre
+// cotización personalizada), así que no participa de esta carga.
 const LIST_ALIASES = {
   us_min: ['us minimum order', 'us min', 'us minimum', 'us_min'],
   us_wholesale: ['us wholesale', 'us_wholesale'],
-  us_special: ['us special', 'us_special', 'us distribuidor', 'us distributor'],
   ve_min: ['ve minimum order', 've min', 've minimum', 've_min'],
   ve_wholesale: ['ve wholesale', 've_wholesale'],
-  ve_special: ['ve special', 've_special', 've distribuidor', 've distributor'],
 }
 const SKU_ALIASES = ['sku', 'codigo', 'código', 'code', 'productid']
 
@@ -22,7 +22,7 @@ const SKU_ALIASES = ['sku', 'codigo', 'código', 'code', 'productid']
 const GENERIC_PRICE_ALIASES = ['price', 'precio', 'precio unitario', 'unit price']
 
 // Orden fijo de columnas en la matriz de precios.
-const LIST_ORDER = ['us_min', 'us_wholesale', 'us_special', 've_min', 've_wholesale', 've_special']
+const LIST_ORDER = ['us_min', 'us_wholesale', 've_min', 've_wholesale']
 
 export default function PricesUpload() {
   const { t } = useI18n()
@@ -35,9 +35,9 @@ export default function PricesUpload() {
   const [products, setProducts] = useState([])
   const [priceMap, setPriceMap] = useState(new Map()) // product_id -> { price_list_id: price }
   const [query, setQuery] = useState('')
-  const [onlyMissing, setOnlyMissing] = useState(false)
+  const [priceFilter, setPriceFilter] = useState('') // '' | 'has' | 'missing'
   const [listFilter, setListFilter] = useState('') // '' = todas las listas
-  const [visibleRows, sentinelRef] = useInfiniteRows(100, [query, onlyMissing, listFilter])
+  const [visibleRows, sentinelRef] = useInfiniteRows(100, [query, priceFilter, listFilter])
 
   const load = async () => {
     try {
@@ -79,19 +79,26 @@ export default function PricesUpload() {
     [orderedLists, listFilter],
   )
 
+  // Contadores de los botones de filtro: sobre todos los productos (no
+  // solo los que matchea el buscador), igual que los contadores de la
+  // pestaña Productos — así el número no cambia al escribir en el buscador.
+  const withPricesCount = useMemo(
+    () => products.filter((p) => visibleLists.some((l) => priceMap.get(p.id)?.[l.id] != null)).length,
+    [products, priceMap, visibleLists],
+  )
+  const missingPricesCount = products.length - withPricesCount
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return products.filter((p) => {
-      if (
-        onlyMissing &&
-        visibleLists.some((l) => priceMap.get(p.id)?.[l.id] != null)
-      )
-        return false
+      const hasVisiblePrice = visibleLists.some((l) => priceMap.get(p.id)?.[l.id] != null)
+      if (priceFilter === 'has' && !hasVisiblePrice) return false
+      if (priceFilter === 'missing' && hasVisiblePrice) return false
       if (q && !p.name.toLowerCase().includes(q) && !String(p.sku).toLowerCase().includes(q))
         return false
       return true
     })
-  }, [products, priceMap, visibleLists, query, onlyMissing])
+  }, [products, priceMap, visibleLists, query, priceFilter])
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0]
@@ -243,15 +250,26 @@ export default function PricesUpload() {
               </option>
             ))}
           </select>
-          <label className="flex items-center gap-2 text-sm text-primary/70">
-            <input
-              type="checkbox"
-              checked={onlyMissing}
-              onChange={(e) => setOnlyMissing(e.target.checked)}
-              className="accent-secondary"
-            />
-            {t('onlyWithoutPrices')}
-          </label>
+          <button
+            onClick={() => setPriceFilter(priceFilter === 'has' ? '' : 'has')}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+              priceFilter === 'has'
+                ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                : 'bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900/50 dark:text-green-300 dark:hover:bg-green-900'
+            }`}
+          >
+            {withPricesCount} {t('withPrices')}
+          </button>
+          <button
+            onClick={() => setPriceFilter(priceFilter === 'missing' ? '' : 'missing')}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+              priceFilter === 'missing'
+                ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                : 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/50 dark:text-red-300 dark:hover:bg-red-900'
+            }`}
+          >
+            {missingPricesCount} {t('withoutPrices')}
+          </button>
         </div>
 
         <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-sm">

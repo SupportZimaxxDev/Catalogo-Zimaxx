@@ -70,15 +70,14 @@ function resolveRegion(row) {
 // "Minoritsta", etc.): se matchea por substring, no por igualdad.
 // "Inactive" no resuelve a ninguna lista: esa fila se descarta entera
 // (no tiene sentido generarle un link de catálogo activo a alguien dado
-// de baja).
+// de baja). Special (distribuidor/gran mayorista/especial) es una sola
+// lista general: a partir de $15,000 la región no aplica, siempre es
+// cotización personalizada.
 function resolvePriceListCode(row) {
   const comments = normalizeHeader(row.comments ?? '')
   if (/inactiv/.test(comments)) return null
-  if (/especial|special/.test(comments)) return 'special'
+  if (/especial|special|distribuidor|gran mayor/.test(comments)) return 'special'
   const region = resolveRegion(row)
-  // "distribuidor"/"gran mayorista" primero: contiene "mayor" y caería
-  // en wholesale si se chequea después.
-  if (/distribuidor|gran mayor/.test(comments)) return `${region}_special`
   if (/mayor/.test(comments)) return `${region}_wholesale`
   if (/minor/.test(comments)) return `${region}_min`
   if (row.iswholesaleuser === undefined) return undefined // no hay señal: que decida resolveListId
@@ -88,9 +87,9 @@ function resolvePriceListCode(row) {
 }
 
 // Umbrales de inversión → nivel de lista (regla del negocio): el mínimo
-// de orden es $800; desde $2,000 aplica precio mayorista y desde
-// $15,000 precio Special. La región se conserva de la lista actual del
-// cliente ("us" = todo el mundo salvo Venezuela).
+// de orden es $800; desde $2,000 aplica precio mayorista. Desde $15,000
+// es Special: una sola lista general (sin región), siempre cotización
+// personalizada.
 export function tierForInvestment(amount) {
   if (amount >= 15000) return 'special'
   if (amount >= 2000) return 'wholesale'
@@ -103,19 +102,21 @@ const LIST_CODE_ALIASES = {
   us_min: 'us_min',
   'us wholesale': 'us_wholesale',
   us_wholesale: 'us_wholesale',
-  'us special': 'us_special',
-  us_special: 'us_special',
-  'us distribuidor': 'us_special',
-  'us distributor': 'us_special',
   've minimum order': 've_min',
   've min': 've_min',
   ve_min: 've_min',
   've wholesale': 've_wholesale',
   ve_wholesale: 've_wholesale',
-  've special': 've_special',
-  ve_special: 've_special',
-  've distribuidor': 've_special',
-  've distributor': 've_special',
+  // Special no distingue región: "US/VE Special" y "distribuidor" de
+  // cualquier variante caen todos en la misma lista general.
+  'us special': 'special',
+  us_special: 'special',
+  'us distribuidor': 'special',
+  'us distributor': 'special',
+  've special': 'special',
+  ve_special: 'special',
+  've distribuidor': 'special',
+  've distributor': 'special',
   'special order': 'special',
   special: 'special',
 }
@@ -124,6 +125,7 @@ export default function ClientsAdmin() {
   const { t } = useI18n()
   const [clients, setClients] = useState([])
   const [priceLists, setPriceLists] = useState([])
+  const [vendedoresList, setVendedoresList] = useState([])
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
   const [copiedId, setCopiedId] = useState(null)
@@ -136,12 +138,14 @@ export default function ClientsAdmin() {
 
   const load = async () => {
     try {
-      const [cs, pls] = await Promise.all([
-        fetchAll('clients', '*', 'name'),
+      const [cs, pls, vs] = await Promise.all([
+        fetchAll('clients', '*, vendedores(name, phone)', 'name'),
         fetchAll('price_lists'),
+        fetchAll('vendedores', '*', 'name'),
       ])
       setClients(cs)
       setPriceLists(pls)
+      setVendedoresList(vs)
     } catch {
       /* la tabla queda como estaba; el próximo load reintenta */
     }
@@ -151,22 +155,17 @@ export default function ClientsAdmin() {
     load()
   }, [])
 
-  const vendedoras = useMemo(
-    () => [...new Set(clients.map((c) => c.vendedora).filter(Boolean))].sort(),
-    [clients],
-  )
-
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     const qDigits = q.replace(/\D/g, '')
     return clients.filter((c) => {
       if (listFilter && c.price_list_id !== listFilter) return false
-      if (repFilter && c.vendedora !== repFilter) return false
+      if (repFilter && c.vendedora_id !== repFilter) return false
       if (!q) return true
       return (
         c.name.toLowerCase().includes(q) ||
         (qDigits && cleanPhone(c.phone).includes(qDigits)) ||
-        (c.vendedora ?? '').toLowerCase().includes(q)
+        (c.vendedores?.name ?? '').toLowerCase().includes(q)
       )
     })
   }, [clients, query, listFilter, repFilter])
@@ -189,6 +188,10 @@ export default function ClientsAdmin() {
       if (rows.length === 0) throw new Error('Archivo vacío')
 
       const byPhone = new Map(clients.map((c) => [cleanPhone(c.phone), c]))
+      // Vendedora por nombre (sin distinguir mayúsculas): se completa con
+      // las que ya existen y se crean sobre la marcha las que falten,
+      // igual que antes se creaba el texto libre.
+      const vendedorByName = new Map(vendedoresList.map((v) => [v.name.toLowerCase(), v]))
       let created = 0
       let updated = 0
       let inactive = 0
@@ -213,12 +216,34 @@ export default function ClientsAdmin() {
           listCode !== undefined
             ? priceLists.find((l) => l.code === listCode)?.id
             : resolveListId(pick(row, COLS.list))
-        const vendedora = resolveVendedora(row) ?? null
-        const vendedoraPhone = cleanPhone(pick(row, COLS.vendedoraPhone)) || null
 
         if (!name || !phone || phone.length < 7 || !listId) {
           skipped.push(`fila ${idx + 2}`)
           continue
+        }
+
+        // Solo tocar vendedora_id si el archivo trae ese dato: re-subir un
+        // export sin esa columna no debe borrar la asignación existente.
+        const vendedoraName = resolveVendedora(row)
+        let vendedoraId
+        if (vendedoraName) {
+          const key = vendedoraName.trim().toLowerCase()
+          let v = vendedorByName.get(key)
+          const vendedoraPhone = cleanPhone(pick(row, COLS.vendedoraPhone)) || null
+          if (!v) {
+            const { data: inserted, error: vError } = await supabase
+              .from('vendedores')
+              .insert({ name: vendedoraName.trim(), phone: vendedoraPhone })
+              .select()
+              .single()
+            if (vError) throw vError
+            v = inserted
+          } else if (vendedoraPhone && !v.phone) {
+            await supabase.from('vendedores').update({ phone: vendedoraPhone }).eq('id', v.id)
+            v = { ...v, phone: vendedoraPhone }
+          }
+          vendedorByName.set(key, v)
+          vendedoraId = v.id
         }
 
         const existing = byPhone.get(phone)
@@ -228,8 +253,7 @@ export default function ClientsAdmin() {
             .update({
               name,
               price_list_id: listId,
-              vendedora,
-              ...(vendedoraPhone ? { vendedora_phone: vendedoraPhone } : {}),
+              ...(vendedoraId !== undefined ? { vendedora_id: vendedoraId } : {}),
             })
             .eq('id', existing.id)
           if (error) throw error
@@ -242,8 +266,7 @@ export default function ClientsAdmin() {
               phone,
               token: generateToken(),
               price_list_id: listId,
-              vendedora,
-              vendedora_phone: vendedoraPhone,
+              vendedora_id: vendedoraId ?? null,
             })
             .select()
           if (error) throw error
@@ -293,15 +316,16 @@ export default function ClientsAdmin() {
   }
 
   // Monto que el cliente dice que va a invertir → nivel dentro de su
-  // región actual (us_/ve_). Clientes en 'special' conservan special:
-  // ahí el catálogo es de cotización, sin lista de precios.
+  // región actual (us_/ve_), salvo que el nivel resultante sea 'special':
+  // esa lista es general, sin región (siempre cotización personalizada).
   const applyInvestment = (client, raw) => {
     const amount = Number(String(raw).replace(/[$,\s]/g, ''))
     if (!Number.isFinite(amount) || amount <= 0) return
     const currentCode = priceLists.find((l) => l.id === client.price_list_id)?.code ?? ''
     if (currentCode === 'special') return
-    const region = currentCode.startsWith('ve_') ? 've' : 'us'
-    const target = priceLists.find((l) => l.code === `${region}_${tierForInvestment(amount)}`)
+    const tier = tierForInvestment(amount)
+    const targetCode = tier === 'special' ? 'special' : `${currentCode.startsWith('ve_') ? 've' : 'us'}_${tier}`
+    const target = priceLists.find((l) => l.code === targetCode)
     if (target && target.id !== client.price_list_id) updateList(client, target.id)
   }
 
@@ -351,9 +375,9 @@ export default function ClientsAdmin() {
           className={inputCls}
         >
           <option value="">{t('allReps')}</option>
-          {vendedoras.map((v) => (
-            <option key={v} value={v}>
-              {v}
+          {vendedoresList.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.name}
             </option>
           ))}
         </select>
@@ -409,7 +433,7 @@ export default function ClientsAdmin() {
                     />
                   </div>
                 </td>
-                <td className="p-3 text-primary/60">{c.vendedora}</td>
+                <td className="p-3 text-primary/60">{c.vendedores?.name}</td>
                 <td className="p-3 text-right">
                   <button
                     onClick={() => copyLink(c)}

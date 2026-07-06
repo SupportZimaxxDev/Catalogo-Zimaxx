@@ -15,18 +15,76 @@ create table if not exists public.price_lists (
   label text not null
 );
 
+-- Vendedora asignada a los clientes: tabla propia en vez de texto libre
+-- repetido por cliente, para poder editar su teléfono en un solo lugar y
+-- gestionarla desde su propia pestaña del admin.
+create table if not exists public.vendedores (
+  id         uuid primary key default gen_random_uuid(),
+  name       text not null,
+  phone      text,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists vendedores_name_idx on public.vendedores (lower(name));
+
 create table if not exists public.clients (
   id              uuid primary key default gen_random_uuid(),
   name            text not null,
   phone           text not null unique,
   token           text not null unique,
   price_list_id   uuid not null references public.price_lists (id),
-  vendedora       text,
-  vendedora_phone text,
+  vendedora_id    uuid references public.vendedores (id),
   created_at      timestamptz not null default now()
 );
 
+-- 'create table if not exists' de arriba no toca una tabla que ya existía
+-- (la mayoría de las instalaciones reales): hace falta este alter para
+-- que 'clients' termine con la columna en instalaciones previas al
+-- 2026-07-06.
+alter table public.clients
+  add column if not exists vendedora_id uuid references public.vendedores (id);
+
 create index if not exists clients_token_idx on public.clients (token);
+
+-- Migración: 'vendedora'/'vendedora_phone' eran texto libre repetido en
+-- cada cliente (uno por fila del Excel importado). Se agrupan por nombre
+-- (sin distinguir mayúsculas/espacios) en la tabla vendedores y se
+-- reasignan los clientes por vendedora_id; las columnas viejas se borran
+-- al final. No hace nada en instalaciones nuevas ni en una segunda corrida
+-- (las columnas ya no existen).
+do $$
+declare
+  r    record;
+  v_id uuid;
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'clients' and column_name = 'vendedora'
+  ) then
+    for r in
+      select
+        (array_agg(trim(vendedora) order by trim(vendedora)))[1] as name,
+        max(nullif(trim(vendedora_phone), '')) as phone
+      from public.clients
+      where coalesce(trim(vendedora), '') <> ''
+      group by lower(trim(vendedora))
+    loop
+      select id into v_id from public.vendedores where lower(name) = lower(r.name);
+      if v_id is null then
+        insert into public.vendedores (name, phone) values (r.name, r.phone)
+        returning id into v_id;
+      elsif r.phone is not null then
+        update public.vendedores set phone = coalesce(phone, r.phone) where id = v_id;
+      end if;
+      update public.clients
+        set vendedora_id = v_id
+        where lower(trim(vendedora)) = lower(r.name);
+    end loop;
+
+    alter table public.clients drop column vendedora;
+    alter table public.clients drop column vendedora_phone;
+  end if;
+end $$;
 
 create table if not exists public.products (
   id         uuid primary key default gen_random_uuid(),
@@ -78,50 +136,41 @@ create table if not exists public.admins (
 );
 
 -- ---------- Listas de precio fijas ----------
--- Niveles por región: Minimum Order ($800+), Wholesale ($2,000+) y
--- Special ($15,000+). "us" abarca todo el mundo salvo Venezuela ("ve").
--- "special" (sin región) es la lista aparte de cotización personalizada.
+-- Niveles por región: Minimum Order ($800+) y Wholesale ($2,000+).
+-- "us" abarca todo el mundo salvo Venezuela ("ve").
+-- Special ($15,000+) NO se divide por región: a partir de ese monto
+-- siempre es cotización personalizada (ver get_catalog), por eso es una
+-- sola lista general "special".
 insert into public.price_lists (code, label) values
   ('us_min',       'US Minimum Order'),
   ('us_wholesale', 'US Wholesale'),
-  ('us_special',   'US Special'),
   ('ve_min',       'VE Minimum Order'),
   ('ve_wholesale', 'VE Wholesale'),
-  ('ve_special',   'VE Special'),
   ('special',      'Special Order')
 on conflict (code) do nothing;
 
--- Migración: el nivel $15,000+ se llamó brevemente "distribuidor"; su
--- nombre real es Special. Renombra o fusiona sin perder clientes/precios.
+-- Migración: el nivel $15,000+ pasó por los nombres "distribuidor" y
+-- luego "Special" separados por región (us_special/ve_special). La
+-- región no aplica a este nivel: se fusiona todo en la lista general
+-- 'special' sin perder clientes. Los precios de esas listas se
+-- descartan sin problema: 'special' nunca usa product_prices
+-- (get_catalog devuelve el catálogo sin precio para esa lista).
 do $$
 declare
-  v_old uuid;
-  v_new uuid;
-  m record;
+  v_new     uuid;
+  v_old     uuid;
+  old_code  text;
 begin
-  for m in
-    select * from (values
-      ('us_distribuidor', 'us_special', 'US Special'),
-      ('ve_distribuidor', 've_special', 'VE Special')
-    ) as t(old_code, new_code, new_label)
+  select id into v_new from public.price_lists where code = 'special';
+
+  foreach old_code in array array['us_distribuidor', 've_distribuidor', 'us_special', 've_special']
   loop
-    select id into v_old from public.price_lists where code = m.old_code;
+    select id into v_old from public.price_lists where code = old_code;
     if v_old is null then continue; end if;
-    select id into v_new from public.price_lists where code = m.new_code;
-    if v_new is null then
-      update public.price_lists set code = m.new_code, label = m.new_label where id = v_old;
-    else
-      update public.clients set price_list_id = v_new where price_list_id = v_old;
-      update public.product_prices set price_list_id = v_new
-        where price_list_id = v_old
-          and not exists (
-            select 1 from public.product_prices pp2
-            where pp2.product_id = product_prices.product_id
-              and pp2.price_list_id = v_new
-          );
-      delete from public.product_prices where price_list_id = v_old;
-      delete from public.price_lists where id = v_old;
-    end if;
+
+    update public.clients set price_list_id = v_new where price_list_id = v_old;
+    delete from public.product_prices where price_list_id = v_old;
+    delete from public.price_lists where id = v_old;
   end loop;
 end $$;
 
@@ -145,6 +194,7 @@ grant execute on function public.is_admin() to authenticated;
 
 alter table public.price_lists    enable row level security;
 alter table public.clients        enable row level security;
+alter table public.vendedores     enable row level security;
 alter table public.products       enable row level security;
 alter table public.product_prices enable row level security;
 alter table public.flash_sales    enable row level security;
@@ -156,7 +206,7 @@ alter table public.admins         enable row level security;
 do $$
 declare t text;
 begin
-  foreach t in array array['price_lists','clients','products','product_prices','flash_sales','orders','admins']
+  foreach t in array array['price_lists','clients','vendedores','products','product_prices','flash_sales','orders','admins']
   loop
     execute format('drop policy if exists admin_all on public.%I', t);
     execute format(
@@ -181,9 +231,11 @@ set search_path = public
 stable
 as $$
 declare
-  v_client   public.clients%rowtype;
-  v_code     text;
-  v_products jsonb;
+  v_client          public.clients%rowtype;
+  v_code            text;
+  v_vendedora_name  text;
+  v_vendedora_phone text;
+  v_products        jsonb;
 begin
   if p_token is null or length(p_token) = 0 then
     return null;
@@ -195,6 +247,8 @@ begin
   end if;
 
   select code into v_code from public.price_lists where id = v_client.price_list_id;
+  select name, phone into v_vendedora_name, v_vendedora_phone
+  from public.vendedores where id = v_client.vendedora_id;
 
   select coalesce(
     jsonb_agg(
@@ -223,8 +277,8 @@ begin
   return jsonb_build_object(
     'client', jsonb_build_object(
       'name',            v_client.name,
-      'vendedora',       v_client.vendedora,
-      'vendedora_phone', v_client.vendedora_phone,
+      'vendedora',       v_vendedora_name,
+      'vendedora_phone', v_vendedora_phone,
       'price_list_code', v_code
     ),
     'products', v_products

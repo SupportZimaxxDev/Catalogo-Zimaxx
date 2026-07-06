@@ -1,9 +1,9 @@
 # Zimaxx Store — Referencia completa del proyecto
 
 > Documento de referencia para retomar el trabajo en cualquier sesión.
-> Creado: 2026-07-02. Actualizado: 2026-07-06 (endurecimiento pre-producción:
-> precios server-side en `create_order`, estado de pedidos, headers de
-> seguridad, Open Graph). Proyecto construido y build verificado.
+> Creado: 2026-07-02. Actualizado: 2026-07-06 (endurecimiento pre-producción,
+> fix Special Order region-indiferente, tabla `vendedores` normalizada).
+> Proyecto construido y build verificado.
 
 ---
 
@@ -24,10 +24,31 @@ C:\Users\First Choice Online\Documents\Archivos JEsus\Catalogo Zimaxx\zimaxx-sto
   - Pedidos con estado Nuevo/Atendido + contador en el menú admin
   - `Referrer-Policy: no-referrer` (el token no se fuga a los hosts de imágenes)
   - Open Graph para la vista previa del link en WhatsApp + spinner de carga
-- [ ] Proyecto Supabase creado y schema ejecutado
-- [ ] Variables de entorno en `.env` (local) y en Netlify
-- [ ] Primer usuario admin registrado en Supabase
-- [ ] Deploy en Netlify (al conocer el dominio final, ajustar `og:image` en `index.html`)
+  - Fix cuadros de carga masiva desbordados en móvil (`UploadZone`)
+- [x] Deploy en Netlify hecho; login admin funcionando (el primer intento
+  falló por "Failed to fetch" — el build se había compilado sin las
+  variables `VITE_*`; se resolvió agregándolas y forzando un redeploy con
+  cache limpia)
+- [x] Fix Special Order (2026-07-06): ya **no** se divide por región
+  (eliminadas `us_special`/`ve_special`); es una sola lista general —
+  ver sección "Base de datos" más abajo. Pestaña Precios: botones con
+  contador para ver solo productos con/sin precio.
+- [x] Tabla `vendedores` normalizada (2026-07-06): antes `vendedora`/
+  `vendedora_phone` eran texto libre repetido en cada fila de `clients`;
+  ahora `clients.vendedora_id` referencia una tabla propia. Nueva pestaña
+  admin **Vendedoras** (alta manual, editar teléfono en un click, contador
+  de clientes asignados). El link de WhatsApp del checkout sigue
+  funcionando igual (usa el teléfono de la vendedora asignada al cliente),
+  solo cambió dónde vive el dato.
+- [x] Proyecto Supabase creado, schema ejecutado, variables en `.env` y Netlify
+- [x] Primer usuario admin registrado en Supabase (login verificado en producción)
+- [x] Deploy en Netlify
+- [ ] **Pendiente: re-ejecutar `supabase/schema.sql`** en el SQL Editor de
+  Supabase — trae la migración de `status` en `orders`, la fusión de
+  `us_special`/`ve_special` en `special`, y la migración de vendedora a la
+  tabla `vendedores` (2026-07-06). Es idempotente, seguro re-correrlo
+  aunque ya haya datos.
+- [ ] Ajustar `og:image` en `index.html` con el dominio/URL final de Netlify
 - [ ] Excel de clientes reales cargado
 
 ---
@@ -81,6 +102,7 @@ zimaxx-store/
     │       ├── ProductsAdmin.jsx
     │       ├── PricesUpload.jsx
     │       ├── ClientsAdmin.jsx
+    │       ├── VendedoresAdmin.jsx
     │       ├── FlashSalesAdmin.jsx
     │       └── OrdersAdmin.jsx
     └── utils/
@@ -115,8 +137,9 @@ negro+dorado es idéntico en ambos modos).
 
 | Tabla | Descripción |
 |---|---|
-| `price_lists` | Listas de precio fijas (7 registros ya sembrados) |
-| `clients` | Clientes con token único, lista asignada, vendedora y `vendedora_phone` |
+| `price_lists` | Listas de precio fijas (5 registros ya sembrados) |
+| `clients` | Clientes con token único, lista asignada y `vendedora_id` (FK a `vendedores`) |
+| `vendedores` | Nombre + teléfono de cada vendedora (2026-07-06; antes texto libre en `clients`) |
 | `products` | Catálogo de productos (`availability`: 'available' \| 'preorder') |
 | `product_prices` | Precio por producto+lista (clave compuesta) |
 | `flash_sales` | Ofertas con fecha de expiración |
@@ -129,11 +152,13 @@ negro+dorado es idéntico en ambos modos).
 |---|---|
 | `us_min` | US Minimum Order ($800+) |
 | `us_wholesale` | US Wholesale ($2,000+) |
-| `us_special` | US Special ($15,000+) |
 | `ve_min` | VE Minimum Order |
 | `ve_wholesale` | VE Wholesale |
-| `ve_special` | VE Special |
-| `special` | Special Order (cotización sin precios) |
+| `special` | Special Order ($15,000+, **cualquier región** — cotización sin precios) |
+
+Corregido 2026-07-06: Special ya **no** se divide por región (antes existían
+`us_special`/`ve_special` con precio fijo); a partir de $15,000 siempre es
+esta única lista de cotización, sin importar el país del cliente.
 
 ---
 
@@ -144,7 +169,9 @@ negro+dorado es idéntico en ambos modos).
 - Resuelve el cliente por token. Token inválido → `null` (sin mensaje).
 - Lista `special` → catálogo sin precios (modo cotización).
 - **No expone el SKU** (es interno).
-- Devuelve:
+- Devuelve (mismo contrato JSON de siempre; `vendedora`/`vendedora_phone`
+  se resuelven ahora con un join a `vendedores` en vez de leerse directo
+  de `clients`):
   ```json
   {
     "client": { "name", "vendedora", "vendedora_phone", "price_list_code" },
@@ -209,7 +236,7 @@ negro+dorado es idéntico en ambos modos).
 2. Esperar a que el proyecto inicie (~1 min)
 3. Ir a **SQL Editor** → New query
 4. Pegar y ejecutar todo el contenido de `supabase/schema.sql`
-5. Verificar que las 7 tablas aparecen en **Table Editor**
+5. Verificar que las 8 tablas aparecen en **Table Editor**
 6. Ir a **Settings → API** y copiar:
    - `Project URL` → `VITE_SUPABASE_URL`
    - `anon public` key → `VITE_SUPABASE_ANON_KEY`
@@ -260,6 +287,19 @@ negro+dorado es idéntico en ambos modos).
   - Lista: `lista de precio`, `lista de precios`, `lista`, `price list`
   - Vendedora: `vendedora`, `vendedor`, `sales rep`, `rep`, `asesora`
   - Tel. vendedora: `telefono vendedora`, `tel vendedora`, `rep phone`
+- La vendedora del Excel se resuelve contra la tabla `vendedores` por
+  nombre (sin distinguir mayúsculas); si no existe se crea sobre la
+  marcha. Re-subir un archivo sin esa columna no borra la asignación
+  existente del cliente.
+
+### Vendedoras (pestaña Vendedoras, `/admin/vendedoras`)
+- Alta manual: nombre (obligatorio) + teléfono (opcional, se puede
+  completar después).
+- El teléfono se edita con un click sobre el valor en la tabla (o "Sin
+  teléfono" si está vacío); Enter o click afuera lo guarda.
+- Contador de clientes asignados por fila. Borrar una vendedora con
+  clientes asignados falla (restricción de la base de datos) y muestra
+  un aviso — hay que reasignar esos clientes primero.
 
 ---
 
@@ -284,3 +324,4 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 7. **Precios server-side en `create_order`** (2026-07-06) — el navegador nunca dicta precios ni total; la tabla `orders` es fuente de verdad aunque se manipule el request.
 8. **Ciclo de vida del pedido** (2026-07-06) — columna `status` ('new'/'done'), botón Marcar atendido/Reabrir en `/admin/orders` y badge con el conteo de pendientes en el menú del admin.
 9. **Open Graph** (2026-07-06) — el link compartido por WhatsApp genera tarjeta de vista previa con logo. `og:image` exige URL absoluta: apunta a `https://zimaxx-store.netlify.app/zimaxx.png`; ajustar en `index.html` si el dominio final es otro.
+10. **Tabla `vendedores` normalizada** (2026-07-06) — antes `vendedora`/`vendedora_phone` eran texto libre repetido en cada fila de `clients` (mismo nombre podía escribirse distinto en cada Excel). Ahora es una tabla propia con `clients.vendedora_id` como FK: el teléfono se edita en un solo lugar y se refleja al instante en el link de WhatsApp de todos sus clientes. `get_catalog` resuelve el join pero devuelve el mismo JSON de siempre, así que el frontend del catálogo no cambió.
