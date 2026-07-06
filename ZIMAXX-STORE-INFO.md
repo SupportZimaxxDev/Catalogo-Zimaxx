@@ -3,7 +3,8 @@
 > Documento de referencia para retomar el trabajo en cualquier sesión.
 > Creado: 2026-07-02. Actualizado: 2026-07-06 (endurecimiento pre-producción,
 > Special como lista de precio real region-indiferente, tabla `vendedores`
-> normalizada). Proyecto construido y build verificado.
+> normalizada, rol vendedora con acceso restringido por RLS). Proyecto
+> construido y build verificado.
 
 ---
 
@@ -54,8 +55,23 @@ C:\Users\First Choice Online\Documents\Archivos JEsus\Catalogo Zimaxx\zimaxx-sto
   Supabase — el usuario ya lo corrió una vez (2026-07-06) para `status` en
   `orders`, la fusión de `us_special`/`ve_special` y la tabla `vendedores`,
   pero **después** se volvió a tocar `get_catalog`/`create_order` para que
-  Special use precio real, así que hace falta correrlo una vez más. Es
+  Special use precio real, y **más tarde** se agregó el rol vendedora
+  (`vendedores.user_id`/`login_email`, funciones `is_vendedora()` /
+  `current_vendedora_id()` / `get_my_role()`, nuevas policies RLS, RPC
+  `link_vendedora_login`), así que hace falta correrlo una vez más. Es
   idempotente, seguro re-correrlo aunque ya haya datos.
+- [x] **Rol vendedora con acceso restringido** (2026-07-06, a pedido del
+  usuario: las vendedoras no deben ver clientes/pedidos de otras
+  vendedoras, solo admins ven todo). Login propio por vendedora
+  (`vendedores.user_id` → `auth.users`), RLS por fila (aditiva a
+  `admin_all`) para `clients`/`orders`/`vendedores`, lectura general de
+  Productos/Precios/Flash Sales, y RPC `link_vendedora_login` para que el
+  admin vincule el login desde la pestaña Vendedoras sin ir al SQL
+  Editor. Frontend: `AdminLayout.jsx` arma pestañas por rol
+  (`get_my_role()`) y pasa el rol a las páginas vía `Outlet context`; cada
+  página admin oculta sus controles de edición cuando el rol no es
+  `admin`. Falta probar el login real de una vendedora contra un proyecto
+  Supabase (no hay entorno local para eso).
 - [x] `og:image` ajustado (2026-07-06) a `https://catalogozimaxx.netlify.app/zimaxx.png`, la URL real del sitio en Netlify (el sitio se llama `catalogozimaxx`). Ojo: si conectan un dominio propio más adelante, hay que volver a actualizar esta línea en `index.html` y redesplegar.
 - [ ] Excel de clientes reales cargado (incluyendo precios Special)
 - [ ] **Pendiente: commitear y desplegar en Netlify** el código de esta
@@ -152,7 +168,7 @@ negro+dorado es idéntico en ambos modos).
 |---|---|
 | `price_lists` | Listas de precio fijas (5 registros ya sembrados) |
 | `clients` | Clientes con token único, lista asignada y `vendedora_id` (FK a `vendedores`) |
-| `vendedores` | Nombre + teléfono de cada vendedora (2026-07-06; antes texto libre en `clients`) |
+| `vendedores` | Nombre + teléfono de cada vendedora (2026-07-06; antes texto libre en `clients`). Desde el rol vendedora (2026-07-06): `user_id` (FK a `auth.users`, nullable, único) + `login_email` (solo display) para vincular su login |
 | `products` | Catálogo de productos (`availability`: 'available' \| 'preorder') |
 | `product_prices` | Precio por producto+lista (clave compuesta) |
 | `flash_sales` | Ofertas con fecha de expiración |
@@ -222,6 +238,16 @@ normal con total, como cualquier otro nivel.
 - Acceso: solo `authenticated`.
 - Comprueba si `auth.uid()` está en `admins`. Usada en las políticas RLS.
 
+### `is_vendedora() → boolean` / `current_vendedora_id() → uuid` / `get_my_role() → text`
+- Acceso: solo `authenticated`. (2026-07-06, rol vendedora.)
+- `is_vendedora()`: existe una fila en `vendedores` con `user_id = auth.uid()`.
+- `current_vendedora_id()`: el `id` de esa fila (usado en las policies RLS de `clients`/`orders`).
+- `get_my_role()`: `'admin'` si `is_admin()`, si no `'vendedora'` si `is_vendedora()`, si no `null`. Es el único RPC que llama `AdminLayout.jsx` para decidir qué pestañas mostrar.
+
+### `link_vendedora_login(p_vendedora_id uuid, p_email text) → boolean`
+- Acceso: solo `authenticated`; internamente exige `is_admin()` (si no, `raise exception`). (2026-07-06.)
+- Busca `p_email` en `auth.users` (tabla no legible directo por el cliente) y, si existe, setea `vendedores.user_id`/`login_email`. Devuelve `false` si el email no corresponde a ningún usuario. Lo llama `VendedoresAdmin.jsx` al presionar "Vincular acceso" — evita que el admin tenga que ir al SQL Editor, pero el usuario de Supabase Auth se sigue creando a mano en el dashboard.
+
 ---
 
 ## RLS — Resumen de seguridad
@@ -230,6 +256,12 @@ normal con total, como cualquier otro nivel.
 - Todo acceso público es vía las RPC SECURITY DEFINER.
 - **`authenticated` + `is_admin() = true`**: acceso total (policy `admin_all` en todas las tablas).
 - No hay políticas para `anon` sobre las tablas → denegado implícitamente.
+- **Rol vendedora** (2026-07-06): `authenticated` + `is_vendedora() = true` (vía `vendedores.user_id = auth.uid()`) obtiene, mediante policies aditivas a `admin_all` (Postgres las combina con OR para el mismo comando):
+  - `select` en `vendedores` limitado a su propia fila (`user_id = auth.uid()`).
+  - `select` en `clients` y `orders` limitado a `vendedora_id = current_vendedora_id()` (en `orders`, vía `client_id in (select id from clients where ...)`).
+  - `update` en `orders` con el mismo filtro en `using`/`with check` — permite marcar sus propios pedidos atendido/nuevo sin poder reasignarlos a otro cliente.
+  - `select` de solo lectura en `price_lists`, `products`, `product_prices`, `flash_sales`.
+  - Sin ninguna otra policy → no puede insertar/actualizar/borrar nada fuera de eso. La UI (`AdminLayout.jsx` + páginas admin) además oculta los controles de edición para este rol, pero el límite real está en RLS.
 - **Headers** (meta en `index.html` + `netlify.toml`): `Referrer-Policy:
   no-referrer` — crítico porque el token viaja en la URL (`?c=<token>`) y
   las imágenes de producto se cargan de dominios externos; sin esto el token
@@ -347,3 +379,4 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 9. **Open Graph** (2026-07-06) — el link compartido por WhatsApp genera tarjeta de vista previa con logo. `og:image` exige URL absoluta: apunta a `https://catalogozimaxx.netlify.app/zimaxx.png` (URL real del sitio, corregida el mismo día tras probar en WhatsApp con la URL placeholder inicial). Si el sitio se cambia a otro dominio, hay que actualizar esta línea en `index.html` y redesplegar — WhatsApp además cachea la vista previa por URL compartida, así que un link ya probado puede seguir sin imagen hasta que expire ese caché o se comparta un link nuevo.
 10. **Tabla `vendedores` normalizada** (2026-07-06) — antes `vendedora`/`vendedora_phone` eran texto libre repetido en cada fila de `clients` (mismo nombre podía escribirse distinto en cada Excel). Ahora es una tabla propia con `clients.vendedora_id` como FK: el teléfono se edita en un solo lugar y se refleja al instante en el link de WhatsApp de todos sus clientes. `get_catalog` resuelve el join pero devuelve el mismo JSON de siempre, así que el frontend del catálogo no cambió.
 11. **Special pasó a tener precio fijo real** (2026-07-06, a pedido del usuario) — hasta entonces `special` era la única lista sin precio ("catálogo sin precios, checkout = cotización"), y por eso la pestaña Precios no ofrecía subirle Excel. El usuario pidió poder cargarle precios como a cualquier otra lista, así que se quitó el modo "Pedido especial" por completo: `get_catalog` ya no bypassea el requisito de precio para `special`, y se eliminó `specialMode`/`isQuote` de `Catalog.jsx`, `ProductCard.jsx`, `CartDrawer.jsx`, `whatsapp.js` y `pdf.js`. El checkout de un cliente Special ahora es idéntico al de cualquier otro nivel (total, mínimo de $800, mensaje de WhatsApp normal). El `kind`/`p_kind` ('order'/'quote') de `create_order` se mantiene en el schema por si se quiere un flujo de cotización manual más adelante, pero ya nada lo dispara automáticamente.
+12. **Rol vendedora con acceso restringido** (2026-07-06, a pedido del usuario) — antes el panel admin era binario (estar o no en `admins`, sin nivel intermedio). Se agregó un login propio por vendedora sin tocar el modelo de `admins`: `vendedores.user_id` (FK a `auth.users`, nullable, único) vincula la fila a un usuario ya creado en el dashboard de Supabase Auth; el admin hace esa vinculación desde la pestaña Vendedoras (RPC `link_vendedora_login`, evita ir al SQL Editor). El nivel de acceso se resuelve por RLS, no por la UI: nuevas policies (aditivas a `admin_all`, que sigue intacta para admins) le dan a una vendedora `select` de sus propios `clients`/`orders` (por `vendedora_id`/`current_vendedora_id()`), `select` de su propia fila en `vendedores` (nunca las de otras), `update` acotado a sus propios `orders` (marcar atendido/reabrir) y `select` de solo lectura de `price_lists`/`products`/`product_prices`/`flash_sales`. El frontend (`AdminLayout.jsx` con `get_my_role()` + `Outlet context={{ role }}`) arma pestañas distintas por rol y cada página admin esconde sus controles de edición cuando `role !== 'admin'`, pero eso es solo UX — la restricción real es la RLS.

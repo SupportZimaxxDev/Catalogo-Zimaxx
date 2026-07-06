@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { parseSheet, normalizeHeader } from '../../utils/excel'
@@ -25,6 +26,8 @@ const LIST_ORDER = ['us_min', 'us_wholesale', 've_min', 've_wholesale', 'special
 
 export default function PricesUpload() {
   const { t } = useI18n()
+  const { role } = useOutletContext()
+  const isAdmin = role === 'admin'
   const [priceLists, setPriceLists] = useState([])
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
@@ -183,40 +186,44 @@ export default function PricesUpload() {
     <div className="space-y-4">
       <div className="max-w-2xl space-y-4">
         <h2 className="font-brand text-2xl font-semibold">{t('prices')}</h2>
-        <p className="text-sm leading-relaxed text-primary/60">{t('priceUploadHint')}</p>
+        {isAdmin && (
+          <>
+            <p className="text-sm leading-relaxed text-primary/60">{t('priceUploadHint')}</p>
 
-        <label className="block text-sm">
-          <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-primary/50">
-            {t('targetListLabel')}
-          </span>
-          <select
-            value={targetList}
-            onChange={(e) => setTargetList(e.target.value)}
-            className="w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none transition-colors focus:border-secondary md:max-w-xs"
-          >
-            <option value="">—</option>
-            {orderedLists.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            <label className="block text-sm">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-primary/50">
+                {t('targetListLabel')}
+              </span>
+              <select
+                value={targetList}
+                onChange={(e) => setTargetList(e.target.value)}
+                className="w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none transition-colors focus:border-secondary md:max-w-xs"
+              >
+                <option value="">—</option>
+                {orderedLists.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-        <label className="block cursor-pointer rounded-2xl border-2 border-dashed border-secondary/50 bg-surface p-10 text-center shadow-sm transition-colors hover:border-secondary hover:bg-gold-pale/20">
-          <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} className="hidden" />
-          <span className="text-3xl">📊</span>
-          <p className="mt-2 font-semibold">{busy ? t('processing') : t('uploadExcel')}</p>
-        </label>
+            <label className="block cursor-pointer rounded-2xl border-2 border-dashed border-secondary/50 bg-surface p-10 text-center shadow-sm transition-colors hover:border-secondary hover:bg-gold-pale/20">
+              <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} className="hidden" />
+              <span className="text-3xl">📊</span>
+              <p className="mt-2 font-semibold">{busy ? t('processing') : t('uploadExcel')}</p>
+            </label>
 
-        {result && (
-          <p
-            className={`rounded-lg p-3 text-sm ${
-              result.ok ? 'bg-green-50 text-green-800 dark:bg-green-950/50 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300'
-            }`}
-          >
-            {result.message}
-          </p>
+            {result && (
+              <p
+                className={`rounded-lg p-3 text-sm ${
+                  result.ok ? 'bg-green-50 text-green-800 dark:bg-green-950/50 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300'
+                }`}
+              >
+                {result.message}
+              </p>
+            )}
+          </>
         )}
       </div>
 

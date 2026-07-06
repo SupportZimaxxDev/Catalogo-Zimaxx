@@ -27,6 +27,17 @@ create table if not exists public.vendedores (
 
 create unique index if not exists vendedores_name_idx on public.vendedores (lower(name));
 
+-- Login propio de la vendedora (2026-07-06): vincula esta fila a un
+-- usuario de Supabase Auth para que pueda entrar a /admin con una vista
+-- restringida a sus propios clientes/pedidos. Nullable: una vendedora
+-- puede existir solo como directorio (sin acceso) hasta que un admin la
+-- vincule desde la pestaña Vendedoras. login_email es solo para mostrar
+-- en esa pestaña; user_id es la fuente de verdad que usan las políticas RLS.
+alter table public.vendedores add column if not exists user_id uuid references auth.users (id) on delete set null;
+alter table public.vendedores add column if not exists login_email text;
+
+create unique index if not exists vendedoras_user_id_idx on public.vendedores (user_id) where user_id is not null;
+
 create table if not exists public.clients (
   id              uuid primary key default gen_random_uuid(),
   name            text not null,
@@ -188,6 +199,53 @@ $$;
 revoke execute on function public.is_admin() from public, anon;
 grant execute on function public.is_admin() to authenticated;
 
+-- ---------- Helper: es vendedora / cuál vendedora ----------
+-- Rol acotado (2026-07-06): una vendedora es un usuario autenticado
+-- vinculado a una fila de vendedores, sin estar en admins. Solo ve sus
+-- propios clientes/pedidos (políticas RLS más abajo) y el catálogo de
+-- solo lectura.
+create or replace function public.is_vendedora()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (select 1 from public.vendedores where user_id = auth.uid());
+$$;
+
+create or replace function public.current_vendedora_id()
+returns uuid
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select id from public.vendedores where user_id = auth.uid();
+$$;
+
+-- Rol único para que el frontend decida qué UI mostrar con un solo RPC.
+create or replace function public.get_my_role()
+returns text
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select case
+    when public.is_admin()     then 'admin'
+    when public.is_vendedora() then 'vendedora'
+    else null
+  end;
+$$;
+
+revoke execute on function public.is_vendedora() from public, anon;
+grant execute on function public.is_vendedora() to authenticated;
+revoke execute on function public.current_vendedora_id() from public, anon;
+grant execute on function public.current_vendedora_id() to authenticated;
+revoke execute on function public.get_my_role() from public, anon;
+grant execute on function public.get_my_role() to authenticated;
+
 -- ---------- RLS ----------
 -- Regla no negociable: clients y product_prices NUNCA legibles por anon.
 -- El catálogo público solo pasa por las RPC security definer.
@@ -218,6 +276,51 @@ end $$;
 
 -- Sin políticas para anon: con RLS activo, anon no puede leer ni escribir
 -- ninguna tabla directamente. Todo el acceso público es vía RPC.
+
+-- Vendedora autenticada: solo lectura de lo suyo (aditivas a admin_all,
+-- que ya cubre a los admins para todo; Postgres combina políticas
+-- permisivas del mismo comando con OR). Sin política de insert/update/
+-- delete propia => una vendedora no puede escribir nada salvo el status
+-- de sus propios pedidos (policy siguiente).
+drop policy if exists vendedora_select_self on public.vendedores;
+create policy vendedora_select_self on public.vendedores
+  for select to authenticated
+  using (user_id = auth.uid());
+
+drop policy if exists vendedora_select_own_clients on public.clients;
+create policy vendedora_select_own_clients on public.clients
+  for select to authenticated
+  using (vendedora_id = public.current_vendedora_id());
+
+drop policy if exists vendedora_select_own_orders on public.orders;
+create policy vendedora_select_own_orders on public.orders
+  for select to authenticated
+  using (client_id in (select id from public.clients where vendedora_id = public.current_vendedora_id()));
+
+-- Permite marcar sus propios pedidos como atendido/nuevo desde
+-- OrdersAdmin.jsx (misma llamada que ya usa un admin, sin RPC dedicada:
+-- es personal interno de confianza y el "with check" impide reasignar
+-- el pedido a otro cliente).
+drop policy if exists vendedora_update_own_orders on public.orders;
+create policy vendedora_update_own_orders on public.orders
+  for update to authenticated
+  using (client_id in (select id from public.clients where vendedora_id = public.current_vendedora_id()))
+  with check (client_id in (select id from public.clients where vendedora_id = public.current_vendedora_id()));
+
+-- Catálogo/precios/flash de solo lectura para cualquier vendedora
+-- (consulta, no edición) — igual acceso de lectura que ya tienen los admins.
+do $$
+declare t text;
+begin
+  foreach t in array array['price_lists','products','product_prices','flash_sales']
+  loop
+    execute format('drop policy if exists vendedora_select_readonly on public.%I', t);
+    execute format(
+      'create policy vendedora_select_readonly on public.%I for select to authenticated using (public.is_vendedora())',
+      t
+    );
+  end loop;
+end $$;
 
 -- ---------- RPC: get_catalog ----------
 -- Resuelve el cliente por token y devuelve SOLO los precios de su lista.
@@ -439,6 +542,41 @@ $$;
 
 revoke execute on function public.create_order(text, jsonb, numeric, text) from public;
 grant execute on function public.create_order(text, jsonb, numeric, text) to anon, authenticated;
+
+-- ---------- RPC: link_vendedora_login ----------
+-- Vincula una vendedora a un usuario ya existente en Supabase Auth (el
+-- admin lo crea a mano en el dashboard, igual que hoy se crea un admin,
+-- y después usa este RPC desde la pestaña Vendedoras para no tener que
+-- ir al SQL Editor). Solo admins pueden llamarlo. Devuelve false si el
+-- email no corresponde a ningún usuario de auth.users.
+create or replace function public.link_vendedora_login(p_vendedora_id uuid, p_email text)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid;
+begin
+  if not public.is_admin() then
+    raise exception 'not authorized';
+  end if;
+
+  select id into v_user_id from auth.users where email = p_email;
+  if v_user_id is null then
+    return false;
+  end if;
+
+  update public.vendedores
+    set user_id = v_user_id, login_email = p_email
+    where id = p_vendedora_id;
+
+  return true;
+end;
+$$;
+
+revoke execute on function public.link_vendedora_login(uuid, text) from public, anon;
+grant execute on function public.link_vendedora_login(uuid, text) to authenticated;
 
 -- ============================================================
 -- Primer usuario admin:

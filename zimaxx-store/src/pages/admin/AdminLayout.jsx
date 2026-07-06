@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Navigate, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import ThemeToggle from '../../components/ThemeToggle'
@@ -69,7 +69,7 @@ export default function AdminLayout() {
   const { t } = useI18n()
   const location = useLocation()
   const [session, setSession] = useState(undefined) // undefined = cargando
-  const [isAdmin, setIsAdmin] = useState(null)
+  const [role, setRole] = useState(undefined) // undefined = cargando, null = sin acceso
   const [newOrders, setNewOrders] = useState(0)
 
   useEffect(() => {
@@ -80,33 +80,37 @@ export default function AdminLayout() {
 
   useEffect(() => {
     if (!session) {
-      setIsAdmin(null)
+      setRole(undefined)
       return
     }
     supabase
-      .rpc('is_admin')
-      .then(({ data }) => setIsAdmin(!!data))
-      .catch(() => setIsAdmin(false))
+      .rpc('get_my_role')
+      .then(({ data }) => setRole(data ?? null))
+      .catch(() => setRole(null))
   }, [session])
 
+  const isAdmin = role === 'admin'
+
   // Pedidos sin atender para el badge del menú; se refresca al cambiar de pestaña.
+  // Para una vendedora, el count de Supabase ya viene filtrado por RLS a
+  // sus propios pedidos (vendedora_select_own_orders en schema.sql).
   useEffect(() => {
-    if (!isAdmin) return
+    if (!role) return
     supabase
       .from('orders')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'new')
       .then(({ count }) => setNewOrders(count ?? 0))
-  }, [isAdmin, location.pathname])
+  }, [role, location.pathname])
 
   if (session === undefined) {
     return <p className="py-16 text-center text-primary/60">{t('loading')}</p>
   }
   if (!session) return <Login />
-  if (isAdmin === null) {
+  if (role === undefined) {
     return <p className="py-16 text-center text-primary/60">{t('loading')}</p>
   }
-  if (!isAdmin) {
+  if (!role) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-4">
         <p className="text-primary/70">{t('notAdmin')}</p>
@@ -120,11 +124,17 @@ export default function AdminLayout() {
     )
   }
 
+  // Una vendedora no tiene pestaña Vendedoras ni acceso a esa ruta; si
+  // llega por URL directa se la redirige.
+  if (role === 'vendedora' && location.pathname.startsWith('/admin/vendedoras')) {
+    return <Navigate to="/admin" replace />
+  }
+
   const tabs = [
     { to: '/admin', label: t('products'), end: true },
     { to: '/admin/prices', label: t('prices') },
     { to: '/admin/clients', label: t('clients') },
-    { to: '/admin/vendedoras', label: t('vendedoras') },
+    ...(isAdmin ? [{ to: '/admin/vendedoras', label: t('vendedoras') }] : []),
     { to: '/admin/flash', label: t('flashSales') },
     { to: '/admin/orders', label: t('orders'), badge: newOrders },
   ]
@@ -177,7 +187,7 @@ export default function AdminLayout() {
         </nav>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6">
-        <Outlet />
+        <Outlet context={{ role }} />
       </main>
     </div>
   )

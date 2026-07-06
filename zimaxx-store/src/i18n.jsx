@@ -134,6 +134,12 @@ const dict = {
     noVendedoras: 'Aún no hay vendedoras registradas.',
     vendedoraInUse: 'No se puede eliminar: tiene clientes asignados.',
     assignedClients: 'Clientes asignados',
+    access: 'Acceso',
+    linkAccess: 'Vincular acceso',
+    unlinkAccess: 'Desvincular',
+    loginEmailPlaceholder: 'Email de acceso',
+    linkAccessNotFound: 'No hay ningún usuario con ese email. Creálo primero en Supabase Auth.',
+    linkAccessInUse: 'Ese email ya está vinculado a otra vendedora.',
   },
   en: {
     search: 'Search products...',
@@ -262,6 +268,12 @@ const dict = {
     noVendedoras: 'No sales reps yet.',
     vendedoraInUse: "Can't delete: has clients assigned.",
     assignedClients: 'Assigned clients',
+    access: 'Access',
+    linkAccess: 'Link access',
+    unlinkAccess: 'Unlink',
+    loginEmailPlaceholder: 'Login email',
+    linkAccessNotFound: 'No user with that email. Create it in Supabase Auth first.',
+    linkAccessInUse: 'That email is already linked to another sales rep.',
   },
 }
 

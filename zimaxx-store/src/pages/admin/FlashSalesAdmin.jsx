@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { money } from '../../utils/format'
@@ -15,6 +16,8 @@ const nowLocal = () => {
 
 export default function FlashSalesAdmin() {
   const { t } = useI18n()
+  const { role } = useOutletContext()
+  const isAdmin = role === 'admin'
   const [sales, setSales] = useState([])
   const [products, setProducts] = useState([])
   const [form, setForm] = useState(null)
@@ -68,15 +71,17 @@ export default function FlashSalesAdmin() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold">⚡ {t('flashSales')}</h2>
-        <button
-          onClick={() => setForm({ ...EMPTY, starts_at: nowLocal() })}
-          className="rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-secondary hover:bg-ink-soft"
-        >
-          + Flash Sale
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => setForm({ ...EMPTY, starts_at: nowLocal() })}
+            className="rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-secondary hover:bg-ink-soft"
+          >
+            + Flash Sale
+          </button>
+        )}
       </div>
 
-      {form && (
+      {isAdmin && form && (
         <form onSubmit={save} className="grid gap-3 rounded-2xl border border-line bg-surface p-4 shadow-sm md:grid-cols-2">
           <select
             required
@@ -172,7 +177,7 @@ export default function FlashSalesAdmin() {
                   </span>
                 </td>
                 <td className="p-3 text-right">
-                  {s.active && (
+                  {isAdmin && s.active && (
                     <button
                       onClick={() => deactivate(s.id)}
                       className="text-xs font-semibold text-red-600 hover:underline"

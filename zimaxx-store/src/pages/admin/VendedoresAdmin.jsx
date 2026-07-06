@@ -18,6 +18,9 @@ export default function VendedoresAdmin() {
   const [busy, setBusy] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [editPhone, setEditPhone] = useState('')
+  const [linkEmail, setLinkEmail] = useState({}) // id -> valor del input de email
+  const [linkBusyId, setLinkBusyId] = useState(null)
+  const [linkError, setLinkError] = useState({}) // id -> mensaje de error
 
   const load = async () => {
     try {
@@ -86,6 +89,41 @@ export default function VendedoresAdmin() {
     }
   }
 
+  // Vincula el login de la vendedora a un usuario ya creado en el
+  // dashboard de Supabase Auth (RPC security definer: valida is_admin(),
+  // busca el email en auth.users, que no es legible directo desde acá).
+  const linkAccess = async (id) => {
+    const email = (linkEmail[id] ?? '').trim()
+    if (!email) return
+    setLinkBusyId(id)
+    setLinkError((prev) => ({ ...prev, [id]: '' }))
+    const { data, error } = await supabase.rpc('link_vendedora_login', {
+      p_vendedora_id: id,
+      p_email: email,
+    })
+    if (error) {
+      setLinkError((prev) => ({ ...prev, [id]: t('linkAccessInUse') }))
+    } else if (!data) {
+      setLinkError((prev) => ({ ...prev, [id]: t('linkAccessNotFound') }))
+    } else {
+      setVendedoras((prev) =>
+        prev.map((v) => (v.id === id ? { ...v, login_email: email } : v)),
+      )
+      setLinkEmail((prev) => ({ ...prev, [id]: '' }))
+    }
+    setLinkBusyId(null)
+  }
+
+  const unlinkAccess = async (id) => {
+    const { error } = await supabase
+      .from('vendedores')
+      .update({ user_id: null, login_email: null })
+      .eq('id', id)
+    if (!error) {
+      setVendedoras((prev) => prev.map((v) => (v.id === id ? { ...v, login_email: null } : v)))
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -147,6 +185,7 @@ export default function VendedoresAdmin() {
               <th className="p-3">{t('name')}</th>
               <th className="p-3">{t('phone')}</th>
               <th className="p-3">{t('assignedClients')}</th>
+              <th className="p-3">{t('access')}</th>
               <th className="p-3" />
             </tr>
           </thead>
@@ -175,6 +214,43 @@ export default function VendedoresAdmin() {
                   )}
                 </td>
                 <td className="p-3 text-primary/60">{clientCount.get(v.id) ?? 0}</td>
+                <td className="p-3">
+                  {v.login_email ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-primary/70">{v.login_email}</span>
+                      <button
+                        onClick={() => unlinkAccess(v.id)}
+                        className="text-xs font-semibold text-red-600 hover:underline dark:text-red-400"
+                      >
+                        {t('unlinkAccess')}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="email"
+                        value={linkEmail[v.id] ?? ''}
+                        onChange={(e) =>
+                          setLinkEmail((prev) => ({ ...prev, [v.id]: e.target.value }))
+                        }
+                        placeholder={t('loginEmailPlaceholder')}
+                        className="w-40 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
+                      />
+                      <button
+                        disabled={linkBusyId === v.id || !(linkEmail[v.id] ?? '').trim()}
+                        onClick={() => linkAccess(v.id)}
+                        className="whitespace-nowrap rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary disabled:opacity-50"
+                      >
+                        {t('linkAccess')}
+                      </button>
+                    </div>
+                  )}
+                  {linkError[v.id] && (
+                    <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">
+                      {linkError[v.id]}
+                    </p>
+                  )}
+                </td>
                 <td className="p-3 text-right">
                   <button
                     onClick={() => remove(v.id)}

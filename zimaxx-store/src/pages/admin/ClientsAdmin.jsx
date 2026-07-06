@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { parseSheet, pick, normalizeHeader } from '../../utils/excel'
@@ -121,6 +122,8 @@ const LIST_CODE_ALIASES = {
 
 export default function ClientsAdmin() {
   const { t } = useI18n()
+  const { role } = useOutletContext()
+  const isAdmin = role === 'admin'
   const [clients, setClients] = useState([])
   const [priceLists, setPriceLists] = useState([])
   const [vendedoresList, setVendedoresList] = useState([])
@@ -335,14 +338,16 @@ export default function ClientsAdmin() {
         <span className="ml-2 text-base font-normal text-primary/40">{clients.length}</span>
       </h2>
 
-      <UploadZone
-        icon="📇"
-        title={t('bulkUpload')}
-        hint={t('clientUploadHint')}
-        busy={busy}
-        result={result}
-        onFile={handleFile}
-      />
+      {isAdmin && (
+        <UploadZone
+          icon="📇"
+          title={t('bulkUpload')}
+          hint={t('clientUploadHint')}
+          busy={busy}
+          result={result}
+          onFile={handleFile}
+        />
+      )}
 
       {/* Buscador + filtros */}
       <div className="flex flex-col gap-2 md:flex-row">
@@ -368,18 +373,20 @@ export default function ClientsAdmin() {
             </option>
           ))}
         </select>
-        <select
-          value={repFilter}
-          onChange={(e) => setRepFilter(e.target.value)}
-          className={inputCls}
-        >
-          <option value="">{t('allReps')}</option>
-          {vendedoresList.map((v) => (
-            <option key={v.id} value={v.id}>
-              {v.name}
-            </option>
-          ))}
-        </select>
+        {isAdmin && (
+          <select
+            value={repFilter}
+            onChange={(e) => setRepFilter(e.target.value)}
+            className={inputCls}
+          >
+            <option value="">{t('allReps')}</option>
+            {vendedoresList.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.name}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-sm">
@@ -399,38 +406,44 @@ export default function ClientsAdmin() {
                 <td className="p-3 font-medium">{c.name}</td>
                 <td className="p-3 font-mono text-xs text-primary/60">{c.phone}</td>
                 <td className="p-3">
-                  <div className="flex flex-col gap-1.5">
-                    <select
-                      value={c.price_list_id}
-                      onChange={(e) => updateList(c, e.target.value)}
-                      className="w-40 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
-                    >
-                      {priceLists.map((l) => (
-                        <option key={l.id} value={l.id}>
-                          {l.label}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      placeholder={t('investmentPlaceholder')}
-                      title={t('investmentHint')}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          applyInvestment(c, e.currentTarget.value)
-                          e.currentTarget.value = ''
-                        }
-                      }}
-                      onBlur={(e) => {
-                        if (e.currentTarget.value.trim()) {
-                          applyInvestment(c, e.currentTarget.value)
-                          e.currentTarget.value = ''
-                        }
-                      }}
-                      className="w-40 rounded-lg border border-dashed border-line bg-transparent px-2 py-1 text-xs outline-none transition-colors placeholder:text-primary/35 focus:border-secondary"
-                    />
-                  </div>
+                  {isAdmin ? (
+                    <div className="flex flex-col gap-1.5">
+                      <select
+                        value={c.price_list_id}
+                        onChange={(e) => updateList(c, e.target.value)}
+                        className="w-40 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
+                      >
+                        {priceLists.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.label}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        placeholder={t('investmentPlaceholder')}
+                        title={t('investmentHint')}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            applyInvestment(c, e.currentTarget.value)
+                            e.currentTarget.value = ''
+                          }
+                        }}
+                        onBlur={(e) => {
+                          if (e.currentTarget.value.trim()) {
+                            applyInvestment(c, e.currentTarget.value)
+                            e.currentTarget.value = ''
+                          }
+                        }}
+                        className="w-40 rounded-lg border border-dashed border-line bg-transparent px-2 py-1 text-xs outline-none transition-colors placeholder:text-primary/35 focus:border-secondary"
+                      />
+                    </div>
+                  ) : (
+                    <span className="text-primary/70">
+                      {priceLists.find((l) => l.id === c.price_list_id)?.label}
+                    </span>
+                  )}
                 </td>
                 <td className="p-3 text-primary/60">{c.vendedores?.name}</td>
                 <td className="p-3 text-right">

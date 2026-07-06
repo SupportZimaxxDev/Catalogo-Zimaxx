@@ -60,15 +60,25 @@ Dos regiones × dos niveles + una lista Special general (sin región):
 
 ## 2. Panel admin (`/admin`)
 
-Login con email/password (Supabase Auth) + verificación contra la tabla
-`admins`. Pestañas:
+Login con email/password (Supabase Auth). Dos roles, resueltos por el RPC
+`get_my_role()`:
+
+- **Admin** (tabla `admins`): acceso total (lectura y escritura) a las 7
+  pestañas.
+- **Vendedora** (`vendedores.user_id` vinculado a un login): ve **solo
+  sus propios clientes y pedidos** (RLS filtra por fila, no por UI —
+  nunca ve cuántos clientes/pedidos tienen otras vendedoras), y Productos
+  / Precios / Flash Sales **de solo lectura** (sin botones de carga ni
+  edición). No tiene pestaña Vendedoras.
+
+Pestañas:
 
 | Pestaña | Qué hace |
 |---|---|
 | **Productos** | Tabla completa con buscador (nombre/SKU), filtros (categoría, activo/inactivo/sin foto/pre-order), contadores clickeables de "sin foto" y "Pre-Order", miniaturas, alta/edición manual, y dos cargas por Excel (productos y fotos). |
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador y botones con contador "con precios" / "sin precios". |
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), botón copiar link, carga por Excel. |
-| **Vendedoras** | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. |
+| **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**: vincula el login de la vendedora escribiendo su email y presionando "Vincular acceso" (RPC `link_vendedora_login`) — requiere haber creado antes ese usuario en Supabase Auth. "Desvincular" le quita el acceso sin borrar la vendedora. |
 | **Flash Sales** | Crear ofertas con precio promo y vencimiento; visibles para todos con countdown; se ocultan solas al expirar. |
 | **Pedidos** | Últimos 200 con detalle expandible; cada pedido se marca **Nuevo/Atendido** y el menú muestra el contador de pedidos sin atender. |
 
@@ -160,6 +170,12 @@ FirstName+LastName, Phone/Phone1, SalesMan, Country, Comments):
    on conflict do nothing;
    ```
 
+4. Crear el login de una vendedora (opcional, para que vea solo sus
+   propios clientes/pedidos): **Authentication → Users → Add user** con
+   su email, y luego, ya logueado como admin, ir a la pestaña
+   **Vendedoras** → escribir ese email en la fila de la vendedora →
+   **Vincular acceso**.
+
 ### Variables de entorno (`.env`)
 
 | Variable | Descripción |
@@ -217,6 +233,18 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
     verdad aunque se manipule el request.
 - Escritura solo para usuarios autenticados presentes en `admins`
   (`is_admin()`).
+- **Rol vendedora** (2026-07-06): `vendedores.user_id` vincula un login a
+  una fila de `vendedores`. Policies RLS adicionales (aditivas a
+  `admin_all`, no la reemplazan) le dan a ese usuario `select` de sus
+  propios `clients`/`orders` (filtrado por `vendedora_id`), `select` de
+  su propia fila en `vendedores`, `select` de solo lectura de
+  `price_lists`/`products`/`product_prices`/`flash_sales`, y `update`
+  acotado a sus propios `orders` (para marcar atendido/reabrir). Sin
+  policy propia no puede insertar/actualizar/borrar nada más — el
+  frontend además oculta esos controles para esa vista, pero la
+  restricción real vive en RLS, no en la UI. El RPC `get_my_role()`
+  resuelve `'admin' | 'vendedora' | null` para que `AdminLayout.jsx`
+  arme las pestañas correctas.
 - Tokens de cliente: 10 caracteres, `crypto.getRandomValues`, sin caracteres
   ambiguos.
 - **`Referrer-Policy: no-referrer`** (meta + header en `netlify.toml`): el

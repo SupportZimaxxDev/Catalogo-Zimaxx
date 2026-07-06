@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { parseSheet, pick, detectImageColumn, looksLikeImageUrl } from '../../utils/excel'
@@ -55,6 +56,8 @@ function parseActive(raw) {
 
 export default function ProductsAdmin() {
   const { t } = useI18n()
+  const { role } = useOutletContext()
+  const isAdmin = role === 'admin'
   const [products, setProducts] = useState([])
   const [form, setForm] = useState(null) // null = sin formulario abierto
   const [error, setError] = useState('')
@@ -318,34 +321,38 @@ export default function ProductsAdmin() {
             </button>
           )}
         </div>
-        <button
-          onClick={() => setForm({ ...EMPTY })}
-          className="rounded-full bg-ink px-5 py-2 text-sm font-semibold text-secondary transition-colors hover:bg-ink-soft"
-        >
-          + {t('newProduct')}
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => setForm({ ...EMPTY })}
+            className="rounded-full bg-ink px-5 py-2 text-sm font-semibold text-secondary transition-colors hover:bg-ink-soft"
+          >
+            + {t('newProduct')}
+          </button>
+        )}
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <UploadZone
-          icon="📦"
-          title={t('bulkUpload')}
-          hint={t('productUploadHint')}
-          busy={uploadBusy}
-          result={uploadResult}
-          onFile={handleFile}
-        />
-        <UploadZone
-          icon="🖼️"
-          title={t('imageUpload')}
-          hint={t('imageUploadHint')}
-          busy={imgBusy}
-          result={imgResult}
-          onFile={handleImageFile}
-        />
-      </div>
+      {isAdmin && (
+        <div className="grid gap-3 md:grid-cols-2">
+          <UploadZone
+            icon="📦"
+            title={t('bulkUpload')}
+            hint={t('productUploadHint')}
+            busy={uploadBusy}
+            result={uploadResult}
+            onFile={handleFile}
+          />
+          <UploadZone
+            icon="🖼️"
+            title={t('imageUpload')}
+            hint={t('imageUploadHint')}
+            busy={imgBusy}
+            result={imgResult}
+            onFile={handleImageFile}
+          />
+        </div>
+      )}
 
-      {form && (
+      {isAdmin && form && (
         <form
           onSubmit={save}
           className="grid animate-fade-up gap-3 rounded-2xl border border-secondary/40 bg-surface p-5 shadow-sm md:grid-cols-2"
@@ -487,24 +494,38 @@ export default function ProductsAdmin() {
                 </td>
                 <td className="p-3 text-primary/60">{p.category}</td>
                 <td className="p-3">
-                  <button
-                    onClick={() => toggleActive(p)}
-                    className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
-                      p.active
-                        ? 'bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900/50 dark:text-green-300 dark:hover:bg-green-900'
-                        : 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/50 dark:text-red-300 dark:hover:bg-red-900'
-                    }`}
-                  >
-                    {p.active ? t('active') : t('inactive')}
-                  </button>
+                  {isAdmin ? (
+                    <button
+                      onClick={() => toggleActive(p)}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                        p.active
+                          ? 'bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900/50 dark:text-green-300 dark:hover:bg-green-900'
+                          : 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/50 dark:text-red-300 dark:hover:bg-red-900'
+                      }`}
+                    >
+                      {p.active ? t('active') : t('inactive')}
+                    </button>
+                  ) : (
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        p.active
+                          ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300'
+                          : 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'
+                      }`}
+                    >
+                      {p.active ? t('active') : t('inactive')}
+                    </span>
+                  )}
                 </td>
                 <td className="p-3 text-right">
-                  <button
-                    onClick={() => setForm({ ...p })}
-                    className="text-xs font-semibold text-secondary-dark hover:underline"
-                  >
-                    {t('edit')}
-                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => setForm({ ...p })}
+                      className="text-xs font-semibold text-secondary-dark hover:underline"
+                    >
+                      {t('edit')}
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
