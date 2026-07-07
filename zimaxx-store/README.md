@@ -80,7 +80,7 @@ Pestañas:
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**: vincula el login de la vendedora escribiendo su email y presionando "Vincular acceso" (RPC `link_vendedora_login`) — requiere haber creado antes ese usuario en Supabase Auth. "Desvincular" le quita el acceso sin borrar la vendedora. |
 | **Flash Sales** | Crear ofertas con precio promo y vencimiento; visibles para todos con countdown; se ocultan solas al expirar. |
-| **Pedidos** | Últimos 200 con detalle expandible; cada pedido se marca **Nuevo/Atendido** y el menú muestra el contador de pedidos sin atender. |
+| **Pedidos** | Últimos 200 con detalle expandible; cada pedido se marca **Nuevo/Atendido** y el menú muestra el contador de pedidos sin atender. Botón **"Descargar Excel"** por fila: exporta el pedido con las columnas exactas de `UploadTemplate.xls` (`ProductID`, `ProductName`, `UnitPrice`, `Qty`, `ShipFromWarehouseName`, este último fijo en `"Zimaxx"`) para subirlo directo al bulk-order upload de SellerCloud. |
 
 Las tablas grandes usan **scroll infinito** (lotes de 100) y todas las
 consultas están **paginadas** para superar el límite de 1,000 filas por
@@ -293,7 +293,7 @@ src/
   hooks/useInfiniteRows.js  Scroll infinito por lotes
   context/CartContext.jsx   Carrito (localStorage, clave por product id)
   utils/
-    excel.js            Parser Excel (detección de encabezados, columna de fotos)
+    excel.js            Parser Excel (detección de encabezados, columna de fotos) + export de pedido (UploadTemplate.xls)
     token.js            Tokens de cliente + SKU autogenerado
     whatsapp.js         Mensaje de pedido + link wa.me
     pdf.js              PDF del pedido (jsPDF)

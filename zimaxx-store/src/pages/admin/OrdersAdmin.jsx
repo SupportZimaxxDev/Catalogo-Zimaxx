@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { money } from '../../utils/format'
+import { downloadOrderExcel } from '../../utils/excel'
 
 // Bandeja de pedidos: cada uno se marca atendido para no depender de la
 // memoria del chat de WhatsApp.
@@ -22,6 +23,11 @@ export default function OrdersAdmin() {
   const setStatus = async (id, status) => {
     const { error } = await supabase.from('orders').update({ status }).eq('id', id)
     if (!error) setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status } : o)))
+  }
+
+  const exportOrder = (o) => {
+    const stamp = new Date(o.created_at).toISOString().slice(0, 10)
+    downloadOrderExcel(o.items ?? [], `${stamp}-${o.id.slice(0, 8)}`)
   }
 
   if (orders.length === 0) {
@@ -46,6 +52,7 @@ export default function OrdersAdmin() {
               <th className="p-3">{t('items')}</th>
               <th className="p-3 text-right">{t('total')}</th>
               <th className="p-3">{t('status')}</th>
+              <th className="p-3" />
             </tr>
           </thead>
           <tbody>
@@ -113,6 +120,17 @@ export default function OrdersAdmin() {
                     className="ml-2 rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
                   >
                     {o.status === 'done' ? t('markNew') : t('markDone')}
+                  </button>
+                </td>
+                <td className="p-3 text-right">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      exportOrder(o)
+                    }}
+                    className="rounded-full border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
+                  >
+                    {t('downloadExcel')}
                   </button>
                 </td>
               </tr>

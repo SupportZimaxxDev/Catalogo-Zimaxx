@@ -42,6 +42,7 @@ const dict = {
     // Checkout
     checkout: 'Enviar pedido por WhatsApp',
     downloadPdf: 'Descargar PDF',
+    downloadExcel: 'Descargar Excel',
     orderTitle: 'Pedido Zimaxx Store',
     client: 'Cliente',
     product: 'Producto',
@@ -183,6 +184,7 @@ const dict = {
 
     checkout: 'Send order via WhatsApp',
     downloadPdf: 'Download PDF',
+    downloadExcel: 'Download Excel',
     orderTitle: 'Zimaxx Store Order',
     client: 'Client',
     product: 'Product',

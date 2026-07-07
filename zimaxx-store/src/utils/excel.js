@@ -44,6 +44,27 @@ export async function parseSheet(file) {
     })
 }
 
+// Exporta un pedido en el formato de UploadTemplate.xls (el bulk-order
+// upload de SellerCloud): mismo orden y nombre de columnas exacto para
+// poder subirlo ahí sin retocarlo. 'Zimaxx' es el único almacén propio,
+// así que va fijo en todas las filas.
+export async function downloadOrderExcel(items, filenameStamp) {
+  const XLSX = await import('xlsx')
+  const rows = items.map((i) => ({
+    ProductID: i.sku,
+    ProductName: i.name,
+    UnitPrice: i.price ?? '',
+    Qty: i.qty,
+    ShipFromWarehouseName: 'Zimaxx',
+  }))
+  const ws = XLSX.utils.json_to_sheet(rows, {
+    header: ['ProductID', 'ProductName', 'UnitPrice', 'Qty', 'ShipFromWarehouseName'],
+  })
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
+  XLSX.writeFile(wb, `zimaxx-order-${filenameStamp}.xlsx`)
+}
+
 export function normalizeHeader(h) {
   return String(h)
     .toLowerCase()
