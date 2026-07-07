@@ -120,6 +120,8 @@ const LIST_CODE_ALIASES = {
   special: 'special',
 }
 
+const EMPTY_CLIENT = { name: '', phone: '', price_list_id: '', vendedora_id: '' }
+
 export default function ClientsAdmin() {
   const { t } = useI18n()
   const { role } = useOutletContext()
@@ -130,6 +132,14 @@ export default function ClientsAdmin() {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
   const [copiedId, setCopiedId] = useState(null)
+
+  // Alta individual (2026-07-07): la vendedora no elige a quién asignar,
+  // el RLS (vendedora_insert_own_clients) exige que sea ella misma — acá
+  // se completa con la única fila de `vendedores` que puede leer, la suya.
+  const [newClientForm, setNewClientForm] = useState(null)
+  const [newClientError, setNewClientError] = useState('')
+  const [newClientBusy, setNewClientBusy] = useState(false)
+  const myVendedoraId = !isAdmin ? vendedoresList[0]?.id : undefined
 
   // Búsqueda y filtros
   const [query, setQuery] = useState('')
@@ -294,6 +304,30 @@ export default function ClientsAdmin() {
     setBusy(false)
   }
 
+  const createClient = async (e) => {
+    e.preventDefault()
+    setNewClientError('')
+    const name = newClientForm.name.trim()
+    const phone = cleanPhone(newClientForm.phone)
+    if (!name || phone.length < 7 || !newClientForm.price_list_id) return
+    setNewClientBusy(true)
+    const vendedoraId = isAdmin ? newClientForm.vendedora_id || null : myVendedoraId
+    const { error } = await supabase.from('clients').insert({
+      name,
+      phone,
+      token: generateToken(),
+      price_list_id: newClientForm.price_list_id,
+      vendedora_id: vendedoraId ?? null,
+    })
+    if (error) {
+      setNewClientError(error.code === '23505' ? t('phoneInUse') : error.message)
+    } else {
+      setNewClientForm(null)
+      await load()
+    }
+    setNewClientBusy(false)
+  }
+
   const copyLink = async (c) => {
     const url = `${window.location.origin}/?c=${c.token}`
     await navigator.clipboard.writeText(url)
@@ -333,10 +367,90 @@ export default function ClientsAdmin() {
 
   return (
     <div className="space-y-4">
-      <h2 className="font-brand text-2xl font-semibold">
-        {t('clients')}
-        <span className="ml-2 text-base font-normal text-primary/40">{clients.length}</span>
-      </h2>
+      <div className="flex items-center justify-between">
+        <h2 className="font-brand text-2xl font-semibold">
+          {t('clients')}
+          <span className="ml-2 text-base font-normal text-primary/40">{clients.length}</span>
+        </h2>
+        <button
+          onClick={() => {
+            setNewClientError('')
+            setNewClientForm({ ...EMPTY_CLIENT })
+          }}
+          className="rounded-full bg-ink px-5 py-2 text-sm font-semibold text-secondary transition-colors hover:bg-ink-soft"
+        >
+          + {t('newClient')}
+        </button>
+      </div>
+
+      {newClientForm && (
+        <form
+          onSubmit={createClient}
+          className="grid animate-fade-up gap-3 rounded-2xl border border-secondary/40 bg-surface p-5 shadow-sm md:grid-cols-2"
+        >
+          <input
+            required
+            placeholder={t('name')}
+            value={newClientForm.name}
+            onChange={(e) => setNewClientForm({ ...newClientForm, name: e.target.value })}
+            className={inputCls}
+          />
+          <input
+            required
+            placeholder={t('phone')}
+            value={newClientForm.phone}
+            onChange={(e) => setNewClientForm({ ...newClientForm, phone: e.target.value })}
+            className={inputCls}
+          />
+          <select
+            required
+            value={newClientForm.price_list_id}
+            onChange={(e) => setNewClientForm({ ...newClientForm, price_list_id: e.target.value })}
+            className={inputCls}
+          >
+            <option value="">{t('selectList')}</option>
+            {priceLists.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+          {isAdmin ? (
+            <select
+              value={newClientForm.vendedora_id}
+              onChange={(e) => setNewClientForm({ ...newClientForm, vendedora_id: e.target.value })}
+              className={inputCls}
+            >
+              <option value="">{t('unassigned')}</option>
+              {vendedoresList.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p className="flex items-center text-xs text-primary/50">{t('assignedToYou')}</p>
+          )}
+          {newClientError && (
+            <p className="text-sm text-red-600 dark:text-red-400 md:col-span-2">{newClientError}</p>
+          )}
+          <div className="flex gap-2 md:col-span-2">
+            <button
+              disabled={newClientBusy}
+              className="rounded-full bg-secondary px-6 py-2 text-sm font-bold text-ink transition-colors hover:bg-secondary-dark disabled:opacity-50"
+            >
+              {t('save')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setNewClientForm(null)}
+              className="rounded-full border border-line px-6 py-2 text-sm transition-colors hover:border-primary/40"
+            >
+              {t('cancel')}
+            </button>
+          </div>
+        </form>
+      )}
 
       {isAdmin && (
         <UploadZone

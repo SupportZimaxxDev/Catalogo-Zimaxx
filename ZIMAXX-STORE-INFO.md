@@ -261,6 +261,7 @@ normal con total, como cualquier otro nivel.
   - `select` en `clients` y `orders` limitado a `vendedora_id = current_vendedora_id()` (en `orders`, vía `client_id in (select id from clients where ...)`).
   - `update` en `orders` con el mismo filtro en `using`/`with check` — permite marcar sus propios pedidos atendido/nuevo sin poder reasignarlos a otro cliente.
   - `select` de solo lectura en `price_lists`, `products`, `product_prices`, `flash_sales`.
+  - `insert` en `clients` (2026-07-07, policy `vendedora_insert_own_clients`) **solo si `vendedora_id = current_vendedora_id()`** — puede darse de alta clientes propios pero no crear uno sin asignar ni para otra vendedora.
   - Sin ninguna otra policy → no puede insertar/actualizar/borrar nada fuera de eso. La UI (`AdminLayout.jsx` + páginas admin) además oculta los controles de edición para este rol, pero el límite real está en RLS.
 - **Headers** (meta en `index.html` + `netlify.toml`): `Referrer-Policy:
   no-referrer` — crítico porque el token viaja en la URL (`?c=<token>`) y
@@ -344,6 +345,20 @@ normal con total, como cualquier otro nivel.
   nombre (sin distinguir mayúsculas); si no existe se crea sobre la
   marcha. Re-subir un archivo sin esa columna no borra la asignación
   existente del cliente.
+
+### Alta individual de clientes (2026-07-07)
+- Botón "+ Nuevo cliente" en la pestaña Clientes, alternativa a la carga
+  por Excel para un cliente puntual. Campos: nombre, teléfono, lista de
+  precio (obligatorios) y, solo para admin, un selector de vendedora
+  (`"Sin asignar"` por defecto) — inserta directo contra `clients` con
+  `supabase.from('clients').insert(...)`, sin RPC dedicada.
+- Si el usuario logueado es vendedora, el selector no se muestra: el
+  cliente se le asigna automáticamente (usa la única fila de
+  `vendedores` que puede leer, la suya, vía `vendedora_select_self`). No
+  puede crear un cliente sin asignar ni para otra vendedora — lo impone
+  la policy `vendedora_insert_own_clients` (RLS), no la UI.
+- Teléfono duplicado (constraint `clients.phone` único) muestra un error
+  amigable (`phoneInUse` en `i18n.jsx`) en vez del mensaje crudo de Postgres.
 
 ### Vendedoras (pestaña Vendedoras, `/admin/vendedoras`)
 - Alta manual: nombre (obligatorio) + teléfono (opcional, se puede

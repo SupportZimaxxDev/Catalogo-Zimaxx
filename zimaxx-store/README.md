@@ -77,7 +77,7 @@ Pestañas:
 |---|---|
 | **Productos** | Tabla completa con buscador (nombre/SKU), filtros (categoría, activo/inactivo/sin foto/pre-order), contadores clickeables de "sin foto" y "Pre-Order", miniaturas, alta/edición manual, y dos cargas por Excel (productos y fotos). |
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador y botones con contador "con precios" / "sin precios". |
-| **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), botón copiar link, carga por Excel. |
+| **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**: vincula el login de la vendedora escribiendo su email y presionando "Vincular acceso" (RPC `link_vendedora_login`) — requiere haber creado antes ese usuario en Supabase Auth. "Desvincular" le quita el acceso sin borrar la vendedora. |
 | **Flash Sales** | Crear ofertas con precio promo y vencimiento; visibles para todos con countdown; se ocultan solas al expirar. |
 | **Pedidos** | Últimos 200 con detalle expandible; cada pedido se marca **Nuevo/Atendido** y el menú muestra el contador de pedidos sin atender. |
@@ -149,6 +149,13 @@ FirstName+LastName, Phone/Phone1, SalesMan, Country, Comments):
 - Match por **teléfono**: crea nuevos (token automático) y actualiza
   existentes. **Nunca borra** clientes. Cuentas de prueba ("Test...",
   "NO USAR") se excluyen.
+
+**Alta individual** (botón "+ Nuevo cliente", sin pasar por Excel): nombre,
+teléfono, lista de precio y, si sos admin, un selector para asignar la
+vendedora (o dejarlo sin asignar). Si entrás como vendedora el campo no se
+muestra: el cliente se te asigna a vos automáticamente y no podés
+crearlo "suelto" ni para otra vendedora — lo impone una policy RLS
+(`vendedora_insert_own_clients` en `schema.sql`), no solo la UI.
 
 ---
 
@@ -239,12 +246,14 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   propios `clients`/`orders` (filtrado por `vendedora_id`), `select` de
   su propia fila en `vendedores`, `select` de solo lectura de
   `price_lists`/`products`/`product_prices`/`flash_sales`, y `update`
-  acotado a sus propios `orders` (para marcar atendido/reabrir). Sin
-  policy propia no puede insertar/actualizar/borrar nada más — el
-  frontend además oculta esos controles para esa vista, pero la
-  restricción real vive en RLS, no en la UI. El RPC `get_my_role()`
-  resuelve `'admin' | 'vendedora' | null` para que `AdminLayout.jsx`
-  arme las pestañas correctas.
+  acotado a sus propios `orders` (para marcar atendido/reabrir). También
+  tiene `insert` en `clients` (2026-07-07, `vendedora_insert_own_clients`)
+  pero **solo si `vendedora_id` = ella misma** — no puede crear un cliente
+  sin asignar ni para otra vendedora. Fuera de eso no puede
+  insertar/actualizar/borrar nada más — el frontend además oculta esos
+  controles para esa vista, pero la restricción real vive en RLS, no en
+  la UI. El RPC `get_my_role()` resuelve `'admin' | 'vendedora' | null`
+  para que `AdminLayout.jsx` arme las pestañas correctas.
 - Tokens de cliente: 10 caracteres, `crypto.getRandomValues`, sin caracteres
   ambiguos.
 - **`Referrer-Policy: no-referrer`** (meta + header en `netlify.toml`): el

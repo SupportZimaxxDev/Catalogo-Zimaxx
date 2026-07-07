@@ -140,6 +140,12 @@ const dict = {
     loginEmailPlaceholder: 'Email de acceso',
     linkAccessNotFound: 'No hay ningún usuario con ese email. Creálo primero en Supabase Auth.',
     linkAccessInUse: 'Ese email ya está vinculado a otra vendedora.',
+    newClient: 'Nuevo cliente',
+    selectList: 'Seleccionar lista',
+    assignToRep: 'Asignar a vendedora',
+    unassigned: 'Sin asignar',
+    phoneInUse: 'Ya existe un cliente con ese teléfono.',
+    assignedToYou: 'Se asignará a vos automáticamente.',
   },
   en: {
     search: 'Search products...',
@@ -274,6 +280,12 @@ const dict = {
     loginEmailPlaceholder: 'Login email',
     linkAccessNotFound: 'No user with that email. Create it in Supabase Auth first.',
     linkAccessInUse: 'That email is already linked to another sales rep.',
+    newClient: 'New client',
+    selectList: 'Select list',
+    assignToRep: 'Assign to sales rep',
+    unassigned: 'Unassigned',
+    phoneInUse: 'A client with that phone already exists.',
+    assignedToYou: 'It will be assigned to you automatically.',
   },
 }
 

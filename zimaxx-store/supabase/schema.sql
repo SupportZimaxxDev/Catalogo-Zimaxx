@@ -292,6 +292,15 @@ create policy vendedora_select_own_clients on public.clients
   for select to authenticated
   using (vendedora_id = public.current_vendedora_id());
 
+-- Alta individual de clientes (2026-07-07): una vendedora puede crear
+-- clientes propios desde el panel, pero solo si se auto-asigna (no puede
+-- crear un cliente "suelto" ni asignárselo a otra vendedora). El admin ya
+-- puede insertar cualquier cosa via admin_all.
+drop policy if exists vendedora_insert_own_clients on public.clients;
+create policy vendedora_insert_own_clients on public.clients
+  for insert to authenticated
+  with check (vendedora_id = public.current_vendedora_id());
+
 drop policy if exists vendedora_select_own_orders on public.orders;
 create policy vendedora_select_own_orders on public.orders
   for select to authenticated
