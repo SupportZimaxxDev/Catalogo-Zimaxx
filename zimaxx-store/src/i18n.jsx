@@ -84,7 +84,7 @@ const dict = {
     priceUploadHint:
       'Excel/CSV con columna SKU y una columna por lista de precio (US Minimum Order, US Wholesale, VE Minimum Order, VE Wholesale, Special).',
     productUploadHint:
-      'Excel/CSV con columnas: nombre (o Title Product), categoría (o Brand), imagen (URL), Type (Available / Pre Order / Flash Sale), activo y opcional SKU. Acepta las listas wholesale con membrete: detecta la fila de encabezados y la columna de fotos automáticamente. El SKU es interno, nunca se muestra al cliente; si falta se genera uno. Actualiza existentes por SKU y crea los nuevos; los campos que el archivo no trae no se tocan.',
+      'Excel/CSV con columnas: nombre (o Title Product), categoría (o Brand), línea/tipo de perfume (PRODUCT_CATEGORY: Perfume / Perfume - Arabes), imagen (URL), Type (Available / Pre Order / Flash Sale), activo y opcional SKU. Acepta las listas wholesale con membrete y los exports de SellerCloud: detecta la fila de encabezados y la columna de fotos automáticamente. El SKU es interno, nunca se muestra al cliente; si falta se genera uno. Actualiza existentes por SKU y crea los nuevos; los campos que el archivo no trae no se tocan.',
     imageUploadHint:
       'Excel/CSV solo para fotos: columnas SKU y/o nombre + una columna con el link directo a la imagen (debe terminar en .jpg/.png/etc., no un link a un panel administrativo). Cruza con productos ya cargados y actualiza su foto; no crea productos nuevos.',
     clientUploadHint:
@@ -105,6 +105,7 @@ const dict = {
     allTypes: 'Todos los tipos',
     allLists: 'Todas las listas',
     allReps: 'Todas las vendedoras',
+    allLines: 'Todas las líneas',
     uncategorized: 'Sin categoría',
     noImage: 'Sin foto',
     showingFirst: 'Mostrando primeros',
@@ -242,7 +243,7 @@ const dict = {
     priceUploadHint:
       'Excel/CSV with a SKU column plus one column per price list (US Minimum Order, US Wholesale, VE Minimum Order, VE Wholesale, Special).',
     productUploadHint:
-      'Excel/CSV with columns: name (or Title Product), category (or Brand), image (URL), Type (Available / Pre Order / Flash Sale), active, and optional SKU. Accepts letterhead wholesale lists: header row and photo column are detected automatically. SKU is internal and never shown to clients; missing SKUs are generated. Updates existing products by SKU and creates new ones; fields the file lacks are left untouched.',
+      'Excel/CSV with columns: name (or Title Product), category (or Brand), perfume line/type (PRODUCT_CATEGORY: Perfume / Perfume - Arabes), image (URL), Type (Available / Pre Order / Flash Sale), active, and optional SKU. Accepts letterhead wholesale lists and SellerCloud exports: header row and photo column are detected automatically. SKU is internal and never shown to clients; missing SKUs are generated. Updates existing products by SKU and creates new ones; fields the file lacks are left untouched.',
     imageUploadHint:
       'Photos-only Excel/CSV: SKU and/or name columns plus a column with the direct image link (must end in .jpg/.png/etc., not a link to an admin panel). Matches existing products and updates their photo; never creates new products.',
     clientUploadHint:
@@ -263,6 +264,7 @@ const dict = {
     allTypes: 'All types',
     allLists: 'All lists',
     allReps: 'All reps',
+    allLines: 'All lines',
     uncategorized: 'Uncategorized',
     noImage: 'No photo',
     showingFirst: 'Showing first',

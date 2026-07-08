@@ -70,16 +70,24 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
 - Un producto **solo aparece** en el catálogo de un cliente si tiene precio
   cargado en su lista (las 5 listas, incluida Special, se tratan igual).
 - El tamaño va dentro del nombre (ej. "Khamrah 3.4 Oz Edp Unisex"); la
-  categoría es la marca (Brand).
+  categoría (`category`) es la marca (Brand).
+- **`product_line`** (2026-07-08, distinto de `category`/Brand): tipo real
+  del perfume, viene de la columna `PRODUCT_CATEGORY` de los exports de
+  SellerCloud (no de `PRODUCTBRAND`, que es la marca) — valores típicos
+  `Perfume` (diseñador) y `Perfume - Arabes` (dupes árabes). Sirve para
+  filtrar por ese criterio en el catálogo del cliente y en el admin,
+  independiente de la marca.
 
 ### Catálogo del cliente: búsqueda y cantidades
 
-- El buscador de `Catalog.jsx` matchea **nombre o categoría** (buscar
-  "adidas" trae todo lo de esa marca, no hace falta usar el chip de
-  categoría). Además de los chips de categoría hay un segundo filtro por
-  **disponibilidad** (Disponible / Pre-Order / 🔥 Flash Sale), donde cada
-  chip solo aparece si el catálogo tiene al menos un producto en ese
-  estado.
+- El buscador de `Catalog.jsx` matchea **nombre, categoría (marca) o
+  línea** (buscar "adidas" trae todo lo de esa marca, "arabes" trae todo
+  lo de `Perfume - Arabes`). Además de los chips de marca hay un chip de
+  **línea** (2026-07-08: `Perfume` / `Perfume - Arabes` / lo que traiga
+  `product_line`, solo si hay 2+ valores distintos) y otro de
+  **disponibilidad** (Disponible / Pre-Order / 🔥 Flash Sale) — cada chip
+  de disponibilidad solo aparece si el catálogo tiene al menos un
+  producto en ese estado.
 - Cada `ProductCard` (2026-07-07): el botón "Agregar" se convierte, una vez
   que el producto está en el carrito, en un stepper **−/input editable/+**
   (el número se puede tipear a mano) más una fila de botones de compra
@@ -123,7 +131,7 @@ Pestañas:
 
 | Pestaña | Qué hace |
 |---|---|
-| **Productos** | Tabla completa con buscador (nombre/SKU), filtros (categoría, activo/inactivo/sin foto/pre-order/flash), contadores clickeables de "sin foto", "Pre-Order" y "🔥 Flash Sale", miniaturas, alta/edición manual, y dos cargas por Excel (productos y fotos). |
+| **Productos** | Tabla completa con buscador (nombre/SKU), filtros (categoría/marca, línea de perfume, activo/inactivo/sin foto/pre-order/flash), contadores clickeables de "sin foto", "Pre-Order" y "🔥 Flash Sale", miniaturas, alta/edición manual, y dos cargas por Excel (productos y fotos). |
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador y botones con contador "con precios" / "sin precios". |
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**: vincula el login de la vendedora escribiendo su email y presionando "Vincular acceso" (RPC `link_vendedora_login`) — requiere haber creado antes ese usuario en Supabase Auth. "Desvincular" le quita el acceso sin borrar la vendedora. |
@@ -149,7 +157,12 @@ wholesale con membrete:
 
 - **SKU** (`sku`, `codigo`, `ProductID`) — opcional; si falta se autogenera.
 - **Nombre** (`nombre`, `name`, `ProductName`, `Title Product`) — obligatorio.
-- **Categoría** (`categoria`, `category`, `Brand`, `marca`).
+- **Categoría/marca** (`categoria`, `category`, `Brand`, `marca`).
+- **Línea de perfume** (`PRODUCT_CATEGORY`, `línea`, `segmento`, 2026-07-08):
+  **distinta** de la anterior — no lee `PRODUCTBRAND` (eso es la marca), lee
+  la columna que trae valores como `Perfume` (diseñador) o
+  `Perfume - Arabes` (dupes árabes). El export `119389.xlsx` de SellerCloud
+  trae ambas columnas por separado.
 - **Imagen** (`imagen`, `image`, `url`...) — también se detecta una columna
   de URLs de foto aunque tenga encabezado inservible (ej. `Column1`).
 - **Type** (`type`, `tipo`, `disponibilidad`): `Available` / `Pre Order` /

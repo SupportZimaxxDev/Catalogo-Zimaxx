@@ -115,6 +115,15 @@ create table if not exists public.products (
 alter table public.products
   add column if not exists availability text not null default 'available';
 
+-- Línea/tipo real del perfume (2026-07-08): ej. 'Perfume' (diseñador) vs
+-- 'Perfume - Arabes' (dupes árabes) — viene de la columna PRODUCT_CATEGORY
+-- de los exports de SellerCloud (ej. 119389.xlsx). Distinto de `category`,
+-- que en este proyecto guarda la MARCA (Brand/PRODUCTBRAND), no esto.
+-- Texto libre sin CHECK: el export trae también otros valores (Beauty,
+-- Electronics, etc.) para productos que no son perfume.
+alter table public.products
+  add column if not exists product_line text;
+
 create table if not exists public.product_prices (
   product_id    uuid not null references public.products (id) on delete cascade,
   price_list_id uuid not null references public.price_lists (id) on delete cascade,
@@ -383,6 +392,7 @@ begin
           'id',           p.id,
           'name',         p.name,
           'category',     p.category,
+          'product_line', p.product_line,
           'image_url',    p.image_url,
           'availability', p.availability,
           'price',        null
@@ -401,6 +411,7 @@ begin
           'id',           p.id,
           'name',         p.name,
           'category',     p.category,
+          'product_line', p.product_line,
           'image_url',    p.image_url,
           'availability', p.availability,
           'price',        pp.price

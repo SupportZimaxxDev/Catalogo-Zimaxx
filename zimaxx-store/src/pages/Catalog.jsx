@@ -36,10 +36,11 @@ export default function Catalog() {
   const [flashSales, setFlashSales] = useState([])
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('')
+  const [line, setLine] = useState('')
   const [availability, setAvailability] = useState('')
   // Render progresivo: 3,000+ tarjetas de golpe traban el scroll en móvil.
   // Se cargan más automáticamente a medida que el cliente scrollea.
-  const [visible, sentinelRef] = useInfiniteRows(48, [search, category, availability])
+  const [visible, sentinelRef] = useInfiniteRows(48, [search, category, line, availability])
 
   useEffect(() => {
     let cancelled = false
@@ -67,6 +68,14 @@ export default function Catalog() {
     [products],
   )
 
+  // 'product_line' viene de PRODUCT_CATEGORY en el Excel (ej. "Perfume" vs
+  // "Perfume - Arabes" = dupes árabes) — distinto de 'category', que acá
+  // guarda la marca (Brand).
+  const lines = useMemo(
+    () => [...new Set(products.map((p) => p.product_line).filter(Boolean))].sort(),
+    [products],
+  )
+
   // Hay pedidos de "todo lo Adidas" o "todo lo que sea Pre-Order": la
   // categoría también entra en la búsqueda de texto, y availability tiene
   // su propio filtro además de los chips de categoría.
@@ -81,10 +90,14 @@ export default function Catalog() {
     return products.filter(
       (p) =>
         (!category || p.category === category) &&
+        (!line || p.product_line === line) &&
         (!availability || p.availability === availability) &&
-        (!q || p.name.toLowerCase().includes(q) || (p.category ?? '').toLowerCase().includes(q)),
+        (!q ||
+          p.name.toLowerCase().includes(q) ||
+          (p.category ?? '').toLowerCase().includes(q) ||
+          (p.product_line ?? '').toLowerCase().includes(q)),
     )
-  }, [products, search, category, availability])
+  }, [products, search, category, line, availability])
 
   const validClient = !!client
 
@@ -144,6 +157,33 @@ export default function Catalog() {
                       }`}
                     >
                       {c}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {lines.length > 1 && (
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  <button
+                    onClick={() => setLine('')}
+                    className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
+                      !line
+                        ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                        : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
+                    }`}
+                  >
+                    {t('allLines')}
+                  </button>
+                  {lines.map((l) => (
+                    <button
+                      key={l}
+                      onClick={() => setLine(l === line ? '' : l)}
+                      className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
+                        line === l
+                          ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                          : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
+                      }`}
+                    >
+                      {l}
                     </button>
                   ))}
                 </div>

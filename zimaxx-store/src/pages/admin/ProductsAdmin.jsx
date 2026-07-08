@@ -21,6 +21,11 @@ const COLS = {
   // producto (viene del inventario), distinta de la tabla `flash_sales`
   // de ofertas con precio promo que se gestiona en su propia pestaña.
   availability: ['type', 'tipo', 'disponibilidad', 'availability'],
+  // PRODUCT_CATEGORY del export de SellerCloud (2026-07-08): distinto de
+  // COLS.category (que acá guarda la MARCA/Brand) — esto es el tipo real
+  // del perfume, ej. "Perfume" (diseñador) vs "Perfume - Arabes" (dupes
+  // árabes), para poder filtrar por eso en el admin y en el catálogo.
+  line: ['product_category', 'product category', 'línea', 'linea', 'segmento'],
 }
 const FALSY_ACTIVE = new Set(['no', 'false', '0', 'inactivo', 'inactive'])
 
@@ -74,8 +79,9 @@ export default function ProductsAdmin() {
   // Búsqueda y filtros de la tabla
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
+  const [lineFilter, setLineFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  const [visibleRows, sentinelRef] = useInfiniteRows(100, [query, catFilter, statusFilter])
+  const [visibleRows, sentinelRef] = useInfiniteRows(100, [query, catFilter, lineFilter, statusFilter])
 
   const load = async () => {
     try {
@@ -94,10 +100,17 @@ export default function ProductsAdmin() {
     [products],
   )
 
+  const lines = useMemo(
+    () => [...new Set(products.map((p) => p.product_line).filter(Boolean))].sort(),
+    [products],
+  )
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return products.filter((p) => {
       if (catFilter === '__none__' ? p.category : catFilter && p.category !== catFilter) return false
+      if (lineFilter === '__none__' ? p.product_line : lineFilter && p.product_line !== lineFilter)
+        return false
       if (statusFilter === 'active' && !p.active) return false
       if (statusFilter === 'inactive' && p.active) return false
       if (statusFilter === 'noimage' && p.image_url) return false
@@ -107,7 +120,7 @@ export default function ProductsAdmin() {
         return false
       return true
     })
-  }, [products, query, catFilter, statusFilter])
+  }, [products, query, catFilter, lineFilter, statusFilter])
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0]
@@ -133,6 +146,7 @@ export default function ProductsAdmin() {
       const hasAvailability = rows.length > 0 && COLS.availability.some((a) => a in rows[0])
       const hasImage = rows.length > 0 && (COLS.image.some((a) => a in rows[0]) || !!autoImageCol)
       const hasCategory = rows.length > 0 && COLS.category.some((a) => a in rows[0])
+      const hasLine = rows.length > 0 && COLS.line.some((a) => a in rows[0])
 
       for (const [idx, row] of rows.entries()) {
         const name = pick(row, COLS.name)
@@ -158,6 +172,7 @@ export default function ProductsAdmin() {
           name: String(name).trim(),
           active: parseActive(pick(row, COLS.active)),
           ...(hasCategory ? { category: pick(row, COLS.category) || null } : {}),
+          ...(hasLine ? { product_line: pick(row, COLS.line) || null } : {}),
           ...(hasImage ? { image_url: imageOk ? String(image).trim() : null } : {}),
           ...(hasAvailability
             ? { availability: parseAvailability(pick(row, COLS.availability)) }
@@ -460,6 +475,21 @@ export default function ProductsAdmin() {
             </option>
           ))}
         </select>
+        {lines.length > 0 && (
+          <select
+            value={lineFilter}
+            onChange={(e) => setLineFilter(e.target.value)}
+            className={inputCls}
+          >
+            <option value="">{t('allLines')}</option>
+            <option value="__none__">{t('uncategorized')}</option>
+            {lines.map((l) => (
+              <option key={l} value={l}>
+                {l}
+              </option>
+            ))}
+          </select>
+        )}
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
@@ -517,7 +547,14 @@ export default function ProductsAdmin() {
                     </span>
                   )}
                 </td>
-                <td className="p-3 text-primary/60">{p.category}</td>
+                <td className="p-3 text-primary/60">
+                  {p.category}
+                  {p.product_line && (
+                    <span className="ml-1.5 rounded-full bg-primary/5 px-2 py-0.5 text-[10px] font-semibold text-primary/50">
+                      {p.product_line}
+                    </span>
+                  )}
+                </td>
                 <td className="p-3">
                   {isAdmin ? (
                     <button
