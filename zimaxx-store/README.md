@@ -127,7 +127,7 @@ Pestañas:
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador y botones con contador "con precios" / "sin precios". |
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**: vincula el login de la vendedora escribiendo su email y presionando "Vincular acceso" (RPC `link_vendedora_login`) — requiere haber creado antes ese usuario en Supabase Auth. "Desvincular" le quita el acceso sin borrar la vendedora. |
-| **Flash Sales** | Crear ofertas con precio promo y vencimiento; visibles para todos con countdown; se ocultan solas al expirar. |
+| **Flash Sales** | Crear ofertas con precio promo y vencimiento (alta manual, un producto a la vez) o **carga masiva por Excel** (2026-07-08: mismo archivo semanal "Special Flash Sale" con formato letterhead — UPC/Sku/Brand/Title Product/Price/Type/Qty/Total —, matchea por SKU y precio propio de cada fila; la fecha de inicio/fin se elige una vez con el selector de arriba y se aplica a todos los productos del archivo). Visibles para todos con countdown; **se apagan solas por fecha, sin acción manual** (`get_flash_sales()` ya filtra por `expires_at`). La tabla del admin distingue 4 estados (`LIVE` / Programada / Expiró / Desactivada, 2026-07-08) — el botón "Desactivar" es solo para cortar una oferta *antes* de su fecha de fin, no hace falta para que termine normalmente. |
 | **Pedidos** | Últimos 200 con detalle expandible; cada pedido se marca **Nuevo/Atendido** y el menú muestra el contador de pedidos sin atender. Buscador (nombre/teléfono del cliente) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botón **"Descargar Excel"** por fila: exporta el pedido con las columnas exactas de `UploadTemplate.xls` (`ProductID`, `ProductName`, `UnitPrice`, `Qty`, `ShipFromWarehouseName`, este último fijo en `"Zimaxx"`) para subirlo directo al bulk-order upload de SellerCloud. |
 
 Las tablas grandes usan **scroll infinito** (lotes de 100) y todas las
@@ -180,6 +180,23 @@ Dos formatos:
 
 La matriz de precios tiene botones con contador para ver solo productos
 **con precio** o **sin precio** (según la lista seleccionada en el filtro).
+
+### Flash Sales (pestaña Flash Sales, 2026-07-08)
+
+Mismo formato letterhead que las listas wholesale (ej. el archivo semanal
+"Special Flash Sale"): columnas `UPC`, `Sku`, `Brand`, `Title Product`,
+`Price`, `Type`, `Qty`, `Total Price`. Solo se usan **Sku** y **Price**
+(acepta el precio con `$`/comas, ej. `$22.00`); `Type`/`Qty`/`Total Price`
+se ignoran — la fecha de inicio y fin de la promo **no viene del Excel**,
+se elige una sola vez con los selectores de arriba y se aplica igual a
+todos los productos del archivo. Filas con SKU que no matchea ningún
+producto activo, o con precio inválido/vacío, se cuentan como omitidas
+sin tumbar la carga. A diferencia de las cargas de Productos/Precios/
+Clientes, **no hace upsert**: cada carga crea filas nuevas en
+`flash_sales` (igual que el alta manual de una por una) — si volvés a
+subir el mismo archivo se duplican las ofertas, así que para reemplazar
+la promo de la semana hay que desactivar las anteriores a mano en la
+tabla antes de cargar la nueva.
 
 ### Clientes (pestaña Clientes)
 

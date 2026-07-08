@@ -156,6 +156,14 @@ const dict = {
     assignedToYou: 'Se asignará a vos automáticamente.',
     quoteRequestTitle: 'Solicitud de cotización — Zimaxx Store',
     quoteRequestGreeting: 'Hola! Quiero cotización de estos productos:',
+    bulkFlashUpload: 'Carga masiva por Excel',
+    flashUploadHint:
+      'Excel con columnas SKU y Price (mismo formato del "Special Flash Sale", con membrete y columnas UPC/Sku/Brand/Title Product/Price/Type/Qty — Type/Qty/Total se ignoran). Elegí primero la fecha de inicio y fin de la promo: se aplica igual a todos los productos del archivo.',
+    flashUploadNeedDates: 'Elegí la fecha de inicio y fin de la promoción antes de subir el Excel.',
+    flashStatus_live: 'LIVE',
+    flashStatus_scheduled: 'Programada',
+    flashStatus_expired: 'Expiró',
+    flashStatus_deactivated: 'Desactivada',
   },
   en: {
     search: 'Search by name or category...',
@@ -306,6 +314,14 @@ const dict = {
     assignedToYou: 'It will be assigned to you automatically.',
     quoteRequestTitle: 'Quote Request — Zimaxx Store',
     quoteRequestGreeting: 'Hi! I would like a quote for these products:',
+    bulkFlashUpload: 'Bulk upload via Excel',
+    flashUploadHint:
+      'Excel with SKU and Price columns (same format as "Special Flash Sale", with letterhead and UPC/Sku/Brand/Title Product/Price/Type/Qty columns — Type/Qty/Total are ignored). Pick the start and end date of the promo first: it applies to every product in the file.',
+    flashUploadNeedDates: 'Pick the start and end date of the promotion before uploading the Excel.',
+    flashStatus_live: 'LIVE',
+    flashStatus_scheduled: 'Scheduled',
+    flashStatus_expired: 'Expired',
+    flashStatus_deactivated: 'Deactivated',
   },
 }
 
