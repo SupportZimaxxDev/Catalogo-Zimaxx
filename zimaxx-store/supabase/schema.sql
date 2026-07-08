@@ -152,12 +152,20 @@ create table if not exists public.admins (
 -- Special ($15,000+) NO se divide por región: a partir de ese monto
 -- siempre es cotización personalizada (ver get_catalog), por eso es una
 -- sola lista general "special".
+-- 'quote' (2026-07-08) es una lista más en el mismo selector, pero sin
+-- precio: get_catalog/create_order la detectan por code y devuelven el
+-- catálogo completo (disponibles + pre-order) sin precio en ningún
+-- lado. Se eligió como lista en vez de un flag aparte en clients para
+-- que sea editable con el mismo selector "Lista" de siempre, sin un
+-- alta de cliente especial ni un estado "sin asignar" que después no se
+-- pueda tocar.
 insert into public.price_lists (code, label) values
   ('us_min',       'US Minimum Order'),
   ('us_wholesale', 'US Wholesale'),
   ('ve_min',       'VE Minimum Order'),
   ('ve_wholesale', 'VE Wholesale'),
-  ('special',      'Special Order')
+  ('special',      'Special Order'),
+  ('quote',        'Cotización (sin precio)')
 on conflict (code) do nothing;
 
 -- Migración: el nivel $15,000+ pasó por los nombres "distribuidor" y
@@ -335,6 +343,9 @@ end $$;
 -- Resuelve el cliente por token y devuelve SOLO los precios de su lista.
 -- Token inválido => null (sin error descriptivo). 'special' es una lista
 -- de precio normal (2026-07-06): ya no tiene trato especial acá.
+-- Catálogo de cotización (2026-07-08): la lista 'quote' es la única
+-- excepción — devuelve TODOS los productos activos (disponibles y
+-- pre-order) con price = null siempre, sin importar product_prices.
 create or replace function public.get_catalog(p_token text)
 returns jsonb
 language plpgsql
@@ -362,34 +373,55 @@ begin
   select name, phone into v_vendedora_name, v_vendedora_phone
   from public.vendedores where id = v_client.vendedora_id;
 
-  select coalesce(
-    jsonb_agg(
-      jsonb_build_object(
-        'id',           p.id,
-        'name',         p.name,
-        'category',     p.category,
-        'image_url',    p.image_url,
-        'availability', p.availability,
-        'price',        pp.price
-      )
-      order by p.category nulls last, p.name
-    ),
-    '[]'::jsonb
-  )
-  into v_products
-  from public.products p
-  left join public.product_prices pp
-    on pp.product_id = p.id
-   and pp.price_list_id = v_client.price_list_id
-  where p.active
-    and pp.price is not null;
+  if v_code = 'quote' then
+    select coalesce(
+      jsonb_agg(
+        jsonb_build_object(
+          'id',           p.id,
+          'name',         p.name,
+          'category',     p.category,
+          'image_url',    p.image_url,
+          'availability', p.availability,
+          'price',        null
+        )
+        order by p.category nulls last, p.name
+      ),
+      '[]'::jsonb
+    )
+    into v_products
+    from public.products p
+    where p.active;
+  else
+    select coalesce(
+      jsonb_agg(
+        jsonb_build_object(
+          'id',           p.id,
+          'name',         p.name,
+          'category',     p.category,
+          'image_url',    p.image_url,
+          'availability', p.availability,
+          'price',        pp.price
+        )
+        order by p.category nulls last, p.name
+      ),
+      '[]'::jsonb
+    )
+    into v_products
+    from public.products p
+    left join public.product_prices pp
+      on pp.product_id = p.id
+     and pp.price_list_id = v_client.price_list_id
+    where p.active
+      and pp.price is not null;
+  end if;
 
   return jsonb_build_object(
     'client', jsonb_build_object(
       'name',            v_client.name,
       'vendedora',       v_vendedora_name,
       'vendedora_phone', v_vendedora_phone,
-      'price_list_code', v_code
+      'price_list_code', v_code,
+      'is_quote_only',   v_code = 'quote'
     ),
     'products', v_products
   );
@@ -457,6 +489,7 @@ set search_path = public
 as $$
 declare
   v_client    public.clients%rowtype;
+  v_list_code text;
   v_kind      text;
   v_item      jsonb;
   v_id        uuid;
@@ -480,7 +513,11 @@ begin
     return null;
   end if;
 
-  v_kind := case when p_kind = 'quote' then 'quote' else 'order' end;
+  select code into v_list_code from public.price_lists where id = v_client.price_list_id;
+
+  -- El cliente nunca decide esto: la lista 'quote' siempre guarda
+  -- 'quote' sin precio, sin importar lo que mande el frontend.
+  v_kind := case when v_list_code = 'quote' or p_kind = 'quote' then 'quote' else 'order' end;
 
   for v_item in select value from jsonb_array_elements(p_items) loop
     begin

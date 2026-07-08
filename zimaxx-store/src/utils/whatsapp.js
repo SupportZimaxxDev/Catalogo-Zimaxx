@@ -2,11 +2,12 @@ import { cleanPhone, money } from './format'
 
 // Construye el mensaje de pedido y el link wa.me a la vendedora.
 export function buildOrderMessage({ t, clientName, items, total }) {
+  const hasPrices = items.some((i) => i.price != null)
   const lines = []
-  lines.push(`*${t('orderTitle')}*`)
+  lines.push(`*${hasPrices ? t('orderTitle') : t('quoteRequestTitle')}*`)
   lines.push(`${t('client')}: ${clientName}`)
   lines.push('')
-  lines.push(t('orderGreeting'))
+  lines.push(hasPrices ? t('orderGreeting') : t('quoteRequestGreeting'))
   lines.push('')
 
   items.forEach((i, n) => {
@@ -20,8 +21,10 @@ export function buildOrderMessage({ t, clientName, items, total }) {
     }
   })
 
-  lines.push('')
-  lines.push(`*${t('total')}: ${money(total)}*`)
+  if (hasPrices) {
+    lines.push('')
+    lines.push(`*${t('total')}: ${money(total)}*`)
+  }
 
   return lines.join('\n')
 }

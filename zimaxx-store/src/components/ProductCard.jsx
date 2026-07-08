@@ -1,11 +1,28 @@
+import { useEffect, useState } from 'react'
 import { useI18n } from '../i18n'
 import { useCart } from '../context/CartContext'
 import { money } from '../utils/format'
 import ProductImage from './ProductImage'
 
+// Compras grandes son el caso común de este catálogo B2B: además del
+// stepper +/- de a uno, botones para sumar de a 10/15/20 de una.
+const BULK_STEPS = [10, 15, 20]
+
 export default function ProductCard({ product }) {
   const { t } = useI18n()
   const cart = useCart()
+  const price = product.price == null ? null : Number(product.price)
+  const qty = cart.items.find((i) => i.id === product.id && !i.flash)?.qty ?? 0
+
+  // Input controlado aparte del qty del carrito: mientras se escribe a mano
+  // no queremos que cada tecla dispare un setExactQty (y su re-render).
+  const [draft, setDraft] = useState(String(qty))
+  useEffect(() => setDraft(String(qty)), [qty])
+
+  const commitDraft = (raw) => {
+    const n = Math.max(0, Math.floor(Number(raw)) || 0)
+    cart.setExactQty(product, price, n)
+  }
 
   return (
     <div className="group relative flex flex-col overflow-hidden rounded-2xl border border-line bg-surface transition-all duration-300 hover:-translate-y-1 hover:border-secondary/50 hover:shadow-lg hover:shadow-black/10">
@@ -27,12 +44,51 @@ export default function ProductCard({ product }) {
             {money(product.price)}
           </p>
         )}
-        <button
-          onClick={() => cart.add(product, Number(product.price))}
-          className="mt-1.5 rounded-xl bg-ink py-2.5 text-sm font-semibold text-secondary transition-colors duration-200 hover:bg-secondary hover:text-ink"
-        >
-          {t('add')}
-        </button>
+        {qty === 0 ? (
+          <button
+            onClick={() => cart.add(product, price)}
+            className="mt-1.5 rounded-xl bg-ink py-2.5 text-sm font-semibold text-secondary transition-colors duration-200 hover:bg-secondary hover:text-ink"
+          >
+            {t('add')}
+          </button>
+        ) : (
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <button
+              onClick={() => cart.setExactQty(product, price, qty - 1)}
+              className="h-9 w-9 shrink-0 rounded-full border border-line font-bold text-primary/70 transition-colors hover:border-secondary hover:text-primary"
+            >
+              −
+            </button>
+            <input
+              type="number"
+              inputMode="numeric"
+              min="0"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={(e) => commitDraft(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+              className="w-full min-w-0 rounded-lg border border-line bg-surface py-1.5 text-center text-sm font-semibold outline-none transition-colors focus:border-secondary"
+            />
+            <button
+              onClick={() => cart.add(product, price)}
+              className="h-9 w-9 shrink-0 rounded-full border border-line font-bold text-primary/70 transition-colors hover:border-secondary hover:text-primary"
+            >
+              +
+            </button>
+          </div>
+        )}
+
+        <div className="flex gap-1">
+          {BULK_STEPS.map((n) => (
+            <button
+              key={n}
+              onClick={() => cart.add(product, price, { qty: n })}
+              className="flex-1 rounded-lg border border-line py-1 text-[11px] font-semibold text-primary/60 transition-colors hover:border-secondary hover:text-secondary-dark"
+            >
+              +{n}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )

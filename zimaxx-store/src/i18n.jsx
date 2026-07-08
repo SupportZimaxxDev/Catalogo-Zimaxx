@@ -4,8 +4,9 @@ import { createContext, useContext, useMemo, useState } from 'react'
 const dict = {
   es: {
     // Header / general
-    search: 'Buscar producto...',
+    search: 'Buscar por nombre o categoría...',
     allCategories: 'Todas',
+    inStock: 'Disponible',
     catalog: 'Catálogo',
     loading: 'Cargando...',
     noProducts: 'No hay productos para mostrar.',
@@ -51,6 +52,10 @@ const dict = {
     orderSaveWarn:
       'El pedido se envió por WhatsApp, pero no pudimos registrarlo en el sistema. Confirma con tu vendedora que lo recibió.',
     orderGreeting: 'Hola! Te envío mi pedido:',
+    confirmOrderTitle: '¿Tu pedido está completo?',
+    confirmOrderBody: 'Revisá las cantidades antes de enviarlo por WhatsApp — una vez enviado tenés que avisarle a tu vendedora para modificarlo.',
+    confirmOrderReview: 'Revisar de nuevo',
+    confirmOrderSend: 'Sí, enviar pedido',
 
     // Admin
     adminTitle: 'Panel admin',
@@ -95,7 +100,9 @@ const dict = {
     imageUpload: 'Fotos por Excel',
     searchProducts: 'Buscar por nombre o SKU...',
     searchClients: 'Buscar por nombre, teléfono o vendedora...',
+    searchOrders: 'Buscar por nombre o teléfono del cliente...',
     allStatuses: 'Todos los estados',
+    allTypes: 'Todos los tipos',
     allLists: 'Todas las listas',
     allReps: 'Todas las vendedoras',
     uncategorized: 'Sin categoría',
@@ -147,10 +154,13 @@ const dict = {
     unassigned: 'Sin asignar',
     phoneInUse: 'Ya existe un cliente con ese teléfono.',
     assignedToYou: 'Se asignará a vos automáticamente.',
+    quoteRequestTitle: 'Solicitud de cotización — Zimaxx Store',
+    quoteRequestGreeting: 'Hola! Quiero cotización de estos productos:',
   },
   en: {
-    search: 'Search products...',
+    search: 'Search by name or category...',
     allCategories: 'All',
+    inStock: 'In stock',
     catalog: 'Catalog',
     loading: 'Loading...',
     noProducts: 'No products to show.',
@@ -193,6 +203,10 @@ const dict = {
     orderSaveWarn:
       'Your order was sent via WhatsApp, but we could not save it in the system. Please confirm with your sales rep that it arrived.',
     orderGreeting: 'Hello! Here is my order:',
+    confirmOrderTitle: 'Is your order complete?',
+    confirmOrderBody: 'Double-check the quantities before sending it over WhatsApp — once sent, you\'ll need to tell your sales rep to change it.',
+    confirmOrderReview: 'Review again',
+    confirmOrderSend: 'Yes, send order',
 
     adminTitle: 'Admin panel',
     email: 'Email',
@@ -236,7 +250,9 @@ const dict = {
     imageUpload: 'Photos via Excel',
     searchProducts: 'Search by name or SKU...',
     searchClients: 'Search by name, phone or rep...',
+    searchOrders: 'Search by client name or phone...',
     allStatuses: 'All statuses',
+    allTypes: 'All types',
     allLists: 'All lists',
     allReps: 'All reps',
     uncategorized: 'Uncategorized',
@@ -288,6 +304,8 @@ const dict = {
     unassigned: 'Unassigned',
     phoneInUse: 'A client with that phone already exists.',
     assignedToYou: 'It will be assigned to you automatically.',
+    quoteRequestTitle: 'Quote Request — Zimaxx Store',
+    quoteRequestGreeting: 'Hi! I would like a quote for these products:',
   },
 }
 

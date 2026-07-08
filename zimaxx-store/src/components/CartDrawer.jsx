@@ -16,6 +16,7 @@ export default function CartDrawer({ token, client }) {
   const cart = useCart()
   const [sent, setSent] = useState(false)
   const [saveWarn, setSaveWarn] = useState(false)
+  const [confirming, setConfirming] = useState(false)
 
   if (!cart.open) return null
 
@@ -126,12 +127,14 @@ export default function CartDrawer({ token, client }) {
 
         {cart.items.length > 0 && (
           <div className="space-y-3 border-t border-line bg-surface p-4">
-            <div className="flex items-baseline justify-between">
-              <span className="text-sm font-semibold uppercase tracking-wider text-primary/60">
-                {t('total')}
-              </span>
-              <span className="font-brand text-2xl font-semibold">{money(cart.total)}</span>
-            </div>
+            {cart.hasPrices && (
+              <div className="flex items-baseline justify-between">
+                <span className="text-sm font-semibold uppercase tracking-wider text-primary/60">
+                  {t('total')}
+                </span>
+                <span className="font-brand text-2xl font-semibold">{money(cart.total)}</span>
+              </div>
+            )}
 
             {belowMin && (
               <p className="rounded-lg bg-gold-pale/60 p-3 text-xs font-medium leading-relaxed">
@@ -141,7 +144,7 @@ export default function CartDrawer({ token, client }) {
             )}
 
             <button
-              onClick={handleCheckout}
+              onClick={() => setConfirming(true)}
               disabled={belowMin}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#25D366] py-3 font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -178,6 +181,46 @@ export default function CartDrawer({ token, client }) {
           </div>
         )}
       </aside>
+
+      {confirming && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[2px] md:items-center"
+          onClick={() => setConfirming(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm animate-fade-up rounded-t-3xl border-t-4 border-secondary bg-surface p-6 shadow-2xl md:rounded-3xl"
+          >
+            <h3 className="font-brand text-lg font-semibold">{t('confirmOrderTitle')}</h3>
+            <p className="mt-1.5 text-sm leading-relaxed text-primary/60">{t('confirmOrderBody')}</p>
+            <div className="mt-4 flex items-baseline justify-between rounded-xl bg-gold-pale/40 px-4 py-3">
+              <span className="text-sm text-primary/60">
+                {cart.count} {t('items')}
+              </span>
+              {cart.hasPrices && (
+                <span className="font-brand text-lg font-semibold">{money(cart.total)}</span>
+              )}
+            </div>
+            <div className="mt-5 flex gap-2">
+              <button
+                onClick={() => setConfirming(false)}
+                className="flex-1 rounded-xl border border-line py-2.5 text-sm font-semibold transition-colors hover:border-primary/40"
+              >
+                {t('confirmOrderReview')}
+              </button>
+              <button
+                onClick={() => {
+                  setConfirming(false)
+                  handleCheckout()
+                }}
+                className="flex-1 rounded-xl bg-[#25D366] py-2.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
+              >
+                {t('confirmOrderSend')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

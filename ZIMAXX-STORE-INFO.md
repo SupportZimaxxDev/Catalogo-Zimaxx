@@ -79,6 +79,15 @@ C:\Users\First Choice Online\Documents\Archivos JEsus\Catalogo Zimaxx\zimaxx-sto
   precio real) — hasta ahora solo se corrió el SQL contra Supabase; el
   sitio en producción puede seguir sirviendo el JS viejo hasta el próximo
   deploy.
+- [ ] **Catálogo de cotización sin precios** (2026-07-08, a pedido del
+  usuario): lista `quote` sembrada en `price_lists`, seleccionable en el
+  mismo selector "Lista" de cualquier cliente; `get_catalog`/`create_order`
+  la detectan por `code` (no por un flag en `clients`). **Falta correr el
+  `schema.sql` actualizado en Supabase** (agrega la fila `quote` a
+  `price_lists` — inserción con `on conflict do nothing`, no rompe si ya
+  corriste una versión previa) y commitear/desplegar el código — sin el
+  SQL actualizado, la opción "Cotización (sin precio)" no aparece en el
+  selector de listas.
 
 ---
 
@@ -184,6 +193,7 @@ negro+dorado es idéntico en ambos modos).
 | `ve_min` | VE Minimum Order |
 | `ve_wholesale` | VE Wholesale |
 | `special` | Special Order ($15,000+, **cualquier región**, precio fijo real) |
+| `quote` | Cotización (sin precio) — catálogo completo sin precio, ver más abajo |
 
 Corregido 2026-07-06 (en dos pasos): (1) Special ya **no** se divide por
 región (antes existían `us_special`/`ve_special`); a partir de $15,000 es
@@ -192,6 +202,25 @@ usuario, Special dejó de ser "cotización sin precio" — ahora se le sube
 Excel de precios igual que a las otras 4 y el cliente hace checkout
 normal con total, como cualquier otro nivel.
 
+Catálogo de cotización sin precios (2026-07-08, a pedido del usuario,
+distinto del punto anterior): lista `quote` sembrada en `price_lists`,
+igual que cualquier otra — **primer intento** de esta sesión fue un flag
+`clients.is_quote_only` con `price_list_id` nullable y un checkbox
+aparte en el alta de cliente; el usuario lo rechazó porque obligaba a
+crear un cliente nuevo para cada cotización y, sin vendedora asignada, no
+quedaba forma cómoda de editarlo después. Se rehizo como una lista más:
+el mismo selector "Lista" de siempre (alta individual, tabla de Clientes,
+Excel) ahora puede apuntar a `quote`, se reasigna hacia/desde ahí como
+cualquier otro nivel, y sigue teniendo vendedora asignada igual que
+cualquier cliente. `get_catalog`/`create_order` detectan el modo
+cotización resolviendo el `code` de `price_list_id` del cliente (no un
+flag): si es `'quote'`, `get_catalog` ignora `product_prices` y devuelve
+**todos** los productos activos (disponibles y pre-order) con precio
+`null`; `create_order` fuerza `kind = 'quote'` sin calcular precio para
+ningún ítem. `PricesUpload.jsx` excluye `quote` de la matriz/carga de
+precios (no tiene sentido subirle precio, se ignoraría igual). Ver
+detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
+
 ---
 
 ## RPC (funciones Postgres SECURITY DEFINER)
@@ -199,18 +228,24 @@ normal con total, como cualquier otro nivel.
 ### `get_catalog(p_token text) → jsonb`
 - Acceso: `anon` y `authenticated`
 - Resuelve el cliente por token. Token inválido → `null` (sin mensaje).
-- Todas las listas (incluida `special`) se tratan igual: un producto solo
+- Todas las listas regionales/Special se tratan igual: un producto solo
   aparece si tiene precio cargado en `product_prices` para esa lista.
+  **Excepción: `quote`** (2026-07-08) — ver abajo.
 - **No expone el SKU** (es interno).
 - Devuelve (mismo contrato JSON de siempre; `vendedora`/`vendedora_phone`
   se resuelven ahora con un join a `vendedores` en vez de leerse directo
-  de `clients`):
+  de `clients`; `is_quote_only` es nuevo, 2026-07-08, y es un booleano
+  calculado — `price_list_code = 'quote'` — no una columna de `clients`):
   ```json
   {
-    "client": { "name", "vendedora", "vendedora_phone", "price_list_code" },
+    "client": { "name", "vendedora", "vendedora_phone", "price_list_code", "is_quote_only" },
     "products": [ { "id", "name", "category", "image_url", "availability", "price" } ]
   }
   ```
+- Si la lista resuelta del cliente tiene `code = 'quote'`, ignora
+  `product_prices` por completo: devuelve **todos** los productos activos
+  con `price: null` siempre (catálogo de cotización, ver "Base de datos"
+  más arriba).
 
 ### `get_flash_sales() → jsonb`
 - Acceso: `anon` y `authenticated`. Sin token.
@@ -226,10 +261,11 @@ normal con total, como cualquier otro nivel.
 - Límites: máx. 200 ítems, qty 1–9999; ítems malformados o de productos
   inactivos se descartan sin tumbar el pedido. Si no sobrevive ninguno → `null`.
 - `p_kind`: `'order'` o `'quote'`, tal cual lo pida el caller (por defecto
-  `'order'`). Ya no hay lista que fuerce `'quote'` — el frontend actual
-  nunca pide `'quote'`, queda para un eventual flujo de cotización manual
-  futuro. Pedidos viejos con `kind = 'quote'` (de cuando Special era
-  cotización) siguen mostrándose como tal en `/admin/orders`.
+  `'order'`), **salvo que la lista del cliente sea `'quote'`**: en ese caso
+  el servidor fuerza `kind = 'quote'` y nunca calcula precio para ningún
+  ítem, sin importar lo que mande el navegador (2026-07-08). Pedidos viejos
+  con `kind = 'quote'` (de cuando Special era cotización) siguen
+  mostrándose como tal en `/admin/orders`.
 - Los ítems guardados incluyen el SKU real del producto (solo visible en el admin).
 - Devuelve el `id` del pedido creado; el frontend (`CartDrawer`) revisa el
   retorno y avisa al cliente si el registro falló (WhatsApp sale igual).
@@ -397,3 +433,6 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 12. **Rol vendedora con acceso restringido** (2026-07-06, a pedido del usuario) — antes el panel admin era binario (estar o no en `admins`, sin nivel intermedio). Se agregó un login propio por vendedora sin tocar el modelo de `admins`: `vendedores.user_id` (FK a `auth.users`, nullable, único) vincula la fila a un usuario ya creado en el dashboard de Supabase Auth; el admin hace esa vinculación desde la pestaña Vendedoras (RPC `link_vendedora_login`, evita ir al SQL Editor). El nivel de acceso se resuelve por RLS, no por la UI: nuevas policies (aditivas a `admin_all`, que sigue intacta para admins) le dan a una vendedora `select` de sus propios `clients`/`orders` (por `vendedora_id`/`current_vendedora_id()`), `select` de su propia fila en `vendedores` (nunca las de otras), `update` acotado a sus propios `orders` (marcar atendido/reabrir) y `select` de solo lectura de `price_lists`/`products`/`product_prices`/`flash_sales`. El frontend (`AdminLayout.jsx` con `get_my_role()` + `Outlet context={{ role }}`) arma pestañas distintas por rol y cada página admin esconde sus controles de edición cuando `role !== 'admin'`, pero eso es solo UX — la restricción real es la RLS.
 13. **Alta individual de clientes** (2026-07-07, a pedido del usuario) — hasta entonces `ClientsAdmin.jsx` solo creaba clientes por carga masiva de Excel. Se agregó un botón "+ Nuevo cliente" con formulario inline; admin puede elegir vendedora o dejarlo sin asignar, vendedora se autoasigna el cliente (el selector ni se muestra). Igual que el resto del rol vendedora, la restricción real es una policy RLS nueva (`vendedora_insert_own_clients`: `insert` en `clients` solo si `vendedora_id = current_vendedora_id()`), no la UI.
 14. **Exportar pedido a Excel para SellerCloud** (2026-07-07, a pedido del usuario) — `/admin/orders` tiene un botón "Descargar Excel" por fila que genera un `.xlsx` con las columnas exactas de `UploadTemplate.xls` (`ProductID`, `ProductName`, `UnitPrice`, `Qty`, `ShipFromWarehouseName`), para subirlo directo al bulk-order upload de SellerCloud sin retocarlo. `ProductID`/`ProductName`/`UnitPrice`/`Qty` salen de `orders.items` (`sku`/`name`/`price`/`qty`, ya guardados ahí); `ShipFromWarehouseName` no existe en el modelo de datos (Zimaxx tiene un solo almacén) así que queda fijo como `"Zimaxx"` en `downloadOrderExcel()` (`src/utils/excel.js`) — si algún día manejan más de un almacén, hay que resolver esa columna por producto/cliente en vez de una constante.
+15. **Cantidades grandes en el catálogo + confirmación de pedido** (2026-07-07, a pedido del usuario) — `ProductCard.jsx` reemplaza el botón "Agregar" fijo por un stepper editable (−/input/+) una vez que el producto ya está en el carrito, más una fila de botones **+10/+15/+20** siempre visibles (pensados para compras mayoristas grandes, permiten saltar de 0 a una cantidad grande sin pasar primero por "Agregar"). Requirió extender `CartContext.jsx`: `add(product, price, {flash, qty})` ahora acepta cuánto sumar (antes siempre +1) y se agregó `setExactQty(product, price, qty, {flash})`, que a diferencia de `setQty(id, flash, qty)` **crea el ítem si no existía** (necesario para el input editable a mano y los botones +10/+15/+20 sobre un producto todavía no agregado). Además, `Catalog.jsx`: el buscador ahora matchea nombre **o categoría** (antes solo nombre — "buscar Adidas" no traía nada aunque hubiera productos de esa marca), y se sumó un filtro de disponibilidad (Disponible/Pre-Order) como chips, junto a los de categoría. Por último, `CartDrawer.jsx` agrega un diálogo de confirmación ("¿Tu pedido está completo?" + resumen de ítems/total) antes de registrar la orden y abrir WhatsApp, para evitar envíos accidentales.
+16. **Filtros de búsqueda en Pedidos** (2026-07-07, a pedido del usuario) — `OrdersAdmin.jsx` no tenía forma de buscar/filtrar entre los últimos 200 pedidos. Se agregó buscador (nombre/teléfono del cliente), y selects de estado (Nuevo/Atendido), tipo (Pedido/Cotización) y, solo para admin, vendedora (derivada de los pedidos ya cargados, sin query aparte). El filtro de vendedora requirió ampliar el `select` de Supabase a `clients(name, phone, vendedora_id, vendedores(name))` — una vendedora ya solo ve sus propios pedidos por RLS (`vendedora_select_own_orders`), así que ese filtro se oculta para ese rol.
+17. **Catálogo de cotización sin precios** (2026-07-08, a pedido del usuario, distinto de Special) — necesitaba un link genérico para mandar a un prospecto sin lista asignada, que muestre todos los perfumes disponibles y pre-order sin precio en ningún lado, y que igual arme una lista y la mande por WhatsApp a la vendedora asignada (misma lógica de `vendedora_phone` que un cliente normal). **Primer intento, rechazado por el usuario en la misma sesión**: un flag en `clients` (`is_quote_only`, con `price_list_id` nullable) más un checkbox aparte en el alta de cliente que ocultaba el selector de lista. El usuario lo rechazó: obligaba a crear un cliente nuevo cada vez que alguien quisiera una cotización, y un cliente "sin lista asignada" (price_list_id null) quedaba incómodo de editar después. **Diseño final**: `quote` es una fila más en `price_lists` (como `special`), elegible en el mismo selector "Lista" de siempre (alta individual, tabla de Clientes, Excel) — se reasigna hacia/adentro/afuera de esa lista igual que cualquier otro nivel, sin checkbox ni estado especial, y el cliente sigue teniendo vendedora asignada como cualquiera. `get_catalog`/`create_order` detectan el modo cotización resolviendo el `code` de la lista del cliente (no un flag): si es `'quote'`, `get_catalog` ignora `product_prices` y devuelve todos los productos activos con `price: null`; `create_order` fuerza `kind = 'quote'` sin calcular precio, sin importar el payload del navegador (mismo patrón de "el servidor decide, no el cliente" que ya usaba el recálculo de precios). `PricesUpload.jsx` excluye `quote` de la matriz/carga de precios. En el frontend casi todo el ocultamiento de precio ya existía gratis porque `ProductCard`/`CartDrawer`/`CartBar`/`Header` ya condicionaban el render en `price != null` / `cart.hasPrices` (resabio de Special-como-cotización, punto 11) — solo hubo que: (a) arreglar un bug real en `ProductCard.jsx` donde `Number(product.price)` convertía un precio `null` en `0` en vez de mantenerlo `null` (rompía `hasPrices` y por lo tanto el mínimo de pedido); (b) ocultar `FlashSaleSection` por completo para estos clientes (las ofertas siempre traen precio real, no dependen del cliente); (c) en `whatsapp.js`/`pdf.js`, omitir la línea de Total y usar título/saludo de "Solicitud de cotización" cuando ningún ítem tiene precio. **Pendiente**: correr el `schema.sql` actualizado en Supabase (agrega la fila `quote` a `price_lists`, `on conflict do nothing`) y desplegar el código — sin eso, la opción no aparece en el selector.

@@ -48,7 +48,9 @@ export default function PricesUpload() {
         fetchAll('products', 'id, sku, name', 'name'),
         fetchAll('product_prices', 'product_id, price_list_id, price', 'product_id'),
       ])
-      setPriceLists(pls)
+      // 'quote' nunca usa product_prices (get_catalog la ignora por
+      // completo): no tiene sentido subirle ni mostrarle precios acá.
+      setPriceLists(pls.filter((l) => l.code !== 'quote'))
       setProducts(ps)
       const map = new Map()
       for (const pp of pps) {

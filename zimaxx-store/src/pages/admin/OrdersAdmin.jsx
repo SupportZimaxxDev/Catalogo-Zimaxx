@@ -1,20 +1,31 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
-import { money } from '../../utils/format'
+import { money, cleanPhone } from '../../utils/format'
 import { downloadOrderExcel } from '../../utils/excel'
+import { SearchIcon, inputCls } from './ui'
 
 // Bandeja de pedidos: cada uno se marca atendido para no depender de la
 // memoria del chat de WhatsApp.
 export default function OrdersAdmin() {
   const { t } = useI18n()
+  const { role } = useOutletContext()
+  const isAdmin = role === 'admin'
   const [orders, setOrders] = useState([])
   const [expanded, setExpanded] = useState(null)
 
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [typeFilter, setTypeFilter] = useState('')
+  const [repFilter, setRepFilter] = useState('')
+
   useEffect(() => {
+    // A una vendedora, RLS ya le filtra esto a sus propios pedidos —
+    // el join de vendedora solo importa para el filtro que ve el admin.
     supabase
       .from('orders')
-      .select('*, clients(name, phone)')
+      .select('*, clients(name, phone, vendedora_id, vendedores(name))')
       .order('created_at', { ascending: false })
       .limit(200)
       .then(({ data }) => setOrders(data ?? []))
@@ -30,6 +41,30 @@ export default function OrdersAdmin() {
     downloadOrderExcel(o.items ?? [], `${stamp}-${o.id.slice(0, 8)}`)
   }
 
+  const reps = useMemo(() => {
+    const map = new Map()
+    for (const o of orders) {
+      const v = o.clients?.vendedora_id
+      if (v && !map.has(v)) map.set(v, o.clients.vendedores?.name ?? '')
+    }
+    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]))
+  }, [orders])
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const qDigits = q.replace(/\D/g, '')
+    return orders.filter((o) => {
+      if (statusFilter && (o.status ?? 'new') !== statusFilter) return false
+      if (typeFilter && (o.kind ?? 'order') !== typeFilter) return false
+      if (repFilter && o.clients?.vendedora_id !== repFilter) return false
+      if (!q) return true
+      return (
+        (o.clients?.name ?? '').toLowerCase().includes(q) ||
+        (qDigits && cleanPhone(o.clients?.phone).includes(qDigits))
+      )
+    })
+  }, [orders, query, statusFilter, typeFilter, repFilter])
+
   if (orders.length === 0) {
     return (
       <div>
@@ -41,7 +76,51 @@ export default function OrdersAdmin() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-bold">{t('orders')} ({orders.length})</h2>
+      <h2 className="text-xl font-bold">
+        {t('orders')} ({filtered.length}
+        {filtered.length !== orders.length ? ` / ${orders.length}` : ''})
+      </h2>
+
+      <div className="flex flex-col gap-2 md:flex-row">
+        <div className="relative flex-1">
+          <SearchIcon />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('searchOrders')}
+            className={`${inputCls} w-full pl-10`}
+          />
+        </div>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className={inputCls}
+        >
+          <option value="">{t('allStatuses')}</option>
+          <option value="new">{t('statusNew')}</option>
+          <option value="done">{t('statusDone')}</option>
+        </select>
+        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className={inputCls}>
+          <option value="">{t('allTypes')}</option>
+          <option value="order">{t('order')}</option>
+          <option value="quote">{t('quote')}</option>
+        </select>
+        {isAdmin && reps.length > 0 && (
+          <select value={repFilter} onChange={(e) => setRepFilter(e.target.value)} className={inputCls}>
+            <option value="">{t('allReps')}</option>
+            {reps.map(([id, name]) => (
+              <option key={id} value={id}>
+                {name}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {filtered.length === 0 ? (
+        <p className="py-10 text-center text-primary/50">{t('noOrders')}</p>
+      ) : (
       <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-sm">
         <table className="w-full text-sm">
           <thead>
@@ -56,7 +135,7 @@ export default function OrdersAdmin() {
             </tr>
           </thead>
           <tbody>
-            {orders.map((o) => (
+            {filtered.map((o) => (
               <tr
                 key={o.id}
                 onClick={() => setExpanded(expanded === o.id ? null : o.id)}
@@ -138,6 +217,7 @@ export default function OrdersAdmin() {
           </tbody>
         </table>
       </div>
+      )}
     </div>
   )
 }

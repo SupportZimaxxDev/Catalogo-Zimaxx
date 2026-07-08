@@ -36,9 +36,10 @@ export default function Catalog() {
   const [flashSales, setFlashSales] = useState([])
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('')
+  const [availability, setAvailability] = useState('')
   // Render progresivo: 3,000+ tarjetas de golpe traban el scroll en móvil.
   // Se cargan más automáticamente a medida que el cliente scrollea.
-  const [visible, sentinelRef] = useInfiniteRows(48, [search, category])
+  const [visible, sentinelRef] = useInfiniteRows(48, [search, category, availability])
 
   useEffect(() => {
     let cancelled = false
@@ -66,12 +67,20 @@ export default function Catalog() {
     [products],
   )
 
+  // Hay pedidos de "todo lo Adidas" o "todo lo que sea Pre-Order": la
+  // categoría también entra en la búsqueda de texto, y availability tiene
+  // su propio filtro además de los chips de categoría.
+  const hasPreorder = useMemo(() => products.some((p) => p.availability === 'preorder'), [products])
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     return products.filter(
-      (p) => (!category || p.category === category) && (!q || p.name.toLowerCase().includes(q)),
+      (p) =>
+        (!category || p.category === category) &&
+        (!availability || p.availability === availability) &&
+        (!q || p.name.toLowerCase().includes(q) || (p.category ?? '').toLowerCase().includes(q)),
     )
-  }, [products, search, category])
+  }, [products, search, category, availability])
 
   const validClient = !!client
 
@@ -80,7 +89,8 @@ export default function Catalog() {
       <Header clientName={client?.name} />
 
       <main className="mx-auto max-w-6xl px-4 py-6">
-        <FlashSaleSection sales={flashSales} canOrder={validClient} />
+        {/* Flash Sale siempre trae precio real: no aplica al catálogo de cotización sin precios. */}
+        {!client?.is_quote_only && <FlashSaleSection sales={flashSales} canOrder={validClient} />}
 
         {loading ? (
           <div className="flex flex-col items-center gap-3 py-20">
@@ -132,6 +142,40 @@ export default function Catalog() {
                       {c}
                     </button>
                   ))}
+                </div>
+              )}
+              {hasPreorder && (
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  <button
+                    onClick={() => setAvailability('')}
+                    className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
+                      !availability
+                        ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                        : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
+                    }`}
+                  >
+                    {t('allStatuses')}
+                  </button>
+                  <button
+                    onClick={() => setAvailability(availability === 'available' ? '' : 'available')}
+                    className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
+                      availability === 'available'
+                        ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                        : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
+                    }`}
+                  >
+                    {t('inStock')}
+                  </button>
+                  <button
+                    onClick={() => setAvailability(availability === 'preorder' ? '' : 'preorder')}
+                    className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
+                      availability === 'preorder'
+                        ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                        : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
+                    }`}
+                  >
+                    {t('preorder')}
+                  </button>
                 </div>
               )}
             </div>

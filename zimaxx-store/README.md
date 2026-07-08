@@ -23,6 +23,7 @@ Dos regiones × dos niveles + una lista Special general (sin región):
 | `ve_min` | VE Minimum Order | Ídem, facturado en Venezuela |
 | `ve_wholesale` | VE Wholesale | Ídem, facturado en Venezuela |
 | `special` | Special Order | Invierte $15,000+ (**cualquier región**), precio propio |
+| `quote` | Cotización (sin precio) | Prospecto sin lista asignada todavía — ver sección siguiente |
 
 - **Región**: `ve_*` es exclusivamente para clientes facturados en Venezuela;
   `us_*` abarca todo el resto del mundo (aunque envíen a Miami). **Special no
@@ -33,6 +34,26 @@ Dos regiones × dos niveles + una lista Special general (sin región):
   actualiza al instante lo que ve el mismo link.
 - **Pedido mínimo $800**: el checkout se bloquea por debajo (configurable
   con `VITE_MIN_ORDER` en `.env`). Aplica también a Special.
+
+### Catálogo de cotización (sin precios)
+
+`quote` (2026-07-08) es una lista más en `price_lists`, elegible en el
+mismo selector "Lista" de cualquier cliente (alta individual, tabla de
+Clientes o carga por Excel) — no es un cliente especial ni un flag
+aparte, así que se asigna y se reasigna igual que `us_min`/`special`/etc.,
+con vendedora asignada como cualquier otro. Un cliente en esa lista ve
+**todos los productos activos** (disponibles y pre-order) sin ningún
+precio en ninguna parte de la página (tarjetas, carrito, Flash Sale
+queda oculta por completo, mensaje de WhatsApp y PDF): `get_catalog`
+detecta el código `'quote'` e ignora `product_prices` por completo. Arma
+su lista de interés y al enviarla por WhatsApp llega a la vendedora
+asignada (mismo mecanismo de `vendedora_phone` que un cliente normal). El
+pedido se guarda igual en `orders` pero con `kind = 'quote'` y todos los
+precios en `null` — `create_order` fuerza esto en el servidor por el
+código de lista del cliente, sin importar lo que mande el navegador. No
+tiene pedido mínimo (no aplica sin precio). La lista `quote` no aparece en
+la matriz/carga de precios de la pestaña Precios (no tiene sentido
+subirle precio, `get_catalog` los ignoraría de todos modos).
 
 ### Productos
 
@@ -46,12 +67,33 @@ Dos regiones × dos niveles + una lista Special general (sin región):
 - El tamaño va dentro del nombre (ej. "Khamrah 3.4 Oz Edp Unisex"); la
   categoría es la marca (Brand).
 
+### Catálogo del cliente: búsqueda y cantidades
+
+- El buscador de `Catalog.jsx` matchea **nombre o categoría** (buscar
+  "adidas" trae todo lo de esa marca, no hace falta usar el chip de
+  categoría). Además de los chips de categoría hay un segundo filtro por
+  **disponibilidad** (Disponible / Pre-Order), que solo aparece si el
+  catálogo tiene al menos un producto en pre-order.
+- Cada `ProductCard` (2026-07-07): el botón "Agregar" se convierte, una vez
+  que el producto está en el carrito, en un stepper **−/input editable/+**
+  (el número se puede tipear a mano) más una fila de botones de compra
+  grande **+10 / +15 / +20** siempre visibles — pensados para pedidos
+  mayoristas, permiten saltar de 0 a una cantidad grande sin pasar por
+  "Agregar" primero. `CartContext.setExactQty()` crea el ítem si todavía no
+  estaba en el carrito (a diferencia de `setQty()`, que solo actualiza
+  ítems ya existentes).
+- **Confirmación antes de enviar** (2026-07-07): el botón de WhatsApp del
+  carrito abre un diálogo "¿Tu pedido está completo?" con el resumen
+  (ítems + total) antes de registrar el pedido y abrir WhatsApp — evita
+  envíos accidentales a mitad de armar el carrito.
+
 ### Flujo del pedido
 
 1. Cliente abre su link → catálogo con sus precios → arma carrito.
-2. Checkout → el pedido queda registrado en `orders` (auditoría) → se abre
-   WhatsApp con el pedido armado, dirigido a su vendedora (`vendedora_phone`,
-   con fallback `VITE_DEFAULT_WHATSAPP`).
+2. Checkout → confirma en el diálogo de seguridad → el pedido queda
+   registrado en `orders` (auditoría) → se abre WhatsApp con el pedido
+   armado, dirigido a su vendedora (`vendedora_phone`, con fallback
+   `VITE_DEFAULT_WHATSAPP`).
 3. Opcional: descarga PDF del pedido.
 4. Pendiente (planificado): push automático a SellerCloud como orden On Hold
    vía Supabase Edge Function — ver sección 7.
@@ -80,7 +122,7 @@ Pestañas:
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**: vincula el login de la vendedora escribiendo su email y presionando "Vincular acceso" (RPC `link_vendedora_login`) — requiere haber creado antes ese usuario en Supabase Auth. "Desvincular" le quita el acceso sin borrar la vendedora. |
 | **Flash Sales** | Crear ofertas con precio promo y vencimiento; visibles para todos con countdown; se ocultan solas al expirar. |
-| **Pedidos** | Últimos 200 con detalle expandible; cada pedido se marca **Nuevo/Atendido** y el menú muestra el contador de pedidos sin atender. Botón **"Descargar Excel"** por fila: exporta el pedido con las columnas exactas de `UploadTemplate.xls` (`ProductID`, `ProductName`, `UnitPrice`, `Qty`, `ShipFromWarehouseName`, este último fijo en `"Zimaxx"`) para subirlo directo al bulk-order upload de SellerCloud. |
+| **Pedidos** | Últimos 200 con detalle expandible; cada pedido se marca **Nuevo/Atendido** y el menú muestra el contador de pedidos sin atender. Buscador (nombre/teléfono del cliente) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botón **"Descargar Excel"** por fila: exporta el pedido con las columnas exactas de `UploadTemplate.xls` (`ProductID`, `ProductName`, `UnitPrice`, `Qty`, `ShipFromWarehouseName`, este último fijo en `"Zimaxx"`) para subirlo directo al bulk-order upload de SellerCloud. |
 
 Las tablas grandes usan **scroll infinito** (lotes de 100) y todas las
 consultas están **paginadas** para superar el límite de 1,000 filas por
@@ -155,7 +197,11 @@ teléfono, lista de precio y, si sos admin, un selector para asignar la
 vendedora (o dejarlo sin asignar). Si entrás como vendedora el campo no se
 muestra: el cliente se te asigna a vos automáticamente y no podés
 crearlo "suelto" ni para otra vendedora — lo impone una policy RLS
-(`vendedora_insert_own_clients` en `schema.sql`), no solo la UI.
+(`vendedora_insert_own_clients` en `schema.sql`), no solo la UI. Eligiendo
+**"Cotización (sin precio)"** como lista, el cliente queda con el
+catálogo sin precios de la sección 1 — se puede cambiar de/hacia esa
+lista en cualquier momento desde el mismo selector, igual que cualquier
+otro nivel.
 
 ---
 
@@ -230,7 +276,9 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 - Catálogo público solo vía RPC `SECURITY DEFINER`:
   - `get_catalog(p_token)` — resuelve el cliente por token; devuelve solo
     los precios de su lista. Token inválido → `null` sin explicación.
-    **No expone el SKU.**
+    **No expone el SKU.** Excepción: la lista `quote` devuelve todos los
+    productos activos con precio `null` (catálogo de cotización, ver
+    sección 1).
   - `get_flash_sales()` — pública, solo ofertas vigentes, sin SKU.
   - `create_order(p_token, ...)` — inserta pedidos validando token; el
     cliente nunca puede leer/modificar `orders`. **Los precios y el total se
