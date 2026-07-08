@@ -71,6 +71,10 @@ export default function Catalog() {
   // categoría también entra en la búsqueda de texto, y availability tiene
   // su propio filtro además de los chips de categoría.
   const hasPreorder = useMemo(() => products.some((p) => p.availability === 'preorder'), [products])
+  // 'flash' es una etiqueta del producto en el Excel de inventario (Type =
+  // Flash Sale), distinta de la tabla flash_sales de ofertas con precio
+  // promo — acá solo filtra por la etiqueta, sin precio asociado.
+  const hasFlashType = useMemo(() => products.some((p) => p.availability === 'flash'), [products])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -144,7 +148,7 @@ export default function Catalog() {
                   ))}
                 </div>
               )}
-              {hasPreorder && (
+              {(hasPreorder || hasFlashType) && (
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   <button
                     onClick={() => setAvailability('')}
@@ -166,16 +170,30 @@ export default function Catalog() {
                   >
                     {t('inStock')}
                   </button>
-                  <button
-                    onClick={() => setAvailability(availability === 'preorder' ? '' : 'preorder')}
-                    className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
-                      availability === 'preorder'
-                        ? 'bg-ink text-secondary ring-1 ring-secondary/40'
-                        : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
-                    }`}
-                  >
-                    {t('preorder')}
-                  </button>
+                  {hasPreorder && (
+                    <button
+                      onClick={() => setAvailability(availability === 'preorder' ? '' : 'preorder')}
+                      className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
+                        availability === 'preorder'
+                          ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                          : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
+                      }`}
+                    >
+                      {t('preorder')}
+                    </button>
+                  )}
+                  {hasFlashType && (
+                    <button
+                      onClick={() => setAvailability(availability === 'flash' ? '' : 'flash')}
+                      className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
+                        availability === 'flash'
+                          ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                          : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
+                      }`}
+                    >
+                      🔥 {t('flashSale')}
+                    </button>
+                  )}
                 </div>
               )}
             </div>

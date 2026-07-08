@@ -59,9 +59,14 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
 
 - El **SKU es 100% interno** (es el ProductID de SellerCloud): nunca viaja
   al navegador del cliente ni aparece en WhatsApp/PDF.
-- **Disponibilidad**: `available` o `preorder`. Los pre-order se muestran
-  con badge dorado "Pre-Order" en el catálogo y se pueden pedir igual; el
-  estado viaja en el mensaje de WhatsApp.
+- **Disponibilidad**: `available`, `preorder` o `flash` (2026-07-08). Los
+  pre-order se muestran con badge dorado "Pre-Order" en el catálogo y se
+  pueden pedir igual; el estado viaja en el mensaje de WhatsApp. Los
+  `flash` (columna Type = "Flash Sale" en el Excel de inventario) se
+  muestran con badge 🔥 "Flash Sale" — es solo una etiqueta del producto,
+  **no tiene relación con la tabla `flash_sales`** (ofertas con precio
+  promo y countdown, pestaña Flash Sales): un producto puede tener esta
+  etiqueta sin tener ninguna oferta activa, y viceversa.
 - Un producto **solo aparece** en el catálogo de un cliente si tiene precio
   cargado en su lista (las 5 listas, incluida Special, se tratan igual).
 - El tamaño va dentro del nombre (ej. "Khamrah 3.4 Oz Edp Unisex"); la
@@ -72,8 +77,9 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
 - El buscador de `Catalog.jsx` matchea **nombre o categoría** (buscar
   "adidas" trae todo lo de esa marca, no hace falta usar el chip de
   categoría). Además de los chips de categoría hay un segundo filtro por
-  **disponibilidad** (Disponible / Pre-Order), que solo aparece si el
-  catálogo tiene al menos un producto en pre-order.
+  **disponibilidad** (Disponible / Pre-Order / 🔥 Flash Sale), donde cada
+  chip solo aparece si el catálogo tiene al menos un producto en ese
+  estado.
 - Cada `ProductCard` (2026-07-07): el botón "Agregar" se convierte, una vez
   que el producto está en el carrito, en un stepper **−/input editable/+**
   (el número se puede tipear a mano) más una fila de botones de compra
@@ -117,7 +123,7 @@ Pestañas:
 
 | Pestaña | Qué hace |
 |---|---|
-| **Productos** | Tabla completa con buscador (nombre/SKU), filtros (categoría, activo/inactivo/sin foto/pre-order), contadores clickeables de "sin foto" y "Pre-Order", miniaturas, alta/edición manual, y dos cargas por Excel (productos y fotos). |
+| **Productos** | Tabla completa con buscador (nombre/SKU), filtros (categoría, activo/inactivo/sin foto/pre-order/flash), contadores clickeables de "sin foto", "Pre-Order" y "🔥 Flash Sale", miniaturas, alta/edición manual, y dos cargas por Excel (productos y fotos). |
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador y botones con contador "con precios" / "sin precios". |
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**: vincula el login de la vendedora escribiendo su email y presionando "Vincular acceso" (RPC `link_vendedora_login`) — requiere haber creado antes ese usuario en Supabase Auth. "Desvincular" le quita el acceso sin borrar la vendedora. |
@@ -146,8 +152,10 @@ wholesale con membrete:
 - **Categoría** (`categoria`, `category`, `Brand`, `marca`).
 - **Imagen** (`imagen`, `image`, `url`...) — también se detecta una columna
   de URLs de foto aunque tenga encabezado inservible (ej. `Column1`).
-- **Type** (`type`, `tipo`, `disponibilidad`): `Available` / `Pre Order`
-  (`Flash Sale` se trata como disponible).
+- **Type** (`type`, `tipo`, `disponibilidad`): `Available` / `Pre Order` /
+  `Flash Sale` (2026-07-08: antes se trataba como disponible, ahora se
+  guarda como su propio estado — badge 🔥 en el catálogo y filtro propio,
+  sin relación con la tabla `flash_sales` de ofertas con precio promo).
 - **Activo** (`activo`, `active`): `no/false/0/inactivo` desactiva.
 
 Actualiza existentes por SKU y crea los nuevos. **Los campos que el archivo

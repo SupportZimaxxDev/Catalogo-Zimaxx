@@ -31,6 +31,11 @@ export default function ProductCard({ product }) {
           {t('preorder')}
         </span>
       )}
+      {product.availability === 'flash' && (
+        <span className="absolute left-2 top-2 z-10 rounded-full bg-secondary px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-ink ring-1 ring-ink/10">
+          🔥 {t('flashSale')}
+        </span>
+      )}
       <ProductImage src={product.image_url} alt={product.name} />
       <div className="flex flex-1 flex-col gap-1.5 p-3.5">
         {product.category && (

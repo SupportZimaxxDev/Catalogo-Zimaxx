@@ -17,14 +17,18 @@ const COLS = {
   image: ['imagen', 'image', 'image_url', 'foto', 'url imagen', 'imagen url', 'url'],
   active: ['activo', 'active', 'estado', 'status'],
   // Disponibilidad (columna Type de las listas wholesale): Available /
-  // Pre Order / Flash Sale. Flash Sale se trata como disponible: las
-  // ofertas se gestionan en la pestaña Flash Sales, no acá.
+  // Pre Order / Flash Sale. Flash Sale acá es solo una etiqueta del
+  // producto (viene del inventario), distinta de la tabla `flash_sales`
+  // de ofertas con precio promo que se gestiona en su propia pestaña.
   availability: ['type', 'tipo', 'disponibilidad', 'availability'],
 }
 const FALSY_ACTIVE = new Set(['no', 'false', '0', 'inactivo', 'inactive'])
 
 function parseAvailability(raw) {
-  return /pre.?order/i.test(String(raw ?? '')) ? 'preorder' : 'available'
+  const v = String(raw ?? '')
+  if (/pre.?order/i.test(v)) return 'preorder'
+  if (/flash/i.test(v)) return 'flash'
+  return 'available'
 }
 
 // Filas internas de sistemas de inventario (pruebas de soporte, ajustes
@@ -98,6 +102,7 @@ export default function ProductsAdmin() {
       if (statusFilter === 'inactive' && p.active) return false
       if (statusFilter === 'noimage' && p.image_url) return false
       if (statusFilter === 'preorder' && p.availability !== 'preorder') return false
+      if (statusFilter === 'flash' && p.availability !== 'flash') return false
       if (q && !p.name.toLowerCase().includes(q) && !String(p.sku).toLowerCase().includes(q))
         return false
       return true
@@ -285,6 +290,7 @@ export default function ProductsAdmin() {
 
   const noImageCount = products.filter((p) => !p.image_url).length
   const preorderCount = products.filter((p) => p.availability === 'preorder').length
+  const flashCount = products.filter((p) => p.availability === 'flash').length
 
   return (
     <div className="space-y-4">
@@ -318,6 +324,19 @@ export default function ProductsAdmin() {
               title={t('preorder')}
             >
               {preorderCount} {t('preorder')}
+            </button>
+          )}
+          {flashCount > 0 && (
+            <button
+              onClick={() => setStatusFilter(statusFilter === 'flash' ? '' : 'flash')}
+              className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                statusFilter === 'flash'
+                  ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                  : 'bg-secondary/20 text-secondary-dark hover:bg-secondary/30'
+              }`}
+              title={t('flashSale')}
+            >
+              🔥 {flashCount} {t('flashSale')}
             </button>
           )}
         </div>
@@ -451,6 +470,7 @@ export default function ProductsAdmin() {
           <option value="inactive">{t('inactive')}</option>
           <option value="noimage">{t('noImage')}</option>
           <option value="preorder">{t('preorder')}</option>
+          <option value="flash">{t('flashSale')}</option>
         </select>
       </div>
 
@@ -489,6 +509,11 @@ export default function ProductsAdmin() {
                   {p.availability === 'preorder' && (
                     <span className="ml-2 rounded-full bg-gold-pale px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-secondary-dark">
                       {t('preorder')}
+                    </span>
+                  )}
+                  {p.availability === 'flash' && (
+                    <span className="ml-2 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink">
+                      🔥 {t('flashSale')}
                     </span>
                   )}
                 </td>

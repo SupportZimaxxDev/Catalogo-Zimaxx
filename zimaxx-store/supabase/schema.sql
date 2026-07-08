@@ -108,7 +108,10 @@ create table if not exists public.products (
 );
 
 -- Disponibilidad: 'available' | 'preorder' (agotado pero se puede
--- reservar). Se marca desde el Excel de productos (columna Type/Tipo).
+-- reservar) | 'flash' (2026-07-08: Flash Sale del Excel de inventario,
+-- distinto de la tabla `flash_sales` de ofertas con precio promo — esto
+-- es solo una etiqueta del producto, sin precio asociado). Se marca
+-- desde el Excel de productos (columna Type/Tipo).
 alter table public.products
   add column if not exists availability text not null default 'available';
 
