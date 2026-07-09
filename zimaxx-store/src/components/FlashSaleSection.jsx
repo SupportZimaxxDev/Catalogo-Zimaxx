@@ -37,17 +37,27 @@ function Countdown({ expiresAt }) {
 export default function FlashSaleSection({ sales, canOrder }) {
   const { t } = useI18n()
   const cart = useCart()
-  const [now, setNow] = useState(Date.now())
+  const list = sales ?? []
+  const [cutoff, setCutoff] = useState(() => Date.now())
 
-  // Tick por segundo para ocultar ofertas expiradas sin recargar la página.
+  // Antes esto era un setInterval de 1s que recalculaba `activeSales` (y
+  // por lo tanto re-renderizaba toda la grilla, cientos de tarjetas con
+  // carga masiva de flash sales) solo para chequear vencimientos. Ahora se
+  // agenda un único setTimeout justo para el próximo vencimiento — el
+  // grid solo se vuelve a renderizar cuando de verdad hay algo que ocultar.
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [])
+    const nextExpiry = list
+      .map((s) => new Date(s.expires_at).getTime())
+      .filter((ms) => ms > Date.now())
+      .sort((a, b) => a - b)[0]
+    if (nextExpiry == null) return
+    const id = setTimeout(() => setCutoff(Date.now()), Math.max(nextExpiry - Date.now() + 250, 250))
+    return () => clearTimeout(id)
+  }, [list, cutoff])
 
   const activeSales = useMemo(
-    () => (sales ?? []).filter((s) => new Date(s.expires_at).getTime() > now),
-    [sales, now],
+    () => list.filter((s) => new Date(s.expires_at).getTime() > cutoff),
+    [list, cutoff],
   )
 
   if (activeSales.length === 0) return null

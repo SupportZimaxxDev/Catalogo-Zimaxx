@@ -4,7 +4,7 @@ import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { money } from '../../utils/format'
 import { parseSheet, pick } from '../../utils/excel'
-import { UploadZone } from './ui'
+import { UploadZone, inputCls } from './ui'
 
 const EMPTY = { product_id: '', price: '', starts_at: '', expires_at: '' }
 
@@ -45,6 +45,7 @@ export default function FlashSalesAdmin() {
   const [bulkRange, setBulkRange] = useState({ starts_at: nowLocal(), expires_at: '' })
   const [bulkBusy, setBulkBusy] = useState(false)
   const [bulkResult, setBulkResult] = useState(null)
+  const [statusFilter, setStatusFilter] = useState('')
 
   const load = async () => {
     const [{ data: fs }, ps] = await Promise.all([
@@ -102,6 +103,9 @@ export default function FlashSalesAdmin() {
       const bySku = new Map(products.map((p) => [String(p.sku).toLowerCase(), p]))
       const startsIso = toIso(bulkRange.starts_at) ?? new Date().toISOString()
       const expiresIso = toIso(bulkRange.expires_at)
+      // Todas las filas de esta carga comparten batch_id para poder
+      // desactivarlas juntas después desde la tabla (2026-07-09).
+      const batchId = crypto.randomUUID()
 
       const inserts = []
       let notFound = 0
@@ -125,6 +129,7 @@ export default function FlashSalesAdmin() {
           starts_at: startsIso,
           expires_at: expiresIso,
           active: true,
+          batch_id: batchId,
         })
       }
 
@@ -149,6 +154,11 @@ export default function FlashSalesAdmin() {
     await load()
   }
 
+  const deactivateBatch = async (batchId) => {
+    await supabase.from('flash_sales').update({ active: false }).eq('batch_id', batchId).eq('active', true)
+    await load()
+  }
+
   // El apagado por fecha es automático (get_flash_sales() ya filtra por
   // expires_at): 'active' solo sirve para cortar la oferta ANTES de su
   // fecha. Esta función distingue los 4 casos para que la tabla no
@@ -160,6 +170,22 @@ export default function FlashSalesAdmin() {
     if (now < new Date(s.starts_at)) return 'scheduled'
     if (now >= new Date(s.expires_at)) return 'expired'
     return 'live'
+  }
+
+  const filteredSales = statusFilter ? sales.filter((s) => saleStatus(s) === statusFilter) : sales
+
+  // Agrupa filas de una misma carga masiva (mismo batch_id) para poder
+  // desactivarlas todas juntas; el resto se muestra suelto como antes.
+  const rows = []
+  const seenBatches = new Set()
+  for (const s of filteredSales) {
+    if (s.batch_id) {
+      if (seenBatches.has(s.batch_id)) continue
+      seenBatches.add(s.batch_id)
+      rows.push({ type: 'batch', batchId: s.batch_id, items: filteredSales.filter((x) => x.batch_id === s.batch_id) })
+    } else {
+      rows.push({ type: 'single', item: s })
+    }
   }
 
   return (
@@ -277,6 +303,16 @@ export default function FlashSalesAdmin() {
         </div>
       )}
 
+      <div className="flex items-center gap-2">
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={inputCls}>
+          <option value="">{t('allStatuses')}</option>
+          <option value="live">{t('flashStatus_live')}</option>
+          <option value="scheduled">{t('flashStatus_scheduled')}</option>
+          <option value="expired">{t('flashStatus_expired')}</option>
+          <option value="deactivated">{t('flashStatus_deactivated')}</option>
+        </select>
+      </div>
+
       <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-sm">
         <table className="w-full text-sm">
           <thead>
@@ -290,37 +326,83 @@ export default function FlashSalesAdmin() {
             </tr>
           </thead>
           <tbody>
-            {sales.map((s) => (
-              <tr key={s.id} className="border-b border-primary/5">
-                <td className="p-3">
-                  <span className="font-mono text-xs text-primary/50">{s.products?.sku}</span>{' '}
-                  {s.products?.name}
-                </td>
-                <td className="p-3 font-bold text-secondary-dark">{money(s.price)}</td>
-                <td className="p-3 text-primary/60">{new Date(s.starts_at).toLocaleString()}</td>
-                <td className="p-3 text-primary/60">{new Date(s.expires_at).toLocaleString()}</td>
-                <td className="p-3">
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${STATUS_STYLES[saleStatus(s)]}`}
-                  >
-                    {t(`flashStatus_${saleStatus(s)}`)}
-                  </span>
-                </td>
-                <td className="p-3 text-right">
-                  {isAdmin && s.active && (
-                    <button
-                      onClick={() => deactivate(s.id)}
-                      className="text-xs font-semibold text-red-600 hover:underline"
-                    >
-                      {t('deactivate')}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {rows.map((row) =>
+              row.type === 'single' ? (
+                <tr key={row.item.id} className="border-b border-primary/5">
+                  <SaleRow s={row.item} t={t} isAdmin={isAdmin} saleStatus={saleStatus} deactivate={deactivate} />
+                </tr>
+              ) : (
+                <FlashBatch
+                  key={row.batchId}
+                  batchId={row.batchId}
+                  items={row.items}
+                  t={t}
+                  isAdmin={isAdmin}
+                  saleStatus={saleStatus}
+                  deactivate={deactivate}
+                  deactivateBatch={deactivateBatch}
+                />
+              ),
+            )}
           </tbody>
         </table>
       </div>
     </div>
+  )
+}
+
+function SaleRow({ s, t, isAdmin, saleStatus, deactivate }) {
+  return (
+    <>
+      <td className="p-3">
+        <span className="font-mono text-xs text-primary/50">{s.products?.sku}</span> {s.products?.name}
+      </td>
+      <td className="p-3 font-bold text-secondary-dark">{money(s.price)}</td>
+      <td className="p-3 text-primary/60">{new Date(s.starts_at).toLocaleString()}</td>
+      <td className="p-3 text-primary/60">{new Date(s.expires_at).toLocaleString()}</td>
+      <td className="p-3">
+        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${STATUS_STYLES[saleStatus(s)]}`}>
+          {t(`flashStatus_${saleStatus(s)}`)}
+        </span>
+      </td>
+      <td className="p-3 text-right">
+        {isAdmin && s.active && (
+          <button onClick={() => deactivate(s.id)} className="text-xs font-semibold text-red-600 hover:underline">
+            {t('deactivate')}
+          </button>
+        )}
+      </td>
+    </>
+  )
+}
+
+// Cargas masivas: encabezado con el total del lote y un botón para
+// desactivarlo entero, seguido de sus filas (mismo look que una fila
+// suelta, con un borde izquierdo dorado para marcar que son un grupo).
+function FlashBatch({ batchId, items, t, isAdmin, saleStatus, deactivate, deactivateBatch }) {
+  const activeCount = items.filter((i) => i.active).length
+  return (
+    <>
+      <tr className="border-b border-primary/5 bg-gold-pale/20">
+        <td colSpan={5} className="p-3 text-xs font-semibold text-primary/70">
+          🗂️ {t('flashBatchGroup')} · {items.length} {t('items')} · {activeCount} {t('flashStatus_live')}
+        </td>
+        <td className="p-3 text-right">
+          {isAdmin && activeCount > 0 && (
+            <button
+              onClick={() => deactivateBatch(batchId)}
+              className="text-xs font-semibold text-red-600 hover:underline"
+            >
+              {t('deactivateGroup')}
+            </button>
+          )}
+        </td>
+      </tr>
+      {items.map((s) => (
+        <tr key={s.id} className="border-b border-primary/5 border-l-2 border-l-secondary/40">
+          <SaleRow s={s} t={t} isAdmin={isAdmin} saleStatus={saleStatus} deactivate={deactivate} />
+        </tr>
+      ))}
+    </>
   )
 }

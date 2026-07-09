@@ -106,6 +106,8 @@ const dict = {
     allLists: 'Todas las listas',
     allReps: 'Todas las vendedoras',
     allLines: 'Todas las líneas',
+    lineDesigner: 'Diseñador',
+    lineArabic: 'Árabes',
     uncategorized: 'Sin categoría',
     noImage: 'Sin foto',
     showingFirst: 'Mostrando primeros',
@@ -165,6 +167,8 @@ const dict = {
     flashStatus_scheduled: 'Programada',
     flashStatus_expired: 'Expiró',
     flashStatus_deactivated: 'Desactivada',
+    flashBatchGroup: 'Lote de carga masiva',
+    deactivateGroup: 'Desactivar grupo',
   },
   en: {
     search: 'Search by name or category...',
@@ -265,6 +269,8 @@ const dict = {
     allLists: 'All lists',
     allReps: 'All reps',
     allLines: 'All lines',
+    lineDesigner: 'Designer',
+    lineArabic: 'Arabic',
     uncategorized: 'Uncategorized',
     noImage: 'No photo',
     showingFirst: 'Showing first',
@@ -324,6 +330,8 @@ const dict = {
     flashStatus_scheduled: 'Scheduled',
     flashStatus_expired: 'Expired',
     flashStatus_deactivated: 'Deactivated',
+    flashBatchGroup: 'Bulk upload batch',
+    deactivateGroup: 'Deactivate group',
   },
 }
 

@@ -36,6 +36,18 @@ function parseAvailability(raw) {
   return 'available'
 }
 
+// Normaliza PRODUCT_CATEGORY a los dos valores que importan para filtrar
+// (diseñador vs árabes), absorbiendo variantes/typos del export ("Perfums",
+// "Perfume Arabes", etc.). Todo lo demás (Beauty, Electronics...) se deja
+// tal cual viene, ya recortado por parseSheet.
+function parseLine(raw) {
+  const v = String(raw ?? '').trim()
+  if (!v) return null
+  if (/arabe/i.test(v)) return 'Perfume - Arabes'
+  if (/^perfum(e|s)?$/i.test(v)) return 'Perfume'
+  return v
+}
+
 // Filas internas de sistemas de inventario (pruebas de soporte, ajustes
 // de crédito) que no son productos reales y no deben entrar al catálogo.
 const JUNK_PATTERN = /skustack|support-cost-test|support-s-\d+|client credit discount|^discount$/i
@@ -65,6 +77,11 @@ function parseActive(raw) {
 
 export default function ProductsAdmin() {
   const { t } = useI18n()
+  // Los dos valores que importan para filtrar se leen en español claro en
+  // vez del texto crudo del export; el resto (Beauty, Electronics...) se
+  // muestra tal cual.
+  const lineLabel = (raw) =>
+    raw === 'Perfume' ? t('lineDesigner') : raw === 'Perfume - Arabes' ? t('lineArabic') : raw
   const { role } = useOutletContext()
   const isAdmin = role === 'admin'
   const [products, setProducts] = useState([])
@@ -172,7 +189,7 @@ export default function ProductsAdmin() {
           name: String(name).trim(),
           active: parseActive(pick(row, COLS.active)),
           ...(hasCategory ? { category: pick(row, COLS.category) || null } : {}),
-          ...(hasLine ? { product_line: pick(row, COLS.line) || null } : {}),
+          ...(hasLine ? { product_line: parseLine(pick(row, COLS.line)) } : {}),
           ...(hasImage ? { image_url: imageOk ? String(image).trim() : null } : {}),
           ...(hasAvailability
             ? { availability: parseAvailability(pick(row, COLS.availability)) }
@@ -485,7 +502,7 @@ export default function ProductsAdmin() {
             <option value="__none__">{t('uncategorized')}</option>
             {lines.map((l) => (
               <option key={l} value={l}>
-                {l}
+                {lineLabel(l)}
               </option>
             ))}
           </select>
@@ -551,7 +568,7 @@ export default function ProductsAdmin() {
                   {p.category}
                   {p.product_line && (
                     <span className="ml-1.5 rounded-full bg-primary/5 px-2 py-0.5 text-[10px] font-semibold text-primary/50">
-                      {p.product_line}
+                      {lineLabel(p.product_line)}
                     </span>
                   )}
                 </td>

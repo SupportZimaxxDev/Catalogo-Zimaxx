@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { useI18n } from '../i18n'
 import { useCart } from '../context/CartContext'
 import { money } from '../utils/format'
@@ -8,7 +8,11 @@ import ProductImage from './ProductImage'
 // stepper +/- de a uno, botones para sumar de a 10/15/20 de una.
 const BULK_STEPS = [10, 15, 20]
 
-export default function ProductCard({ product }) {
+// memo: con scroll infinito y filtros, Catalog re-renderiza seguido con
+// listas de cientos de tarjetas — sin esto, cada tecla del buscador o cada
+// lote nuevo del scroll infinito re-renderizaba TODAS las tarjetas ya
+// visibles, no solo las nuevas.
+function ProductCard({ product }) {
   const { t } = useI18n()
   const cart = useCart()
   const price = product.price == null ? null : Number(product.price)
@@ -98,3 +102,5 @@ export default function ProductCard({ product }) {
     </div>
   )
 }
+
+export default memo(ProductCard)

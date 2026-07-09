@@ -140,6 +140,12 @@ create table if not exists public.flash_sales (
   active     boolean not null default true
 );
 
+-- Agrupa las filas de una misma carga masiva por Excel (2026-07-09) para
+-- poder desactivarlas todas juntas desde el admin. Null en las cargadas
+-- a mano una por una (no forman parte de ningún grupo).
+alter table public.flash_sales add column if not exists batch_id uuid;
+create index if not exists flash_sales_batch_id_idx on public.flash_sales (batch_id) where batch_id is not null;
+
 create table if not exists public.orders (
   id         uuid primary key default gen_random_uuid(),
   client_id  uuid references public.clients (id),

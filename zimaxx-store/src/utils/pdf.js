@@ -40,20 +40,41 @@ export async function downloadOrderPdf({ t, clientName, items, total }) {
   doc.setLineWidth(0.2)
   doc.line(marginX, y + 2, pageW - marginX, y + 2)
 
-  doc.setFont('helvetica', 'normal')
-  items.forEach((i) => {
-    y += 7
+  const regularItems = items.filter((i) => !i.preorder)
+  const preorderItems = items.filter((i) => i.preorder)
+
+  const ensureSpace = () => {
     if (y > 280) {
       doc.addPage()
       y = 20
     }
+  }
+
+  const drawRow = (i) => {
+    y += 7
+    ensureSpace()
     doc.text(doc.splitTextToSize(i.name, 105)[0] ?? '', marginX, y)
     doc.text(String(i.qty), pageW - 70, y, { align: 'right' })
     if (i.price != null) {
       doc.text(money(i.price), pageW - 45, y, { align: 'right' })
       doc.text(money(i.price * i.qty), pageW - marginX, y, { align: 'right' })
     }
-  })
+  }
+
+  const drawSectionTitle = (label) => {
+    y += 9
+    ensureSpace()
+    doc.setFont('helvetica', 'bold')
+    doc.text(label, marginX, y)
+    doc.setFont('helvetica', 'normal')
+  }
+
+  doc.setFont('helvetica', 'normal')
+  regularItems.forEach(drawRow)
+  if (preorderItems.length) {
+    drawSectionTitle(t('preorder'))
+    preorderItems.forEach(drawRow)
+  }
 
   if (hasPrices) {
     y += 10

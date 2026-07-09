@@ -74,9 +74,12 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
 - **`product_line`** (2026-07-08, distinto de `category`/Brand): tipo real
   del perfume, viene de la columna `PRODUCT_CATEGORY` de los exports de
   SellerCloud (no de `PRODUCTBRAND`, que es la marca) — valores típicos
-  `Perfume` (diseñador) y `Perfume - Arabes` (dupes árabes). Sirve para
-  filtrar por ese criterio en el catálogo del cliente y en el admin,
-  independiente de la marca.
+  `Perfume` (diseñador) y `Perfume - Arabes` (dupes árabes). Al importar se
+  normalizan variantes/typos del Excel (`Perfums`, mayúsculas, etc.) a esos
+  dos valores canónicos; el resto de categorías (Beauty, Electronics...) se
+  guarda tal cual. Sirve para filtrar por ese criterio en el catálogo del
+  cliente y en el admin, independiente de la marca — los chips/selector
+  muestran "Diseñador"/"Árabes" en vez del texto crudo del Excel.
 
 ### Catálogo del cliente: búsqueda y cantidades
 

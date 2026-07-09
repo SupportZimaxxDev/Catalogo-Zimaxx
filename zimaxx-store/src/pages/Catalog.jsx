@@ -3,30 +3,20 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useI18n } from '../i18n'
 import Header from '../components/Header'
+import FilterBar from '../components/FilterBar'
 import FlashSaleSection from '../components/FlashSaleSection'
 import ProductCard from '../components/ProductCard'
 import CartBar from '../components/CartBar'
 import CartDrawer from '../components/CartDrawer'
 import { useInfiniteRows } from '../hooks/useInfiniteRows'
 
-function SearchIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-primary/40"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-    >
-      <circle cx="11" cy="11" r="7" />
-      <path d="m21 21-4.3-4.3" />
-    </svg>
-  )
-}
-
 export default function Catalog() {
   const { t } = useI18n()
+  // Los dos valores que importan para filtrar se leen en español/inglés
+  // claro en vez del texto crudo del export ("Perfume"/"Perfume - Arabes");
+  // el resto (si algún día entra Beauty, Electronics, etc.) se muestra tal cual.
+  const lineLabel = (raw) =>
+    raw === 'Perfume' ? t('lineDesigner') : raw === 'Perfume - Arabes' ? t('lineArabic') : raw
   const [params] = useSearchParams()
   const token = params.get('c') ?? ''
 
@@ -34,7 +24,15 @@ export default function Catalog() {
   const [client, setClient] = useState(null)
   const [products, setProducts] = useState([])
   const [flashSales, setFlashSales] = useState([])
+  // `searchInput` es lo que se ve en el campo (responde a cada tecla sin
+  // demora); `search`, con debounce, es lo que de verdad filtra. Filtrar
+  // miles de productos en cada tecla es lo que causaba el lag al escribir.
+  const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
+  useEffect(() => {
+    const id = setTimeout(() => setSearch(searchInput), 150)
+    return () => clearTimeout(id)
+  }, [searchInput])
   const [category, setCategory] = useState('')
   const [line, setLine] = useState('')
   const [availability, setAvailability] = useState('')
@@ -100,14 +98,46 @@ export default function Catalog() {
   }, [products, search, category, line, availability])
 
   const validClient = !!client
+  const showFilters = validClient && !loading
+  // Con búsqueda o algún chip activo, Flash Sale se oculta para no competir
+  // con los resultados; sin filtros vuelve a aparecer como al entrar.
+  const hasActiveFilters = !!search.trim() || !!category || !!line || !!availability
 
   return (
     <div className="min-h-screen pb-24 md:pb-8">
-      <Header clientName={client?.name} />
+      {/* Header + filtros comparten este sticky (2026-07-09): así los chips
+          quedan pegados al buscador sin importar cuánto crezca Flash Sale
+          debajo, y sin tener que calcular a mano la altura del header. */}
+      <div className="sticky top-0 z-30">
+        <Header
+          clientName={client?.name}
+          search={searchInput}
+          onSearchChange={setSearchInput}
+          showSearch={showFilters}
+        />
+        {showFilters && (
+          <FilterBar
+            categories={categories}
+            category={category}
+            onCategoryChange={setCategory}
+            lines={lines}
+            line={line}
+            onLineChange={setLine}
+            lineLabel={lineLabel}
+            hasPreorder={hasPreorder}
+            hasFlashType={hasFlashType}
+            availability={availability}
+            onAvailabilityChange={setAvailability}
+          />
+        )}
+      </div>
 
       <main className="mx-auto max-w-6xl px-4 py-6">
-        {/* Flash Sale siempre trae precio real: no aplica al catálogo de cotización sin precios. */}
-        {!client?.is_quote_only && <FlashSaleSection sales={flashSales} canOrder={validClient} />}
+        {/* Flash Sale siempre trae precio real: no aplica al catálogo de cotización sin precios.
+            Se oculta mientras haya una búsqueda o filtro activo, para no competir con los resultados. */}
+        {!client?.is_quote_only && !hasActiveFilters && (
+          <FlashSaleSection sales={flashSales} canOrder={validClient} />
+        )}
 
         {loading ? (
           <div className="flex flex-col items-center gap-3 py-20">
@@ -122,122 +152,6 @@ export default function Catalog() {
           </div>
         ) : (
           <>
-            {/* Buscador + categorías */}
-            <div className="mb-6 space-y-3">
-              <div className="relative">
-                <SearchIcon />
-                <input
-                  type="search"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder={t('search')}
-                  className="w-full rounded-full border border-line bg-surface py-3 pl-11 pr-4 text-sm shadow-sm outline-none transition-colors placeholder:text-primary/35 focus:border-secondary"
-                />
-              </div>
-              {categories.length > 0 && (
-                <div className="flex gap-2 overflow-x-auto pb-1">
-                  <button
-                    onClick={() => setCategory('')}
-                    className={`whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium transition-all ${
-                      !category
-                        ? 'bg-ink text-secondary ring-1 ring-secondary/40'
-                        : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
-                    }`}
-                  >
-                    {t('allCategories')}
-                  </button>
-                  {categories.map((c) => (
-                    <button
-                      key={c}
-                      onClick={() => setCategory(c === category ? '' : c)}
-                      className={`whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium transition-all ${
-                        category === c
-                          ? 'bg-ink text-secondary ring-1 ring-secondary/40'
-                          : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
-                      }`}
-                    >
-                      {c}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {lines.length > 1 && (
-                <div className="flex gap-2 overflow-x-auto pb-1">
-                  <button
-                    onClick={() => setLine('')}
-                    className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
-                      !line
-                        ? 'bg-ink text-secondary ring-1 ring-secondary/40'
-                        : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
-                    }`}
-                  >
-                    {t('allLines')}
-                  </button>
-                  {lines.map((l) => (
-                    <button
-                      key={l}
-                      onClick={() => setLine(l === line ? '' : l)}
-                      className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
-                        line === l
-                          ? 'bg-ink text-secondary ring-1 ring-secondary/40'
-                          : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
-                      }`}
-                    >
-                      {l}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {(hasPreorder || hasFlashType) && (
-                <div className="flex gap-2 overflow-x-auto pb-1">
-                  <button
-                    onClick={() => setAvailability('')}
-                    className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
-                      !availability
-                        ? 'bg-ink text-secondary ring-1 ring-secondary/40'
-                        : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
-                    }`}
-                  >
-                    {t('allStatuses')}
-                  </button>
-                  <button
-                    onClick={() => setAvailability(availability === 'available' ? '' : 'available')}
-                    className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
-                      availability === 'available'
-                        ? 'bg-ink text-secondary ring-1 ring-secondary/40'
-                        : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
-                    }`}
-                  >
-                    {t('inStock')}
-                  </button>
-                  {hasPreorder && (
-                    <button
-                      onClick={() => setAvailability(availability === 'preorder' ? '' : 'preorder')}
-                      className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
-                        availability === 'preorder'
-                          ? 'bg-ink text-secondary ring-1 ring-secondary/40'
-                          : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
-                      }`}
-                    >
-                      {t('preorder')}
-                    </button>
-                  )}
-                  {hasFlashType && (
-                    <button
-                      onClick={() => setAvailability(availability === 'flash' ? '' : 'flash')}
-                      className={`whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
-                        availability === 'flash'
-                          ? 'bg-ink text-secondary ring-1 ring-secondary/40'
-                          : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
-                      }`}
-                    >
-                      🔥 {t('flashSale')}
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
             {filtered.length === 0 ? (
               <p className="py-20 text-center text-primary/50">{t('noProducts')}</p>
             ) : (
