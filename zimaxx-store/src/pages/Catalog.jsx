@@ -36,9 +36,10 @@ export default function Catalog() {
   const [category, setCategory] = useState('')
   const [line, setLine] = useState('')
   const [availability, setAvailability] = useState('')
+  const [onlyNew, setOnlyNew] = useState(false)
   // Render progresivo: 3,000+ tarjetas de golpe traban el scroll en móvil.
   // Se cargan más automáticamente a medida que el cliente scrollea.
-  const [visible, sentinelRef] = useInfiniteRows(48, [search, category, line, availability])
+  const [visible, sentinelRef] = useInfiniteRows(48, [search, category, line, availability, onlyNew])
 
   useEffect(() => {
     let cancelled = false
@@ -82,6 +83,8 @@ export default function Catalog() {
   // Flash Sale), distinta de la tabla flash_sales de ofertas con precio
   // promo — acá solo filtra por la etiqueta, sin precio asociado.
   const hasFlashType = useMemo(() => products.some((p) => p.availability === 'flash'), [products])
+  // is_new lo calcula get_catalog en el servidor (now() < products.new_until).
+  const hasNew = useMemo(() => products.some((p) => p.is_new), [products])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -90,18 +93,19 @@ export default function Catalog() {
         (!category || p.category === category) &&
         (!line || p.product_line === line) &&
         (!availability || p.availability === availability) &&
+        (!onlyNew || p.is_new) &&
         (!q ||
           p.name.toLowerCase().includes(q) ||
           (p.category ?? '').toLowerCase().includes(q) ||
           (p.product_line ?? '').toLowerCase().includes(q)),
     )
-  }, [products, search, category, line, availability])
+  }, [products, search, category, line, availability, onlyNew])
 
   const validClient = !!client
   const showFilters = validClient && !loading
   // Con búsqueda o algún chip activo, Flash Sale se oculta para no competir
   // con los resultados; sin filtros vuelve a aparecer como al entrar.
-  const hasActiveFilters = !!search.trim() || !!category || !!line || !!availability
+  const hasActiveFilters = !!search.trim() || !!category || !!line || !!availability || onlyNew
 
   return (
     <div className="min-h-screen pb-24 md:pb-8">
@@ -128,6 +132,9 @@ export default function Catalog() {
             hasFlashType={hasFlashType}
             availability={availability}
             onAvailabilityChange={setAvailability}
+            hasNew={hasNew}
+            onlyNew={onlyNew}
+            onOnlyNewChange={setOnlyNew}
           />
         )}
       </div>

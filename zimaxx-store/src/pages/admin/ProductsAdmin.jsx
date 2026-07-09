@@ -2,11 +2,33 @@ import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
-import { parseSheet, pick, detectImageColumn, looksLikeImageUrl } from '../../utils/excel'
+import { parseSheet, pick, detectImageColumn, looksLikeImageUrl, downloadMissingPhotosExcel } from '../../utils/excel'
 import { generateSku } from '../../utils/token'
 import { SearchIcon, UploadZone, inputCls, useInfiniteRows } from './ui'
 
-const EMPTY = { sku: '', name: '', category: '', image_url: '', active: true }
+const EMPTY = { sku: '', name: '', category: '', image_url: '', active: true, new_until: '' }
+
+// Etiqueta "Nuevo" (2026-07-09): los productos recién creados la llevan
+// automáticamente por ~10 días ("una semana, quizás un poco más") y el
+// catálogo permite filtrar por ellos. La fecha queda editable en el
+// formulario de edición por si una promo necesita más o menos tiempo.
+const NEW_TAG_DAYS = 10
+
+const toIso = (local) => (local ? new Date(local).toISOString() : null)
+const isoToLocal = (iso) => {
+  if (!iso) return ''
+  const d = new Date(iso)
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
+  return d.toISOString().slice(0, 16)
+}
+const defaultNewUntilLocal = () => {
+  const d = new Date()
+  d.setDate(d.getDate() + NEW_TAG_DAYS)
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
+  return d.toISOString().slice(0, 16)
+}
+
+const isNew = (p) => p.new_until && new Date(p.new_until).getTime() > Date.now()
 
 // Alias aceptados en el Excel de productos. El SKU es opcional (se
 // autogenera si falta) y nunca se expone en el catálogo del cliente.
@@ -133,6 +155,7 @@ export default function ProductsAdmin() {
       if (statusFilter === 'noimage' && p.image_url) return false
       if (statusFilter === 'preorder' && p.availability !== 'preorder') return false
       if (statusFilter === 'flash' && p.availability !== 'flash') return false
+      if (statusFilter === 'new' && !isNew(p)) return false
       if (q && !p.name.toLowerCase().includes(q) && !String(p.sku).toLowerCase().includes(q))
         return false
       return true
@@ -197,15 +220,24 @@ export default function ProductsAdmin() {
         })
       }
 
-      if (upserts.length > 0) {
-        const { error } = await supabase
-          .from('products')
-          .upsert(upserts, { onConflict: 'sku' })
+      // Los SKUs que no existían llevan la etiqueta "Nuevo" con vencimiento
+      // automático. Se sube en dos tandas porque PostgREST exige que todas
+      // las filas de un upsert tengan las mismas columnas, y a los
+      // existentes no hay que pisarles new_until al re-subir el archivo.
+      const newUntilIso = toIso(defaultNewUntilLocal())
+      const newRows = upserts
+        .filter((p) => !existingSkus.has(p.sku.toLowerCase()))
+        .map((p) => ({ ...p, new_until: newUntilIso }))
+      const existingRows = upserts.filter((p) => existingSkus.has(p.sku.toLowerCase()))
+
+      for (const batch of [newRows, existingRows]) {
+        if (batch.length === 0) continue
+        const { error } = await supabase.from('products').upsert(batch, { onConflict: 'sku' })
         if (error) throw error
       }
 
-      const created = upserts.filter((p) => !existingSkus.has(p.sku.toLowerCase())).length
-      const updated = upserts.length - created
+      const created = newRows.length
+      const updated = existingRows.length
 
       setUploadResult({
         ok: true,
@@ -302,6 +334,7 @@ export default function ProductsAdmin() {
       category: form.category.trim() || null,
       image_url: form.image_url.trim() || null,
       active: form.active,
+      new_until: toIso(form.new_until),
     }
     const { error } = form.id
       ? await supabase.from('products').update(payload).eq('id', form.id)
@@ -323,6 +356,7 @@ export default function ProductsAdmin() {
   const noImageCount = products.filter((p) => !p.image_url).length
   const preorderCount = products.filter((p) => p.availability === 'preorder').length
   const flashCount = products.filter((p) => p.availability === 'flash').length
+  const newCount = products.filter(isNew).length
 
   return (
     <div className="space-y-4">
@@ -345,6 +379,22 @@ export default function ProductsAdmin() {
               📷 {noImageCount} {t('noImage').toLowerCase()}
             </button>
           )}
+          {/* Mismo formato que acepta "Fotos por Excel": se completa la
+              columna Imagen y se re-sube el archivo tal cual. */}
+          {noImageCount > 0 && isAdmin && (
+            <button
+              onClick={() =>
+                downloadMissingPhotosExcel(
+                  products.filter((p) => !p.image_url),
+                  new Date().toISOString().slice(0, 10),
+                )
+              }
+              className="rounded-full border border-line px-3 py-1 text-xs font-semibold text-primary/60 transition-colors hover:border-secondary hover:text-secondary-dark"
+              title={t('downloadMissingPhotos')}
+            >
+              ⬇️ {t('downloadExcel')}
+            </button>
+          )}
           {preorderCount > 0 && (
             <button
               onClick={() => setStatusFilter(statusFilter === 'preorder' ? '' : 'preorder')}
@@ -356,6 +406,19 @@ export default function ProductsAdmin() {
               title={t('preorder')}
             >
               {preorderCount} {t('preorder')}
+            </button>
+          )}
+          {newCount > 0 && (
+            <button
+              onClick={() => setStatusFilter(statusFilter === 'new' ? '' : 'new')}
+              className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                statusFilter === 'new'
+                  ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                  : 'bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900/50 dark:text-green-300 dark:hover:bg-green-900'
+              }`}
+              title={t('newTag')}
+            >
+              ✨ {newCount} {t('newTag')}
             </button>
           )}
           {flashCount > 0 && (
@@ -374,7 +437,7 @@ export default function ProductsAdmin() {
         </div>
         {isAdmin && (
           <button
-            onClick={() => setForm({ ...EMPTY })}
+            onClick={() => setForm({ ...EMPTY, new_until: defaultNewUntilLocal() })}
             className="rounded-full bg-ink px-5 py-2 text-sm font-semibold text-secondary transition-colors hover:bg-ink-soft"
           >
             + {t('newProduct')}
@@ -439,6 +502,16 @@ export default function ProductsAdmin() {
             onChange={(e) => setForm({ ...form, image_url: e.target.value })}
             className={inputCls}
           />
+          <label className="text-sm">
+            ✨ {t('newUntil')}
+            <input
+              type="datetime-local"
+              value={form.new_until ?? ''}
+              onChange={(e) => setForm({ ...form, new_until: e.target.value })}
+              className={`${inputCls} mt-1 w-full`}
+            />
+            <span className="mt-1 block text-xs text-primary/50">{t('newUntilHint')}</span>
+          </label>
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -518,6 +591,7 @@ export default function ProductsAdmin() {
           <option value="noimage">{t('noImage')}</option>
           <option value="preorder">{t('preorder')}</option>
           <option value="flash">{t('flashSale')}</option>
+          <option value="new">✨ {t('newTag')}</option>
         </select>
       </div>
 
@@ -563,6 +637,14 @@ export default function ProductsAdmin() {
                       🔥 {t('flashSale')}
                     </span>
                   )}
+                  {isNew(p) && (
+                    <span
+                      className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-green-800 dark:bg-green-900/50 dark:text-green-300"
+                      title={`${t('newUntil')}: ${new Date(p.new_until).toLocaleString()}`}
+                    >
+                      ✨ {t('newTag')}
+                    </span>
+                  )}
                 </td>
                 <td className="p-3 text-primary/60">
                   {p.category}
@@ -599,7 +681,7 @@ export default function ProductsAdmin() {
                 <td className="p-3 text-right">
                   {isAdmin && (
                     <button
-                      onClick={() => setForm({ ...p })}
+                      onClick={() => setForm({ ...p, new_until: isoToLocal(p.new_until) })}
                       className="text-xs font-semibold text-secondary-dark hover:underline"
                     >
                       {t('edit')}

@@ -65,6 +65,20 @@ export async function downloadOrderExcel(items, filenameStamp) {
   XLSX.writeFile(wb, `zimaxx-order-${filenameStamp}.xlsx`)
 }
 
+// Exporta los productos sin foto en el MISMO formato que acepta la carga
+// "Fotos por Excel" de la pestaña Productos (SKU / Nombre / Imagen, los
+// tres son alias de IMAGE_COLS): se completa la columna Imagen con los
+// links y se re-sube el archivo tal cual, sin retocar encabezados.
+export async function downloadMissingPhotosExcel(products, filenameStamp) {
+  const XLSX = await import('xlsx')
+  const rows = products.map((p) => ({ SKU: p.sku, Nombre: p.name, Imagen: '' }))
+  const ws = XLSX.utils.json_to_sheet(rows, { header: ['SKU', 'Nombre', 'Imagen'] })
+  ws['!cols'] = [{ wch: 24 }, { wch: 50 }, { wch: 70 }]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Sin foto')
+  XLSX.writeFile(wb, `zimaxx-productos-sin-foto-${filenameStamp}.xlsx`)
+}
+
 export function normalizeHeader(h) {
   return String(h)
     .toLowerCase()

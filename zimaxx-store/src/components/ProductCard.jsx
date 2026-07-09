@@ -30,14 +30,27 @@ function ProductCard({ product }) {
 
   return (
     <div className="group relative flex flex-col overflow-hidden rounded-2xl border border-line bg-surface transition-all duration-300 hover:-translate-y-1 hover:border-secondary/50 hover:shadow-lg hover:shadow-black/10">
+      {/* El badge vive sobre la imagen del producto, que es oscura SIEMPRE
+          (degradé fijo de ProductImage, no sigue el tema) — por eso usa los
+          tonos crema/dorado de la paleta en hex fijo: con las clases del
+          tema, gold-pale se vuelve oscuro en dark mode y el badge
+          desaparecería. El puntito pulsante repite el lenguaje del
+          countdown de Flash Sale para llamar la atención sin desentonar. */}
       {product.availability === 'preorder' && (
-        <span className="absolute left-2 top-2 z-10 rounded-full bg-ink/90 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-secondary ring-1 ring-secondary/40">
+        <span className="absolute left-2 top-2 z-10 inline-flex items-center gap-1.5 rounded-full bg-[#f0e6c8] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#16130d] shadow-md shadow-black/30 ring-1 ring-[#c9a227]">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#a3821a]" />
           {t('preorder')}
         </span>
       )}
       {product.availability === 'flash' && (
         <span className="absolute left-2 top-2 z-10 rounded-full bg-secondary px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-ink ring-1 ring-ink/10">
           🔥 {t('flashSale')}
+        </span>
+      )}
+      {/* A la derecha para no chocar con el badge de Pre-Order/Flash Sale. */}
+      {product.is_new && (
+        <span className="absolute right-2 top-2 z-10 rounded-full bg-green-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white ring-1 ring-white/20">
+          ✨ {t('newTag')}
         </span>
       )}
       <ProductImage src={product.image_url} alt={product.name} />

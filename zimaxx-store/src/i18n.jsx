@@ -73,6 +73,7 @@ const dict = {
     save: 'Guardar',
     cancel: 'Cancelar',
     edit: 'Editar',
+    change: 'Cambiar',
     newProduct: 'Nuevo producto',
     name: 'Nombre',
     category: 'Categoría',
@@ -168,7 +169,15 @@ const dict = {
     flashStatus_expired: 'Expiró',
     flashStatus_deactivated: 'Desactivada',
     flashBatchGroup: 'Lote de carga masiva',
+    flashExpiryGroup: 'Mismo vencimiento',
     deactivateGroup: 'Desactivar grupo',
+    applyToGroup: 'Aplicar al grupo',
+    newTag: 'Nuevo',
+    newUntil: 'Nuevo hasta',
+    newUntilHint:
+      'El producto lleva la etiqueta ✨ Nuevo en el catálogo hasta esta fecha. Dejar vacío para quitarla.',
+    downloadMissingPhotos:
+      'Descargar Excel de productos sin foto (mismo formato que "Fotos por Excel": completar la columna Imagen y re-subirlo)',
   },
   en: {
     search: 'Search by name or category...',
@@ -236,6 +245,7 @@ const dict = {
     save: 'Save',
     cancel: 'Cancel',
     edit: 'Edit',
+    change: 'Change',
     newProduct: 'New product',
     name: 'Name',
     category: 'Category',
@@ -331,7 +341,15 @@ const dict = {
     flashStatus_expired: 'Expired',
     flashStatus_deactivated: 'Deactivated',
     flashBatchGroup: 'Bulk upload batch',
+    flashExpiryGroup: 'Same expiration',
     deactivateGroup: 'Deactivate group',
+    applyToGroup: 'Apply to group',
+    newTag: 'New',
+    newUntil: 'New until',
+    newUntilHint:
+      'The product shows the ✨ New badge in the catalog until this date. Leave empty to remove it.',
+    downloadMissingPhotos:
+      'Download Excel of products without photos (same format as "Photos via Excel": fill the Imagen column and re-upload)',
   },
 }
 

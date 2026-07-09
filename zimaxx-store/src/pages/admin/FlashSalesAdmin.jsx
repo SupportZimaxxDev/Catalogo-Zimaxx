@@ -29,6 +29,12 @@ const nowLocal = () => {
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
   return d.toISOString().slice(0, 16)
 }
+const isoToLocal = (iso) => {
+  if (!iso) return ''
+  const d = new Date(iso)
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
+  return d.toISOString().slice(0, 16)
+}
 
 export default function FlashSalesAdmin() {
   const { t } = useI18n()
@@ -46,6 +52,9 @@ export default function FlashSalesAdmin() {
   const [bulkBusy, setBulkBusy] = useState(false)
   const [bulkResult, setBulkResult] = useState(null)
   const [statusFilter, setStatusFilter] = useState('')
+  // Buscador del alta individual (2026-07-09): con miles de productos el
+  // <select> era inusable — se escribe nombre o SKU y se elige de la lista.
+  const [productQuery, setProductQuery] = useState('')
 
   const load = async () => {
     const [{ data: fs }, ps] = await Promise.all([
@@ -68,6 +77,10 @@ export default function FlashSalesAdmin() {
   const save = async (e) => {
     e.preventDefault()
     setError('')
+    if (!form.product_id) {
+      setError(t('selectProduct'))
+      return
+    }
     const { error } = await supabase.from('flash_sales').insert({
       product_id: form.product_id,
       price: Number(form.price),
@@ -154,8 +167,21 @@ export default function FlashSalesAdmin() {
     await load()
   }
 
-  const deactivateBatch = async (batchId) => {
-    await supabase.from('flash_sales').update({ active: false }).eq('batch_id', batchId).eq('active', true)
+  // Los grupos se arman client-side (por batch_id O por misma fecha de
+  // expiración), así que desactivar/reprogramar un grupo opera sobre la
+  // lista de ids concreta en vez de un WHERE por batch — funciona igual
+  // para lotes de Excel y para ofertas sueltas que comparten vencimiento.
+  const deactivateGroup = async (items) => {
+    const ids = items.filter((i) => i.active).map((i) => i.id)
+    if (ids.length === 0) return
+    await supabase.from('flash_sales').update({ active: false }).in('id', ids)
+    await load()
+  }
+
+  const updateExpiry = async (ids, localDate) => {
+    const iso = toIso(localDate)
+    if (!iso) return
+    await supabase.from('flash_sales').update({ expires_at: iso }).in('id', ids)
     await load()
   }
 
@@ -174,15 +200,26 @@ export default function FlashSalesAdmin() {
 
   const filteredSales = statusFilter ? sales.filter((s) => saleStatus(s) === statusFilter) : sales
 
-  // Agrupa filas de una misma carga masiva (mismo batch_id) para poder
-  // desactivarlas todas juntas; el resto se muestra suelto como antes.
-  const rows = []
-  const seenBatches = new Set()
+  // Agrupa por lote de carga masiva (batch_id) y, para las que no tienen
+  // lote (alta manual o cargadas antes de que existiera batch_id), por
+  // misma fecha de expiración — lo típico es que la promo de la semana
+  // comparta vencimiento aunque se haya cargado producto por producto.
+  // Grupos de 1 se muestran como fila suelta.
+  const byKey = new Map()
   for (const s of filteredSales) {
-    if (s.batch_id) {
-      if (seenBatches.has(s.batch_id)) continue
-      seenBatches.add(s.batch_id)
-      rows.push({ type: 'batch', batchId: s.batch_id, items: filteredSales.filter((x) => x.batch_id === s.batch_id) })
+    const key = s.batch_id ?? `exp:${s.expires_at}`
+    if (!byKey.has(key)) byKey.set(key, [])
+    byKey.get(key).push(s)
+  }
+  const rows = []
+  const seenKeys = new Set()
+  for (const s of filteredSales) {
+    const key = s.batch_id ?? `exp:${s.expires_at}`
+    if (seenKeys.has(key)) continue
+    seenKeys.add(key)
+    const items = byKey.get(key)
+    if (items.length > 1) {
+      rows.push({ type: 'group', key, isBatch: !!s.batch_id, items })
     } else {
       rows.push({ type: 'single', item: s })
     }
@@ -194,7 +231,10 @@ export default function FlashSalesAdmin() {
         <h2 className="text-xl font-bold">⚡ {t('flashSales')}</h2>
         {isAdmin && (
           <button
-            onClick={() => setForm({ ...EMPTY, starts_at: nowLocal() })}
+            onClick={() => {
+              setForm({ ...EMPTY, starts_at: nowLocal() })
+              setProductQuery('')
+            }}
             className="rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-secondary hover:bg-ink-soft"
           >
             + Flash Sale
@@ -204,19 +244,67 @@ export default function FlashSalesAdmin() {
 
       {isAdmin && form && (
         <form onSubmit={save} className="grid gap-3 rounded-2xl border border-line bg-surface p-4 shadow-sm md:grid-cols-2">
-          <select
-            required
-            value={form.product_id}
-            onChange={(e) => setForm({ ...form, product_id: e.target.value })}
-            className="rounded-lg border border-line bg-surface px-3 py-2 outline-none focus:border-secondary md:col-span-2"
-          >
-            <option value="">{t('selectProduct')}</option>
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>
-                [{p.sku}] {p.name}
-              </option>
-            ))}
-          </select>
+          {/* Selector de producto con búsqueda: escribir nombre o SKU y
+              elegir de la lista (máx. 30 resultados para no colgar el DOM). */}
+          <div className="md:col-span-2">
+            {form.product_id ? (
+              (() => {
+                const sel = products.find((p) => p.id === form.product_id)
+                return (
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-secondary/50 bg-gold-pale/30 px-3 py-2 text-sm">
+                    <span>
+                      <span className="font-mono text-xs text-primary/50">{sel?.sku}</span>{' '}
+                      <span className="font-semibold">{sel?.name}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setForm({ ...form, product_id: '' })
+                        setProductQuery('')
+                      }}
+                      className="shrink-0 text-xs font-semibold text-secondary-dark hover:underline"
+                    >
+                      {t('change')}
+                    </button>
+                  </div>
+                )
+              })()
+            ) : (
+              <>
+                <input
+                  autoFocus
+                  type="search"
+                  value={productQuery}
+                  onChange={(e) => setProductQuery(e.target.value)}
+                  placeholder={`${t('selectProduct')} — ${t('searchProducts')}`}
+                  className="w-full rounded-lg border border-line bg-surface px-3 py-2 outline-none focus:border-secondary"
+                />
+                {productQuery.trim() && (
+                  <div className="mt-1 max-h-52 overflow-y-auto rounded-lg border border-line">
+                    {products
+                      .filter((p) => {
+                        const q = productQuery.trim().toLowerCase()
+                        return (
+                          p.name.toLowerCase().includes(q) ||
+                          String(p.sku).toLowerCase().includes(q)
+                        )
+                      })
+                      .slice(0, 30)
+                      .map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setForm({ ...form, product_id: p.id })}
+                          className="block w-full border-b border-line/60 px-3 py-2 text-left text-sm last:border-b-0 hover:bg-gold-pale/30"
+                        >
+                          <span className="font-mono text-xs text-primary/50">{p.sku}</span> {p.name}
+                        </button>
+                      ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
           <label className="text-sm">
             {t('promoPrice')} (USD)
             <input
@@ -329,18 +417,26 @@ export default function FlashSalesAdmin() {
             {rows.map((row) =>
               row.type === 'single' ? (
                 <tr key={row.item.id} className="border-b border-primary/5">
-                  <SaleRow s={row.item} t={t} isAdmin={isAdmin} saleStatus={saleStatus} deactivate={deactivate} />
+                  <SaleRow
+                    s={row.item}
+                    t={t}
+                    isAdmin={isAdmin}
+                    saleStatus={saleStatus}
+                    deactivate={deactivate}
+                    updateExpiry={updateExpiry}
+                  />
                 </tr>
               ) : (
-                <FlashBatch
-                  key={row.batchId}
-                  batchId={row.batchId}
+                <FlashGroup
+                  key={row.key}
+                  isBatch={row.isBatch}
                   items={row.items}
                   t={t}
                   isAdmin={isAdmin}
                   saleStatus={saleStatus}
                   deactivate={deactivate}
-                  deactivateBatch={deactivateBatch}
+                  deactivateGroup={deactivateGroup}
+                  updateExpiry={updateExpiry}
                 />
               ),
             )}
@@ -351,7 +447,52 @@ export default function FlashSalesAdmin() {
   )
 }
 
-function SaleRow({ s, t, isAdmin, saleStatus, deactivate }) {
+// Fecha de expiración editable con un click (solo admin): mismo patrón
+// que el teléfono en VendedoresAdmin — click sobre el valor, aparece el
+// datetime-local, Enter o click afuera guarda.
+function ExpiryCell({ s, isAdmin, updateExpiry }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+
+  if (!isAdmin) return <span>{new Date(s.expires_at).toLocaleString()}</span>
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => {
+          setDraft(isoToLocal(s.expires_at))
+          setEditing(true)
+        }}
+        className="text-left underline decoration-dotted underline-offset-2 hover:text-secondary-dark"
+        title="Editar fecha"
+      >
+        {new Date(s.expires_at).toLocaleString()}
+      </button>
+    )
+  }
+
+  const commit = () => {
+    setEditing(false)
+    if (draft && draft !== isoToLocal(s.expires_at)) updateExpiry([s.id], draft)
+  }
+
+  return (
+    <input
+      autoFocus
+      type="datetime-local"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur()
+        if (e.key === 'Escape') setEditing(false)
+      }}
+      className="rounded-lg border border-secondary bg-surface px-2 py-1 text-xs outline-none"
+    />
+  )
+}
+
+function SaleRow({ s, t, isAdmin, saleStatus, deactivate, updateExpiry }) {
   return (
     <>
       <td className="p-3">
@@ -359,7 +500,9 @@ function SaleRow({ s, t, isAdmin, saleStatus, deactivate }) {
       </td>
       <td className="p-3 font-bold text-secondary-dark">{money(s.price)}</td>
       <td className="p-3 text-primary/60">{new Date(s.starts_at).toLocaleString()}</td>
-      <td className="p-3 text-primary/60">{new Date(s.expires_at).toLocaleString()}</td>
+      <td className="p-3 text-primary/60">
+        <ExpiryCell s={s} isAdmin={isAdmin} updateExpiry={updateExpiry} />
+      </td>
       <td className="p-3">
         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${STATUS_STYLES[saleStatus(s)]}`}>
           {t(`flashStatus_${saleStatus(s)}`)}
@@ -376,22 +519,50 @@ function SaleRow({ s, t, isAdmin, saleStatus, deactivate }) {
   )
 }
 
-// Cargas masivas: encabezado con el total del lote y un botón para
-// desactivarlo entero, seguido de sus filas (mismo look que una fila
-// suelta, con un borde izquierdo dorado para marcar que son un grupo).
-function FlashBatch({ batchId, items, t, isAdmin, saleStatus, deactivate, deactivateBatch }) {
+// Grupo de ofertas: un lote de carga masiva (batch_id) o varias ofertas
+// sueltas con la misma fecha de vencimiento. Encabezado con contador,
+// botón para desactivar el grupo entero y un datetime-local para
+// reprogramar el vencimiento de todas juntas; debajo, sus filas con un
+// borde izquierdo dorado que marca que son un grupo.
+function FlashGroup({ isBatch, items, t, isAdmin, saleStatus, deactivate, deactivateGroup, updateExpiry }) {
+  const [groupDate, setGroupDate] = useState('')
   const activeCount = items.filter((i) => i.active).length
+  const liveCount = items.filter((i) => saleStatus(i) === 'live').length
+
   return (
     <>
       <tr className="border-b border-primary/5 bg-gold-pale/20">
-        <td colSpan={5} className="p-3 text-xs font-semibold text-primary/70">
-          🗂️ {t('flashBatchGroup')} · {items.length} {t('items')} · {activeCount} {t('flashStatus_live')}
+        <td colSpan={3} className="p-3 text-xs font-semibold text-primary/70">
+          🗂️ {t(isBatch ? 'flashBatchGroup' : 'flashExpiryGroup')} · {items.length} {t('items')} ·{' '}
+          {liveCount} {t('flashStatus_live')}
+        </td>
+        <td colSpan={2} className="p-3">
+          {isAdmin && (
+            <span className="flex items-center gap-1.5">
+              <input
+                type="datetime-local"
+                value={groupDate}
+                onChange={(e) => setGroupDate(e.target.value)}
+                className="rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none focus:border-secondary"
+              />
+              <button
+                disabled={!groupDate}
+                onClick={() => {
+                  updateExpiry(items.map((i) => i.id), groupDate)
+                  setGroupDate('')
+                }}
+                className="whitespace-nowrap text-xs font-semibold text-secondary-dark hover:underline disabled:opacity-40"
+              >
+                {t('applyToGroup')}
+              </button>
+            </span>
+          )}
         </td>
         <td className="p-3 text-right">
           {isAdmin && activeCount > 0 && (
             <button
-              onClick={() => deactivateBatch(batchId)}
-              className="text-xs font-semibold text-red-600 hover:underline"
+              onClick={() => deactivateGroup(items)}
+              className="whitespace-nowrap text-xs font-semibold text-red-600 hover:underline"
             >
               {t('deactivateGroup')}
             </button>
@@ -400,7 +571,14 @@ function FlashBatch({ batchId, items, t, isAdmin, saleStatus, deactivate, deacti
       </tr>
       {items.map((s) => (
         <tr key={s.id} className="border-b border-primary/5 border-l-2 border-l-secondary/40">
-          <SaleRow s={s} t={t} isAdmin={isAdmin} saleStatus={saleStatus} deactivate={deactivate} />
+          <SaleRow
+            s={s}
+            t={t}
+            isAdmin={isAdmin}
+            saleStatus={saleStatus}
+            deactivate={deactivate}
+            updateExpiry={updateExpiry}
+          />
         </tr>
       ))}
     </>

@@ -22,10 +22,14 @@ export default function FilterBar({
   hasFlashType,
   availability,
   onAvailabilityChange,
+  hasNew,
+  onlyNew,
+  onOnlyNewChange,
 }) {
   const { t } = useI18n()
 
-  if (categories.length === 0 && lines.length <= 1 && !hasPreorder && !hasFlashType) return null
+  if (categories.length === 0 && lines.length <= 1 && !hasPreorder && !hasFlashType && !hasNew)
+    return null
 
   return (
     <div className="space-y-2 border-b border-line bg-bg px-4 py-2.5">
@@ -53,11 +57,22 @@ export default function FilterBar({
           ))}
         </div>
       )}
-      {(hasPreorder || hasFlashType) && (
+      {(hasPreorder || hasFlashType || hasNew) && (
         <div className="flex gap-2 overflow-x-auto pb-0.5">
-          <button onClick={() => onAvailabilityChange('')} className={chipCls(!availability)}>
+          <button
+            onClick={() => {
+              onAvailabilityChange('')
+              onOnlyNewChange(false)
+            }}
+            className={chipCls(!availability && !onlyNew)}
+          >
             {t('allStatuses')}
           </button>
+          {hasNew && (
+            <button onClick={() => onOnlyNewChange(!onlyNew)} className={chipCls(onlyNew)}>
+              ✨ {t('newTag')}
+            </button>
+          )}
           <button
             onClick={() => onAvailabilityChange(availability === 'available' ? '' : 'available')}
             className={chipCls(availability === 'available')}

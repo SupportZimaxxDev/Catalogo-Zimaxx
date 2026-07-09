@@ -4,6 +4,13 @@
 -- Es idempotente: se puede re-ejecutar sin romper datos.
 -- ============================================================
 
+-- Los ALTER TABLE de este script piden locks exclusivos que pueden chocar
+-- con los RPC del sitio en producción (pasó el 2026-07-09: deadlock con
+-- get_catalog leyendo products). Con lock_timeout el script falla rápido
+-- y limpio si la tabla está ocupada — en ese caso, simplemente volver a
+-- correrlo; la transacción se revierte entera, no queda nada a medias.
+set lock_timeout = '10s';
+
 -- ---------- Extensiones ----------
 create extension if not exists pgcrypto;
 
@@ -123,6 +130,14 @@ alter table public.products
 -- Electronics, etc.) para productos que no son perfume.
 alter table public.products
   add column if not exists product_line text;
+
+-- Etiqueta "Nuevo" (2026-07-09): al crear un producto (alta manual o
+-- carga masiva) el admin le pone new_until = ahora + ~10 días. Mientras
+-- now() < new_until el catálogo muestra el badge y permite filtrar por
+-- nuevos; después expira solo, sin limpieza manual. La fecha es editable
+-- desde el formulario de edición del producto en el panel admin.
+alter table public.products
+  add column if not exists new_until timestamptz;
 
 create table if not exists public.product_prices (
   product_id    uuid not null references public.products (id) on delete cascade,
@@ -401,6 +416,7 @@ begin
           'product_line', p.product_line,
           'image_url',    p.image_url,
           'availability', p.availability,
+          'is_new',       (p.new_until is not null and now() < p.new_until),
           'price',        null
         )
         order by p.category nulls last, p.name
@@ -420,6 +436,7 @@ begin
           'product_line', p.product_line,
           'image_url',    p.image_url,
           'availability', p.availability,
+          'is_new',       (p.new_until is not null and now() < p.new_until),
           'price',        pp.price
         )
         order by p.category nulls last, p.name
