@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
-import { cleanPhone } from '../../utils/format'
+import { cleanPhone, hasCountryCode } from '../../utils/format'
 import { inputCls } from './ui'
 
 const EMPTY = { name: '', phone: '' }
@@ -18,6 +18,7 @@ export default function VendedoresAdmin() {
   const [busy, setBusy] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [editPhone, setEditPhone] = useState('')
+  const [phoneError, setPhoneError] = useState('')
   const [linkEmail, setLinkEmail] = useState({}) // id -> valor del input de email
   const [linkBusyId, setLinkBusyId] = useState(null)
   const [linkError, setLinkError] = useState({}) // id -> mensaje de error
@@ -50,8 +51,16 @@ export default function VendedoresAdmin() {
 
   const save = async (e) => {
     e.preventDefault()
-    setBusy(true)
     setError('')
+    // wa.me necesita el código de país incluido (ver format.js): un
+    // número de 10 dígitos "funciona" en Android pero no abre el chat en
+    // iPhone. Se bloquea acá en vez de dejar que el problema aparezca
+    // recién cuando un cliente con iPhone intente mandar su pedido.
+    if (form.phone.trim() && !hasCountryCode(form.phone)) {
+      setError(t('phoneNeedsCountryCode'))
+      return
+    }
+    setBusy(true)
     const { error } = await supabase.from('vendedores').insert({
       name: form.name.trim(),
       phone: cleanPhone(form.phone) || null,
@@ -68,9 +77,15 @@ export default function VendedoresAdmin() {
   const startEdit = (v) => {
     setEditingId(v.id)
     setEditPhone(v.phone ?? '')
+    setPhoneError('')
   }
 
   const savePhone = async (id) => {
+    if (editPhone.trim() && !hasCountryCode(editPhone)) {
+      setPhoneError(t('phoneNeedsCountryCode'))
+      return
+    }
+    setPhoneError('')
     const phone = cleanPhone(editPhone) || null
     const { error } = await supabase.from('vendedores').update({ phone }).eq('id', id)
     if (!error) {
@@ -151,12 +166,15 @@ export default function VendedoresAdmin() {
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             className={inputCls}
           />
-          <input
-            placeholder={t('phone')}
-            value={form.phone}
-            onChange={(e) => setForm({ ...form, phone: e.target.value })}
-            className={inputCls}
-          />
+          <label className="text-sm">
+            <input
+              placeholder={t('phone')}
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              className={`${inputCls} w-full`}
+            />
+            <span className="mt-1 block text-xs text-primary/50">{t('phoneHint')}</span>
+          </label>
           {error && <p className="text-sm text-red-600 dark:text-red-400 md:col-span-2">{error}</p>}
           <div className="flex gap-2 md:col-span-2">
             <button
@@ -195,21 +213,33 @@ export default function VendedoresAdmin() {
                 <td className="p-3 font-medium">{v.name}</td>
                 <td className="p-3 font-mono text-xs">
                   {editingId === v.id ? (
-                    <input
-                      autoFocus
-                      value={editPhone}
-                      onChange={(e) => setEditPhone(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && savePhone(v.id)}
-                      onBlur={() => savePhone(v.id)}
-                      placeholder="13055551234"
-                      className="w-36 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
-                    />
+                    <div className="w-36">
+                      <input
+                        autoFocus
+                        value={editPhone}
+                        onChange={(e) => setEditPhone(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && savePhone(v.id)}
+                        onBlur={() => savePhone(v.id)}
+                        placeholder="13055551234"
+                        className="w-36 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
+                      />
+                      {phoneError && (
+                        <p className="mt-1 whitespace-normal text-[11px] text-red-600 dark:text-red-400">
+                          {phoneError}
+                        </p>
+                      )}
+                    </div>
                   ) : (
                     <button
                       onClick={() => startEdit(v)}
-                      className="text-primary/70 hover:text-secondary-dark hover:underline"
+                      className="inline-flex items-center gap-1 text-primary/70 hover:text-secondary-dark hover:underline"
                     >
                       {v.phone || <span className="italic text-primary/35">{t('noPhone')}</span>}
+                      {v.phone && !hasCountryCode(v.phone) && (
+                        <span title={t('phoneNeedsCountryCode')} className="text-red-600 dark:text-red-400">
+                          ⚠️
+                        </span>
+                      )}
                     </button>
                   )}
                 </td>

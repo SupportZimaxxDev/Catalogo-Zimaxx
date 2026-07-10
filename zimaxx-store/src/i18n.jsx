@@ -83,7 +83,7 @@ const dict = {
     uploadExcel: 'Subir Excel',
     processing: 'Procesando...',
     priceUploadHint:
-      'Excel/CSV con columna SKU y una columna por lista de precio (US Minimum Order, US Wholesale, VE Minimum Order, VE Wholesale, Special).',
+      'Excel/CSV con columna SKU y una columna por lista de precio (US Minimum Order, US Wholesale, VE Minimum Order, VE Wholesale, Special, Luzmar).',
     productUploadHint:
       'Excel/CSV con columnas: nombre (o Title Product), categoría (o Brand), línea/tipo de perfume (PRODUCT_CATEGORY: Perfume / Perfume - Arabes), imagen (URL), Type (Available / Pre Order / Flash Sale), activo y opcional SKU. Acepta las listas wholesale con membrete y los exports de SellerCloud: detecta la fila de encabezados y la columna de fotos automáticamente. El SKU es interno, nunca se muestra al cliente; si falta se genera uno. Actualiza existentes por SKU y crea los nuevos; los campos que el archivo no trae no se tocan.',
     imageUploadHint:
@@ -142,6 +142,11 @@ const dict = {
     markNew: 'Reabrir',
     newVendedora: 'Nueva vendedora',
     phone: 'Teléfono',
+    phoneHint:
+      'Incluí el código de país (ej: 1 para EE.UU., 58 para Venezuela) — sin él, el link de WhatsApp no abre el chat en iPhone (en Android a veces "funciona" igual, por eso pasa desapercibido).',
+    phoneNeedsCountryCode:
+      'Falta el código de país (ej: 13055551234, no 3055551234) — sin él, el link de WhatsApp no funciona en iPhone.',
+    vendedoraPhoneDropped: 'teléfonos de vendedora sin código de país ignorados (completar a mano en Vendedoras)',
     noPhone: 'Sin teléfono',
     noVendedoras: 'Aún no hay vendedoras registradas.',
     vendedoraInUse: 'No se puede eliminar: tiene clientes asignados.',
@@ -158,6 +163,7 @@ const dict = {
     unassigned: 'Sin asignar',
     phoneInUse: 'Ya existe un cliente con ese teléfono.',
     assignedToYou: 'Se asignará a vos automáticamente.',
+    assignedToOwner: 'Esta lista es exclusiva de',
     quoteRequestTitle: 'Solicitud de cotización — Zimaxx Store',
     quoteRequestGreeting: 'Hola! Quiero cotización de estos productos:',
     bulkFlashUpload: 'Carga masiva por Excel',
@@ -255,7 +261,7 @@ const dict = {
     uploadExcel: 'Upload Excel',
     processing: 'Processing...',
     priceUploadHint:
-      'Excel/CSV with a SKU column plus one column per price list (US Minimum Order, US Wholesale, VE Minimum Order, VE Wholesale, Special).',
+      'Excel/CSV with a SKU column plus one column per price list (US Minimum Order, US Wholesale, VE Minimum Order, VE Wholesale, Special, Luzmar).',
     productUploadHint:
       'Excel/CSV with columns: name (or Title Product), category (or Brand), perfume line/type (PRODUCT_CATEGORY: Perfume / Perfume - Arabes), image (URL), Type (Available / Pre Order / Flash Sale), active, and optional SKU. Accepts letterhead wholesale lists and SellerCloud exports: header row and photo column are detected automatically. SKU is internal and never shown to clients; missing SKUs are generated. Updates existing products by SKU and creates new ones; fields the file lacks are left untouched.',
     imageUploadHint:
@@ -314,6 +320,11 @@ const dict = {
     markNew: 'Reopen',
     newVendedora: 'New sales rep',
     phone: 'Phone',
+    phoneHint:
+      'Include the country code (e.g. 1 for US, 58 for Venezuela) — without it, the WhatsApp link won\'t open the chat on iPhone (on Android it sometimes "works" anyway, which is why this goes unnoticed).',
+    phoneNeedsCountryCode:
+      'Missing the country code (e.g. 13055551234, not 3055551234) — without it, the WhatsApp link won\'t work on iPhone.',
+    vendedoraPhoneDropped: 'sales rep phones without country code ignored (fill in by hand in Sales Reps)',
     noPhone: 'No phone',
     noVendedoras: 'No sales reps yet.',
     vendedoraInUse: "Can't delete: has clients assigned.",
@@ -330,6 +341,7 @@ const dict = {
     unassigned: 'Unassigned',
     phoneInUse: 'A client with that phone already exists.',
     assignedToYou: 'It will be assigned to you automatically.',
+    assignedToOwner: 'This list is exclusive to',
     quoteRequestTitle: 'Quote Request — Zimaxx Store',
     quoteRequestGreeting: 'Hi! I would like a quote for these products:',
     bulkFlashUpload: 'Bulk upload via Excel',

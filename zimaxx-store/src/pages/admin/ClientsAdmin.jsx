@@ -4,7 +4,7 @@ import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { parseSheet, pick, normalizeHeader } from '../../utils/excel'
 import { generateToken } from '../../utils/token'
-import { cleanPhone } from '../../utils/format'
+import { cleanPhone, hasCountryCode } from '../../utils/format'
 import { SearchIcon, UploadZone, inputCls, useInfiniteRows } from './ui'
 
 // Alias aceptados en el Excel de clientes (es/en, con o sin acentos).
@@ -207,6 +207,7 @@ export default function ClientsAdmin() {
       let updated = 0
       let inactive = 0
       let junk = 0
+      let vendedoraPhoneDropped = 0
       const skipped = []
 
       // Solo crear/actualizar (match por teléfono). Nunca borrar clientes
@@ -240,7 +241,14 @@ export default function ClientsAdmin() {
         if (vendedoraName) {
           const key = vendedoraName.trim().toLowerCase()
           let v = vendedorByName.get(key)
-          const vendedoraPhone = cleanPhone(pick(row, COLS.vendedoraPhone)) || null
+          const vendedoraPhoneRaw = pick(row, COLS.vendedoraPhone)
+          // Sin código de país el link de WhatsApp no abre el chat en
+          // iPhone (ver format.js) — mejor dejarla sin teléfono (se
+          // completa a mano en la pestaña Vendedoras) que guardar uno
+          // que falla en silencio.
+          if (vendedoraPhoneRaw && !hasCountryCode(vendedoraPhoneRaw)) vendedoraPhoneDropped++
+          const vendedoraPhone =
+            vendedoraPhoneRaw && hasCountryCode(vendedoraPhoneRaw) ? cleanPhone(vendedoraPhoneRaw) : null
           if (!v) {
             const { data: inserted, error: vError } = await supabase
               .from('vendedores')
@@ -256,6 +264,12 @@ export default function ClientsAdmin() {
           vendedorByName.set(key, v)
           vendedoraId = v.id
         }
+
+        // Lista "personal" de una vendedora (ej. 'luzmar'): pisa lo que
+        // traiga el archivo, aunque la columna Vendedora diga otra cosa —
+        // un cliente con esos precios no puede quedar con otra vendedora.
+        const listOwner = priceLists.find((l) => l.id === listId)?.owner_vendedora_id
+        if (listOwner) vendedoraId = listOwner
 
         const existing = byPhone.get(phone)
         if (existing) {
@@ -295,7 +309,7 @@ export default function ClientsAdmin() {
           skipped.length ? ` (${skipped.slice(0, 10).join(', ')})` : ''
         }${inactive ? ` · ${inactive} ${t('inactiveExcluded')}` : ''}${
           junk ? ` · ${junk} ${t('junkExcluded')}` : ''
-        }`,
+        }${vendedoraPhoneDropped ? ` · ${vendedoraPhoneDropped} ${t('vendedoraPhoneDropped')}` : ''}`,
       })
       await load()
     } catch (err) {
@@ -311,7 +325,8 @@ export default function ClientsAdmin() {
     const phone = cleanPhone(newClientForm.phone)
     if (!name || phone.length < 7 || !newClientForm.price_list_id) return
     setNewClientBusy(true)
-    const vendedoraId = isAdmin ? newClientForm.vendedora_id || null : myVendedoraId
+    const owner = ownerVendedoraId(newClientForm.price_list_id)
+    const vendedoraId = owner || (isAdmin ? newClientForm.vendedora_id || null : myVendedoraId)
     const { error } = await supabase.from('clients').insert({
       name,
       phone,
@@ -335,18 +350,30 @@ export default function ClientsAdmin() {
     setTimeout(() => setCopiedId(null), 1500)
   }
 
+  // Listas "personales" de una vendedora (ej. 'luzmar', 2026-07-09): si
+  // owner_vendedora_id está seteado, un cliente con esa lista SIEMPRE
+  // tiene que quedar asignado a esa vendedora — evita que precios
+  // especiales negociados por ella terminen en la cuenta de otra.
+  const ownerVendedoraId = (listId) => priceLists.find((l) => l.id === listId)?.owner_vendedora_id
+
+  // Una vendedora sin rol admin no elige a quién asignar (siempre se
+  // asigna a sí misma, ver RLS vendedora_insert_own_clients): si además
+  // no ve las listas "personales" de otras, ni por error puede armar un
+  // cliente que termine con precios especiales ajenos asignado a ella.
+  // Admin sí ve todas — el candado de vendedora se maneja en el form.
+  const selectablePriceLists = isAdmin
+    ? priceLists
+    : priceLists.filter((l) => !l.owner_vendedora_id || l.owner_vendedora_id === myVendedoraId)
+
   // Cambiar la lista del cliente: el link que ya tiene muestra los
   // precios nuevos al instante (el token identifica al cliente, la
   // lista se resuelve al abrir el catálogo).
   const updateList = async (client, listId) => {
-    const { error } = await supabase
-      .from('clients')
-      .update({ price_list_id: listId })
-      .eq('id', client.id)
+    const owner = ownerVendedoraId(listId)
+    const patch = { price_list_id: listId, ...(owner ? { vendedora_id: owner } : {}) }
+    const { error } = await supabase.from('clients').update(patch).eq('id', client.id)
     if (!error) {
-      setClients((prev) =>
-        prev.map((c) => (c.id === client.id ? { ...c, price_list_id: listId } : c)),
-      )
+      setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, ...patch } : c)))
     }
   }
 
@@ -405,32 +432,50 @@ export default function ClientsAdmin() {
           <select
             required
             value={newClientForm.price_list_id}
-            onChange={(e) => setNewClientForm({ ...newClientForm, price_list_id: e.target.value })}
+            onChange={(e) => {
+              const listId = e.target.value
+              const owner = ownerVendedoraId(listId)
+              setNewClientForm({
+                ...newClientForm,
+                price_list_id: listId,
+                ...(owner ? { vendedora_id: owner } : {}),
+              })
+            }}
             className={inputCls}
           >
             <option value="">{t('selectList')}</option>
-            {priceLists.map((l) => (
+            {selectablePriceLists.map((l) => (
               <option key={l.id} value={l.id}>
                 {l.label}
               </option>
             ))}
           </select>
-          {isAdmin ? (
-            <select
-              value={newClientForm.vendedora_id}
-              onChange={(e) => setNewClientForm({ ...newClientForm, vendedora_id: e.target.value })}
-              className={inputCls}
-            >
-              <option value="">{t('unassigned')}</option>
-              {vendedoresList.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <p className="flex items-center text-xs text-primary/50">{t('assignedToYou')}</p>
-          )}
+          {(() => {
+            const owner = ownerVendedoraId(newClientForm.price_list_id)
+            if (owner) {
+              return (
+                <p className="flex items-center text-xs text-primary/50">
+                  {t('assignedToOwner')} <span className="ml-1 font-semibold text-primary/70">{vendedoresList.find((v) => v.id === owner)?.name}</span>
+                </p>
+              )
+            }
+            return isAdmin ? (
+              <select
+                value={newClientForm.vendedora_id}
+                onChange={(e) => setNewClientForm({ ...newClientForm, vendedora_id: e.target.value })}
+                className={inputCls}
+              >
+                <option value="">{t('unassigned')}</option>
+                {vendedoresList.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="flex items-center text-xs text-primary/50">{t('assignedToYou')}</p>
+            )
+          })()}
           {newClientError && (
             <p className="text-sm text-red-600 dark:text-red-400 md:col-span-2">{newClientError}</p>
           )}
@@ -481,7 +526,7 @@ export default function ClientsAdmin() {
           className={inputCls}
         >
           <option value="">{t('allLists')}</option>
-          {priceLists.map((l) => (
+          {selectablePriceLists.map((l) => (
             <option key={l.id} value={l.id}>
               {l.label}
             </option>

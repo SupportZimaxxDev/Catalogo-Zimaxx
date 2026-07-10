@@ -256,6 +256,10 @@ otro nivel.
    migraciones (p. ej. fusión de distribuidor/us_special/ve_special en la
    lista general `special`, y el paso de `vendedora`/`vendedora_phone`
    —texto libre en `clients`— a la tabla `vendedores` con relación).
+   En instalaciones **ya en producción** conviene NO re-correr el schema
+   completo (una vez causó un deadlock con los RPC del sitio en vivo):
+   correr en su lugar los deltas `supabase/migration-*.sql`, que son
+   chicos, idempotentes y con `lock_timeout` corto.
 3. Crear el primer admin: **Authentication → Users → Add user**, luego:
 
    ```sql
@@ -361,6 +365,13 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   /api/Orders/StatusCode`, status 200); las vendedoras confirman desde
   SellerCloud. Requiere: usuario API dedicado en SellerCloud, y agregar
   email/UserID de SellerCloud a `clients` (el export 118377 ya los trae).
+- **Sync SellerCloud → catálogo vía n8n**: el lado base de datos ya está
+  corrido y probado en producción (2026-07-10,
+  `supabase/migration-2026-07-10-sellercloud-sync.sql`): tabla `sync_runs`
+  de auditoría + funciones `sync_upsert_products` / `sync_upsert_prices` /
+  `sync_upsert_clients` (SECURITY DEFINER, solo `service_role`; upsert por
+  sku/lista/teléfono, nunca borran). Falta: armar el workflow de n8n que
+  las llame con la service_role key.
 - Enforcement estricto por nivel (mínimo $2,000 para wholesale, etc.) o
   nivel automático por total del carrito ("te faltan $X para precio
   mayorista") — opción C discutida.
@@ -401,4 +412,5 @@ src/
       OrdersAdmin.jsx
       ui.jsx            Piezas compartidas (UploadZone, SearchIcon, ...)
 supabase/schema.sql     Esquema completo + RLS + RPCs + migraciones
+supabase/migration-*.sql  Deltas idempotentes para producción (no re-correr el schema completo)
 ```

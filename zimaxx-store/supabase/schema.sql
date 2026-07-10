@@ -45,6 +45,13 @@ alter table public.vendedores add column if not exists login_email text;
 
 create unique index if not exists vendedoras_user_id_idx on public.vendedores (user_id) where user_id is not null;
 
+-- Lista "personal" de una vendedora (2026-07-09, ej. Luzmar Quintero):
+-- nullable, null en las listas de nivel general (us_min, special, etc.).
+-- Cuando está seteado, el admin panel fuerza vendedora_id = este valor
+-- al elegir esa lista para un cliente — evita que un cliente con precios
+-- especiales de una vendedora quede asignado a otra por error.
+alter table public.price_lists add column if not exists owner_vendedora_id uuid references public.vendedores (id);
+
 create table if not exists public.clients (
   id              uuid primary key default gen_random_uuid(),
   name            text not null,
@@ -103,6 +110,36 @@ begin
     alter table public.clients drop column vendedora_phone;
   end if;
 end $$;
+
+-- Garantiza a nivel de base de datos que un cliente con una lista
+-- "personal" (price_lists.owner_vendedora_id, ej. 'luzmar') SIEMPRE
+-- queda con esa vendedora asignada (2026-07-09, a pedido del usuario:
+-- evitar que un cliente con precios especiales de Luzmar termine en la
+-- cuenta de otra vendedora). ClientsAdmin.jsx ya evita esto en la UI
+-- (auto-completa y bloquea el selector), pero eso es solo UX — este
+-- trigger es la garantía real, cubre también la carga por Excel y
+-- cualquier escritura directa a la tabla que se le escape al frontend.
+create or replace function public.enforce_owner_vendedora()
+returns trigger
+language plpgsql
+as $$
+declare
+  v_owner uuid;
+begin
+  select owner_vendedora_id into v_owner
+  from public.price_lists where id = new.price_list_id;
+
+  if v_owner is not null then
+    new.vendedora_id := v_owner;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists clients_enforce_owner_vendedora on public.clients;
+create trigger clients_enforce_owner_vendedora
+  before insert or update on public.clients
+  for each row execute function public.enforce_owner_vendedora();
 
 create table if not exists public.products (
   id         uuid primary key default gen_random_uuid(),
@@ -192,14 +229,30 @@ create table if not exists public.admins (
 -- que sea editable con el mismo selector "Lista" de siempre, sin un
 -- alta de cliente especial ni un estado "sin asignar" que después no se
 -- pueda tocar.
+-- 'luzmar' (2026-07-09): lista de precio exclusiva de Luzmar Quintero
+-- (jefa de vendedoras) a pedido del usuario — sus clientes se cotizan con
+-- precios propios, distintos de 'special'. Es una lista más en el mismo
+-- selector, sin lógica de negocio especial (a diferencia de 'quote'):
+-- necesita que le suban precios en la pestaña Precios como a cualquier
+-- otra, y se selecciona igual en el alta/edición de cliente.
 insert into public.price_lists (code, label) values
   ('us_min',       'US Minimum Order'),
   ('us_wholesale', 'US Wholesale'),
   ('ve_min',       'VE Minimum Order'),
   ('ve_wholesale', 'VE Wholesale'),
   ('special',      'Special Order'),
-  ('quote',        'Cotización (sin precio)')
+  ('quote',        'Cotización (sin precio)'),
+  ('luzmar',       'Luzmar - Precio Especial')
 on conflict (code) do nothing;
+
+-- Vincula la lista 'luzmar' a la fila de Luzmar Quintero en `vendedores`
+-- (por nombre, sin distinguir mayúsculas — hay índice único sobre
+-- lower(name)). No-op si todavía no existe esa vendedora: se puede
+-- re-correr después de crearla.
+update public.price_lists
+set owner_vendedora_id = (select id from public.vendedores where lower(name) = 'luzmar quintero')
+where code = 'luzmar'
+  and owner_vendedora_id is null;
 
 -- Migración: el nivel $15,000+ pasó por los nombres "distribuidor" y
 -- luego "Special" separados por región (us_special/ve_special). La

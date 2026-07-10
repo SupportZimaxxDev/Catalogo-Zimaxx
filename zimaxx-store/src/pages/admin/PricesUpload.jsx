@@ -13,6 +13,7 @@ const LIST_ALIASES = {
   ve_min: ['ve minimum order', 've min', 've minimum', 've_min'],
   ve_wholesale: ['ve wholesale', 've_wholesale'],
   special: ['special', 'special order', 'us special', 've special'],
+  luzmar: ['luzmar', 'luzmar special', 'precio luzmar', 'luzmar especial'],
 }
 const SKU_ALIASES = ['sku', 'codigo', 'código', 'code', 'productid']
 
@@ -22,7 +23,7 @@ const SKU_ALIASES = ['sku', 'codigo', 'código', 'code', 'productid']
 const GENERIC_PRICE_ALIASES = ['price', 'precio', 'precio unitario', 'unit price']
 
 // Orden fijo de columnas en la matriz de precios.
-const LIST_ORDER = ['us_min', 'us_wholesale', 've_min', 've_wholesale', 'special']
+const LIST_ORDER = ['us_min', 'us_wholesale', 've_min', 've_wholesale', 'special', 'luzmar']
 
 export default function PricesUpload() {
   const { t } = useI18n()
