@@ -74,6 +74,25 @@ function parseLine(raw) {
 // de crédito) que no son productos reales y no deben entrar al catálogo.
 const JUNK_PATTERN = /skustack|support-cost-test|support-s-\d+|client credit discount|^discount$/i
 
+// Productos que no son catálogo vendible y no deben jalarse por ninguna
+// vía (2026-07-13, a pedido del usuario). Misma regla que el lado SQL en
+// migration-2026-07-13-exclude-noncatalog.sql (sync_is_noncatalog_product);
+// si se cambia una lista, cambiar también la otra.
+//   * SKU terminado en -SPECIAL (variante interna de SellerCloud).
+//   * PRODUCT_CATEGORY (COLS.line → product_line) igual a una de estas.
+//     Se compara normalizado (minúsculas, sin espacios de más).
+const SPECIAL_SKU_PATTERN = /-special$/i
+const EXCLUDED_LINES = new Set([
+  'test',
+  'electronics',
+  'packing and shipping supplies',
+  'support',
+  'beauty',
+])
+const normLine = (v) => String(v ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+const isNonCatalog = (skuRaw, lineRaw) =>
+  SPECIAL_SKU_PATTERN.test(String(skuRaw ?? '').trim()) || EXCLUDED_LINES.has(normLine(lineRaw))
+
 // Links a paneles administrativos de inventario (ej. SellerCloud) que
 // vimos colados en exports como si fueran la foto del producto. Nunca
 // son la imagen real: si se cargan como image_url, la foto sale rota.
@@ -177,6 +196,7 @@ export default function ProductsAdmin() {
       const upserts = []
       const skipped = []
       let junk = 0
+      let excluded = 0
 
       // Solo tocar cada campo si el archivo trae su columna: un Excel sin
       // Type/foto/categoría no debe pisar lo ya cargado al re-subirse.
@@ -197,6 +217,12 @@ export default function ProductsAdmin() {
         const skuRaw = pick(row, COLS.sku)
         if (JUNK_PATTERN.test(String(skuRaw ?? '')) || JUNK_PATTERN.test(String(name))) {
           junk++
+          continue
+        }
+        // No-catálogo: SKU -SPECIAL o categoría excluida (beauty, electronics,
+        // support, packing and shipping supplies, test). No se jala.
+        if (isNonCatalog(skuRaw, pick(row, COLS.line))) {
+          excluded++
           continue
         }
         const sku = skuRaw ? String(skuRaw).trim() : generateSku(name)
@@ -243,7 +269,9 @@ export default function ProductsAdmin() {
         ok: true,
         message: `${created} ${t('created')} · ${updated} ${t('updated')} · ${skipped.length} ${t('skipped')}${
           skipped.length ? ` (${skipped.slice(0, 10).join(', ')})` : ''
-        }${junk ? ` · ${junk} ${t('junkExcluded')}` : ''}`,
+        }${junk ? ` · ${junk} ${t('junkExcluded')}` : ''}${
+          excluded ? ` · ${excluded} ${t('nonCatalogExcluded')}` : ''
+        }`,
       })
       await load()
     } catch (err) {

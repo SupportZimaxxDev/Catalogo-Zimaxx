@@ -178,7 +178,12 @@ Actualiza existentes por SKU y crea los nuevos. **Los campos que el archivo
 no trae no se tocan** (re-subir un export sin fotos no borra las fotos).
 Filas basura de sistemas de inventario (Skustack, Support-Test, Discount) se
 excluyen automáticamente, igual que links al panel de SellerCloud colados
-como si fueran fotos.
+como si fueran fotos. **También se excluyen los productos que no son
+catálogo vendible** (2026-07-13): SKU terminado en `-SPECIAL` y categorías
+`PRODUCT_CATEGORY` = beauty / electronics / support / packing and shipping
+supplies / test. Misma regla del lado SQL (`sync_is_noncatalog_product` en
+`migration-2026-07-13-exclude-noncatalog.sql`): si se cambia la lista en un
+lado, cambiarla en el otro.
 
 ### Fotos (🖼️ en pestaña Productos)
 
@@ -366,12 +371,21 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   SellerCloud. Requiere: usuario API dedicado en SellerCloud, y agregar
   email/UserID de SellerCloud a `clients` (el export 118377 ya los trae).
 - **Sync SellerCloud → catálogo vía n8n**: el lado base de datos ya está
-  corrido y probado en producción (2026-07-10,
-  `supabase/migration-2026-07-10-sellercloud-sync.sql`): tabla `sync_runs`
-  de auditoría + funciones `sync_upsert_products` / `sync_upsert_prices` /
-  `sync_upsert_clients` (SECURITY DEFINER, solo `service_role`; upsert por
-  sku/lista/teléfono, nunca borran). Falta: armar el workflow de n8n que
-  las llame con la service_role key.
+  (2026-07-10): `supabase/migration-2026-07-10-sellercloud-sync.sql`
+  (corrida y probada en producción: tabla `sync_runs` de auditoría +
+  `sync_upsert_products` / `sync_upsert_prices`, SECURITY DEFINER, solo
+  `service_role`, upsert nunca delete) y
+  `supabase/migration-2026-07-10-sellercloud-sync-v2.sql` (también
+  corrida y probada: agrega `clients.sellercloud_id` — General.ID de
+  SellerCloud, llave real del sync de clientes —, suelta el NOT NULL de
+  `clients.price_list_id` y reescribe `sync_upsert_clients` con match de
+  vendedora sin acentos + contador `unmatched_salesman`; la lista de
+  precio nunca se toca desde el sync, sigue siendo manual).
+  `migration-2026-07-13-exclude-noncatalog.sql` (2026-07-13) desactiva los
+  productos no-catálogo ya cargados (SKU `-SPECIAL` + categorías beauty/
+  electronics/support/packing and shipping supplies/test) y blinda
+  `sync_upsert_products` para que no los vuelva a jalar (los cuenta en
+  `skipped`). Falta: armar el workflow de n8n con la service_role key.
 - Enforcement estricto por nivel (mínimo $2,000 para wholesale, etc.) o
   nivel automático por total del carrito ("te faltan $X para precio
   mayorista") — opción C discutida.
