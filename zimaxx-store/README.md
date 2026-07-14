@@ -134,7 +134,7 @@ Pestañas:
 
 | Pestaña | Qué hace |
 |---|---|
-| **Productos** | Tabla completa con buscador (nombre/SKU), filtros (categoría/marca, línea de perfume, activo/inactivo/sin foto/pre-order/flash), contadores clickeables de "sin foto", "Pre-Order" y "🔥 Flash Sale", miniaturas, alta/edición manual, y dos cargas por Excel (productos y fotos). |
+| **Productos** | Tabla completa con buscador (nombre/SKU/UPC), filtros (categoría/marca, línea de perfume, activo/inactivo/con stock/sin stock/sin foto/pre-order/flash), columnas **UPC** y **Stock** (datos internos, no se muestran al cliente), contadores clickeables de "sin foto", "Pre-Order" y "🔥 Flash Sale", miniaturas, alta/edición manual, **selección por casillas para activar/desactivar en bloque** (solo admin), y dos cargas por Excel (productos y fotos). |
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador y botones con contador "con precios" / "sin precios". |
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**: vincula el login de la vendedora escribiendo su email y presionando "Vincular acceso" (RPC `link_vendedora_login`) — requiere haber creado antes ese usuario en Supabase Auth. "Desvincular" le quita el acceso sin borrar la vendedora. |
@@ -159,6 +159,9 @@ Acepta tanto un Excel simple como el export de SellerCloud o la lista
 wholesale con membrete:
 
 - **SKU** (`sku`, `codigo`, `ProductID`) — opcional; si falta se autogenera.
+- **UPC** (`upc`, `barcode`, `ean`, 2026-07-14) — código de barras, dato
+  interno del admin (no se muestra al cliente). Se guarda y es visible en la
+  tabla de Productos; también se puede buscar por él.
 - **Nombre** (`nombre`, `name`, `ProductName`, `Title Product`) — obligatorio.
 - **Categoría/marca** (`categoria`, `category`, `Brand`, `marca`).
 - **Línea de perfume** (`PRODUCT_CATEGORY`, `línea`, `segmento`, 2026-07-08):
@@ -172,7 +175,17 @@ wholesale con membrete:
   `Flash Sale` (2026-07-08: antes se trataba como disponible, ahora se
   guarda como su propio estado — badge 🔥 en el catálogo y filtro propio,
   sin relación con la tabla `flash_sales` de ofertas con precio promo).
-- **Activo** (`activo`, `active`): `no/false/0/inactivo` desactiva.
+- **Activo** (`activo`, `active`): `no/false/0/inactivo` desactiva. El
+  inventario **no** toca este campo — activo/inactivo es 100% manual
+  (edición o selección en bloque, ver abajo) más la exclusión de
+  no-catálogo.
+- **Inventario / stock** (`inventoryavailableqty`, `inventory`,
+  `inventario`, `stock`...): si el archivo trae esta columna, se guarda en
+  `products.stock` (no se muestra en la app del cliente) y **decide la
+  disponibilidad**: `>= 1` → Disponible, `0` o negativo → Pre-Order — salvo
+  que el producto esté marcado `flash`, que se conserva. Misma regla que el
+  sync de SellerCloud (`InventoryAvailableQTY`, ver
+  `migration-2026-07-14-inventory-stock.sql`).
 
 Actualiza existentes por SKU y crea los nuevos. **Los campos que el archivo
 no trae no se tocan** (re-subir un export sin fotos no borra las fotos).
@@ -385,7 +398,17 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   productos no-catálogo ya cargados (SKU `-SPECIAL` + categorías beauty/
   electronics/support/packing and shipping supplies/test) y blinda
   `sync_upsert_products` para que no los vuelva a jalar (los cuenta en
-  `skipped`). Falta: armar el workflow de n8n con la service_role key.
+  `skipped`). `migration-2026-07-14-inventory-stock.sql` (2026-07-14)
+  agrega `products.stock` (oculta al cliente) y hace que el inventario del
+  JSON de SellerCloud (`InventoryAvailableQTY`) controle la
+  **disponibilidad** en cada corrida del sync: `>= 1` → Disponible, `0`/
+  negativo → Pre-Order, respetando `flash`. El estado **activo** ya no lo
+  toca el sync (es manual). `migration-2026-07-14-product-upc.sql`
+  (2026-07-14) agrega `products.upc` (código de barras, dato interno del
+  admin) y hace que `sync_upsert_products` lo guarde (campo `upc` del
+  payload). Falta: armar el workflow de n8n con la service_role key (que
+  debe mapear `InventoryAvailableQTY` → `inventory` y `UPC` → `upc` en el
+  payload de `sync_upsert_products`).
 - Enforcement estricto por nivel (mínimo $2,000 para wholesale, etc.) o
   nivel automático por total del carrito ("te faltan $X para precio
   mayorista") — opción C discutida.

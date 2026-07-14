@@ -6,7 +6,7 @@ import { parseSheet, pick, detectImageColumn, looksLikeImageUrl, downloadMissing
 import { generateSku } from '../../utils/token'
 import { SearchIcon, UploadZone, inputCls, useInfiniteRows } from './ui'
 
-const EMPTY = { sku: '', name: '', category: '', image_url: '', active: true, new_until: '' }
+const EMPTY = { sku: '', upc: '', name: '', category: '', image_url: '', active: true, new_until: '' }
 
 // Etiqueta "Nuevo" (2026-07-09): los productos recién creados la llevan
 // automáticamente por ~10 días ("una semana, quizás un poco más") y el
@@ -34,6 +34,7 @@ const isNew = (p) => p.new_until && new Date(p.new_until).getTime() > Date.now()
 // autogenera si falta) y nunca se expone en el catálogo del cliente.
 const COLS = {
   sku: ['sku', 'codigo', 'código', 'code', 'productid'],
+  upc: ['upc', 'codigo de barras', 'código de barras', 'barcode', 'ean'],
   name: ['nombre', 'name', 'producto', 'product', 'productname', 'title product', 'title'],
   category: ['categoria', 'categoría', 'category', 'categoria/talla', 'category/size', 'brand', 'marca'],
   image: ['imagen', 'image', 'image_url', 'foto', 'url imagen', 'imagen url', 'url'],
@@ -48,6 +49,16 @@ const COLS = {
   // del perfume, ej. "Perfume" (diseñador) vs "Perfume - Arabes" (dupes
   // árabes), para poder filtrar por eso en el admin y en el catálogo.
   line: ['product_category', 'product category', 'línea', 'linea', 'segmento'],
+  // Inventario / stock (2026-07-14): si el archivo trae esta columna, se
+  // guarda en products.stock (oculto al cliente) y decide la
+  // DISPONIBILIDAD — >= 1 available, 0/negativo preorder, respetando flash.
+  // El estado activo NO lo toca (es manual, ver bulk). Mismo criterio que el
+  // sync de SellerCloud (InventoryAvailableQTY, ver
+  // migration-2026-07-14-inventory-stock.sql).
+  inventory: [
+    'inventoryavailableqty', 'inventory available qty', 'inventory', 'inventario',
+    'stock', 'available qty', 'availableqty', 'qty disponible',
+  ],
 }
 const FALSY_ACTIVE = new Set(['no', 'false', '0', 'inactivo', 'inactive'])
 
@@ -116,6 +127,29 @@ function parseActive(raw) {
   return !FALSY_ACTIVE.has(String(raw).trim().toLowerCase())
 }
 
+// Stock (InventoryAvailableQTY) → entero, o null si viene vacío/no numérico.
+// El stock decide la disponibilidad (0 → pre-order, >= 1 → available), no
+// el estado activo (eso es manual). Ver migration-2026-07-14-inventory-stock.sql.
+function parseStock(raw) {
+  const cleaned = String(raw ?? '').replace(/[^0-9.-]/g, '')
+  if (cleaned === '') return null
+  const n = Number(cleaned)
+  return Number.isFinite(n) ? Math.floor(n) : null
+}
+
+// Disponibilidad final según el stock, respetando 'flash'. Misma regla que
+// el SQL del sync (coalesce(entrante, existente)): el Type entrante gana
+// sobre lo guardado, y 'flash' se conserva cuando es la disponibilidad
+// efectiva (entrante si vino, si no la ya guardada). Si no es flash, el
+// stock manda (>= 1 available, si no preorder); sin stock, la disponibilidad
+// efectiva o 'available'.
+function resolveAvailability(typeAvail, stock, existingAvail) {
+  const effective = typeAvail ?? existingAvail
+  if (effective === 'flash') return 'flash'
+  if (stock != null) return stock >= 1 ? 'available' : 'preorder'
+  return effective ?? 'available'
+}
+
 export default function ProductsAdmin() {
   const { t } = useI18n()
   // Los dos valores que importan para filtrar se leen en español claro en
@@ -139,6 +173,8 @@ export default function ProductsAdmin() {
   const [catFilter, setCatFilter] = useState('')
   const [lineFilter, setLineFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  // Selección para activar/desactivar en bloque (por casillas). Set de ids.
+  const [selected, setSelected] = useState(() => new Set())
   const [visibleRows, sentinelRef] = useInfiniteRows(100, [query, catFilter, lineFilter, statusFilter])
 
   const load = async () => {
@@ -171,11 +207,18 @@ export default function ProductsAdmin() {
         return false
       if (statusFilter === 'active' && !p.active) return false
       if (statusFilter === 'inactive' && p.active) return false
+      if (statusFilter === 'instock' && !(p.stock >= 1)) return false
+      if (statusFilter === 'nostock' && !(p.stock != null && p.stock <= 0)) return false
       if (statusFilter === 'noimage' && p.image_url) return false
       if (statusFilter === 'preorder' && p.availability !== 'preorder') return false
       if (statusFilter === 'flash' && p.availability !== 'flash') return false
       if (statusFilter === 'new' && !isNew(p)) return false
-      if (q && !p.name.toLowerCase().includes(q) && !String(p.sku).toLowerCase().includes(q))
+      if (
+        q &&
+        !p.name.toLowerCase().includes(q) &&
+        !String(p.sku).toLowerCase().includes(q) &&
+        !String(p.upc ?? '').toLowerCase().includes(q)
+      )
         return false
       return true
     })
@@ -193,6 +236,7 @@ export default function ProductsAdmin() {
       if (rows.length === 0) throw new Error('Archivo vacío')
 
       const existingSkus = new Set(products.map((p) => String(p.sku).toLowerCase()))
+      const bySku = new Map(products.map((p) => [String(p.sku).toLowerCase(), p]))
       const upserts = []
       const skipped = []
       let junk = 0
@@ -207,6 +251,8 @@ export default function ProductsAdmin() {
       const hasImage = rows.length > 0 && (COLS.image.some((a) => a in rows[0]) || !!autoImageCol)
       const hasCategory = rows.length > 0 && COLS.category.some((a) => a in rows[0])
       const hasLine = rows.length > 0 && COLS.line.some((a) => a in rows[0])
+      const hasInventory = rows.length > 0 && COLS.inventory.some((a) => a in rows[0])
+      const hasUpc = rows.length > 0 && COLS.upc.some((a) => a in rows[0])
 
       for (const [idx, row] of rows.entries()) {
         const name = pick(row, COLS.name)
@@ -233,15 +279,24 @@ export default function ProductsAdmin() {
           image &&
           !NOT_AN_IMAGE_PATTERN.test(String(image)) &&
           (aliasImage ? true : looksLikeImageUrl(image))
+        // El stock (si el archivo lo trae) decide la disponibilidad: 0 →
+        // pre-order, >= 1 → available, respetando 'flash'. El estado activo
+        // NO lo toca el inventario (es manual, ver bulk); se usa la columna
+        // Activo como siempre.
+        const typeAvail = hasAvailability ? parseAvailability(pick(row, COLS.availability)) : null
+        const stock = hasInventory ? parseStock(pick(row, COLS.inventory)) : null
+        const existing = bySku.get(sku.toLowerCase())
         upserts.push({
           sku,
           name: String(name).trim(),
           active: parseActive(pick(row, COLS.active)),
+          ...(hasUpc ? { upc: pick(row, COLS.upc) || null } : {}),
           ...(hasCategory ? { category: pick(row, COLS.category) || null } : {}),
           ...(hasLine ? { product_line: parseLine(pick(row, COLS.line)) } : {}),
           ...(hasImage ? { image_url: imageOk ? String(image).trim() : null } : {}),
-          ...(hasAvailability
-            ? { availability: parseAvailability(pick(row, COLS.availability)) }
+          ...(hasInventory ? { stock } : {}),
+          ...(hasAvailability || hasInventory
+            ? { availability: resolveAvailability(typeAvail, stock, existing?.availability) }
             : {}),
         })
       }
@@ -358,6 +413,7 @@ export default function ProductsAdmin() {
     setError('')
     const payload = {
       sku: form.sku.trim() || generateSku(form.name),
+      upc: form.upc?.trim() || null,
       name: form.name.trim(),
       category: form.category.trim() || null,
       image_url: form.image_url.trim() || null,
@@ -379,6 +435,43 @@ export default function ProductsAdmin() {
   const toggleActive = async (p) => {
     await supabase.from('products').update({ active: !p.active }).eq('id', p.id)
     await load()
+  }
+
+  // ----- Selección + activación/desactivación en bloque -----
+  const toggleSelect = (id) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  // Casilla de encabezado: selecciona/deselecciona todos los productos que
+  // pasan los filtros actuales (no solo los renderizados por scroll).
+  const allFilteredSelected = filtered.length > 0 && filtered.every((p) => selected.has(p.id))
+  const toggleSelectAll = () =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (filtered.length > 0 && filtered.every((p) => next.has(p.id))) {
+        filtered.forEach((p) => next.delete(p.id))
+      } else {
+        filtered.forEach((p) => next.add(p.id))
+      }
+      return next
+    })
+
+  const bulkSetActive = async (value) => {
+    const ids = [...selected]
+    if (ids.length === 0) return
+    setBusy(true)
+    setError('')
+    const { error } = await supabase.from('products').update({ active: value }).in('id', ids)
+    if (error) setError(error.message)
+    else {
+      setSelected(new Set())
+      await load()
+    }
+    setBusy(false)
   }
 
   const noImageCount = products.filter((p) => !p.image_url).length
@@ -506,6 +599,12 @@ export default function ProductsAdmin() {
             className={inputCls}
           />
           <input
+            placeholder="UPC (opcional)"
+            value={form.upc ?? ''}
+            onChange={(e) => setForm({ ...form, upc: e.target.value })}
+            className={inputCls}
+          />
+          <input
             required
             placeholder={t('name')}
             value={form.name}
@@ -616,6 +715,8 @@ export default function ProductsAdmin() {
           <option value="">{t('allStatuses')}</option>
           <option value="active">{t('active')}</option>
           <option value="inactive">{t('inactive')}</option>
+          <option value="instock">{t('inStock')}</option>
+          <option value="nostock">{t('outOfStock')}</option>
           <option value="noimage">{t('noImage')}</option>
           <option value="preorder">{t('preorder')}</option>
           <option value="flash">{t('flashSale')}</option>
@@ -623,21 +724,80 @@ export default function ProductsAdmin() {
         </select>
       </div>
 
+      {/* Barra de acción para la selección en bloque (solo admin) */}
+      {isAdmin && selected.size > 0 && (
+        <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-2xl border border-secondary/40 bg-gold-pale/60 px-4 py-2.5 shadow-sm">
+          <span className="text-sm font-semibold text-primary">
+            {selected.size} {t('selected')}
+          </span>
+          <div className="ml-auto flex gap-2">
+            <button
+              disabled={busy}
+              onClick={() => bulkSetActive(true)}
+              className="rounded-full bg-green-600 px-4 py-1.5 text-xs font-bold text-white transition-colors hover:bg-green-700 disabled:opacity-50"
+            >
+              {t('activate')}
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => bulkSetActive(false)}
+              className="rounded-full bg-red-600 px-4 py-1.5 text-xs font-bold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+            >
+              {t('deactivate')}
+            </button>
+            <button
+              onClick={() => setSelected(new Set())}
+              className="rounded-full border border-line px-4 py-1.5 text-xs font-semibold text-primary/60 transition-colors hover:border-primary/40"
+            >
+              {t('clearSelection')}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-sm">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-line text-left text-[11px] uppercase tracking-wider text-primary/45">
+              {isAdmin && (
+                <th className="p-3">
+                  <input
+                    type="checkbox"
+                    checked={allFilteredSelected}
+                    onChange={toggleSelectAll}
+                    className="accent-secondary"
+                    title={t('selectAll')}
+                  />
+                </th>
+              )}
               <th className="p-3" />
               <th className="p-3">SKU</th>
+              <th className="p-3">UPC</th>
               <th className="p-3">{t('name')}</th>
               <th className="p-3">{t('category')}</th>
+              <th className="p-3">{t('stock')}</th>
               <th className="p-3">{t('active')}</th>
               <th className="p-3" />
             </tr>
           </thead>
           <tbody>
             {filtered.slice(0, visibleRows).map((p) => (
-              <tr key={p.id} className="border-b border-line/60 transition-colors hover:bg-gold-pale/20">
+              <tr
+                key={p.id}
+                className={`border-b border-line/60 transition-colors hover:bg-gold-pale/20 ${
+                  selected.has(p.id) ? 'bg-gold-pale/40' : ''
+                }`}
+              >
+                {isAdmin && (
+                  <td className="py-2 pl-3">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(p.id)}
+                      onChange={() => toggleSelect(p.id)}
+                      className="accent-secondary"
+                    />
+                  </td>
+                )}
                 <td className="py-2 pl-3">
                   {p.image_url ? (
                     <img
@@ -653,6 +813,7 @@ export default function ProductsAdmin() {
                   )}
                 </td>
                 <td className="p-3 font-mono text-xs text-primary/60">{p.sku}</td>
+                <td className="p-3 font-mono text-xs text-primary/60">{p.upc}</td>
                 <td className="p-3 font-medium">
                   {p.name}
                   {p.availability === 'preorder' && (
@@ -679,6 +840,19 @@ export default function ProductsAdmin() {
                   {p.product_line && (
                     <span className="ml-1.5 rounded-full bg-primary/5 px-2 py-0.5 text-[10px] font-semibold text-primary/50">
                       {lineLabel(p.product_line)}
+                    </span>
+                  )}
+                </td>
+                <td className="p-3">
+                  {p.stock == null ? (
+                    <span className="text-primary/30">—</span>
+                  ) : (
+                    <span
+                      className={
+                        p.stock <= 0 ? 'font-semibold text-red-600 dark:text-red-400' : 'text-primary/70'
+                      }
+                    >
+                      {p.stock}
                     </span>
                   )}
                 </td>
