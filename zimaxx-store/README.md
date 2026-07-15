@@ -122,7 +122,7 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
 Login con email/password (Supabase Auth). Dos roles, resueltos por el RPC
 `get_my_role()`:
 
-- **Admin** (tabla `admins`): acceso total (lectura y escritura) a las 7
+- **Admin** (tabla `admins`): acceso total (lectura y escritura) a las 8
   pestañas.
 - **Vendedora** (`vendedores.user_id` vinculado a un login): ve **solo
   sus propios clientes y pedidos** (RLS filtra por fila, no por UI —
@@ -140,8 +140,9 @@ Pestañas:
 |---|---|
 | **Productos** | Tabla completa con buscador (nombre/SKU/UPC), filtros (categoría/marca, línea de perfume, activo/inactivo/con stock/sin stock/sin foto/pre-order/flash), columnas **UPC** y **Stock** (datos internos, no se muestran al cliente), contadores clickeables de "sin foto", "Pre-Order" y "🔥 Flash Sale", miniaturas, alta/edición manual, **selección por casillas para activar/desactivar en bloque** (solo admin), y dos cargas por Excel (productos y fotos). |
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador y botones con contador "con precios" / "sin precios". |
-| **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), **reasignar vendedora** por fila y **eliminar cliente** (ambos solo admin, vía RPC con registro de auditoría), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). Abajo, **🛡️ Registro de movimientos** (solo admin): historial de quién reasignó o borró cada cliente. |
-| **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**: vincula el login de la vendedora escribiendo su email y presionando "Vincular acceso" (RPC `link_vendedora_login`) — requiere haber creado antes ese usuario en Supabase Auth. "Desvincular" le quita el acceso sin borrar la vendedora. |
+| **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila** y campo **"$ inversión → nivel"** (asigna el nivel automáticamente), **reasignar vendedora** por fila y **eliminar cliente** (ambos solo admin, vía RPC con registro de auditoría), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
+| **🛡️ Registro de movimientos** (solo admin, pestaña propia desde 2026-07-15 — antes vivía colapsada dentro de Clientes) | Historial de quién reasignó o borró cada cliente (fecha, usuario, acción, cliente, detalle), leído directo de `admin_audit_log`. Es de solo lectura: la tabla no tiene policy de insert/update/delete para nadie, solo la escriben las RPC `reassign_client`/`delete_client`. |
+| **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**, dos formas de dar acceso a una vendedora sin cuenta: **"Vincular acceso"** (email de un usuario que ya existe en Supabase Auth, RPC `link_vendedora_login`) o **"+ Crear acceso"** (2026-07-15: crea el usuario de una — el admin define email + contraseña inicial ahí mismo, sin pasar por el dashboard de Supabase — vía la Edge Function `admin-create-vendedora-user`, ver sección 6). "Desvincular" le quita el acceso sin borrar la vendedora ni el usuario de Auth. |
 | **Flash Sales** | Crear ofertas con precio promo y vencimiento (alta manual, un producto a la vez) o **carga masiva por Excel** (2026-07-08: mismo archivo semanal "Special Flash Sale" con formato letterhead — UPC/Sku/Brand/Title Product/Price/Type/Qty/Total —, matchea por SKU y precio propio de cada fila; la fecha de inicio/fin se elige una vez con el selector de arriba y se aplica a todos los productos del archivo). Visibles para todos con countdown; **se apagan solas por fecha, sin acción manual** (`get_flash_sales()` ya filtra por `expires_at`). La tabla del admin distingue 4 estados (`LIVE` / Programada / Expiró / Desactivada, 2026-07-08) — el botón "Desactivar" es solo para cortar una oferta *antes* de su fecha de fin, no hace falta para que termine normalmente. |
 | **Pedidos** | Últimos 200 con detalle expandible; cada pedido se marca **Nuevo/Atendido** y el menú muestra el contador de pedidos sin atender. Buscador (nombre/teléfono del cliente) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botón **"Descargar Excel"** por fila: exporta el pedido con las columnas exactas de `UploadTemplate.xls` (`ProductID`, `ProductName`, `UnitPrice`, `Qty`, `ShipFromWarehouseName`, este último fijo en `"Zimaxx"`) para subirlo directo al bulk-order upload de SellerCloud. |
 
@@ -390,6 +391,25 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   `delete_client` rechaza si el cliente tiene pedidos (no se pierde el
   historial de ventas). `admin_audit_log` es de solo lectura para admin
   (RLS), la escriben solo esas funciones.
+- **Crear acceso de vendedora desde el panel** (2026-07-15,
+  `supabase/functions/admin-create-vendedora-user/index.ts`): antes,
+  `link_vendedora_login` solo podía **vincular** un usuario ya creado a
+  mano en el dashboard de Supabase Auth. Crear un usuario **con
+  contraseña** requiere la Admin API de GoTrue (`auth.admin.createUser`),
+  que solo se puede llamar con la **service_role key** — nunca desde el
+  navegador, así que es una Edge Function y no una RPC de Postgres. La
+  función valida que quien llama sea admin reusando la RPC `is_admin()`
+  (con el JWT de quien llama, no con la service_role key, para no
+  duplicar esa regla en dos lugares); si el admin es válido, crea el
+  usuario y en el mismo paso vincula `vendedores.user_id`/`login_email` —
+  si el link fallara, borra el usuario recién creado para no dejarlo
+  huérfano. **Requiere deploy manual** (no está automatizado, igual que
+  las migraciones SQL): `supabase functions deploy
+  admin-create-vendedora-user` desde `zimaxx-store/` (necesita
+  `supabase login` + `supabase link --project-ref <ref>` la primera vez).
+  No hace falta configurar secrets: `SUPABASE_URL`/`SUPABASE_ANON_KEY`/
+  `SUPABASE_SERVICE_ROLE_KEY` ya vienen inyectadas por el runtime de Edge
+  Functions.
 - Tokens de cliente: 10 caracteres, `crypto.getRandomValues`, sin caracteres
   ambiguos.
 - **`Referrer-Policy: no-referrer`** (meta + header en `netlify.toml`): el
@@ -439,8 +459,12 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   para que una vendedora no vea la lista/precios "personales" de otra,
   ver sección 6). El código de Flash Sales oculto para vendedora ya se
   puede desplegar sin esperar esta migración (es solo frontend).
-- **Pendiente (próxima sesión, a pedido del usuario):** crear
-  usuarios/accesos para otras vendedoras desde el panel admin.
+- **Pendiente: deploy de la Edge Function
+  `supabase/functions/admin-create-vendedora-user`** (2026-07-15, ver
+  sección 6) — sin desplegarla, el botón "+ Crear acceso" de la pestaña
+  Vendedoras falla (la función no existe todavía en el proyecto de
+  Supabase). El resto del código (frontend + "Vincular acceso" con un
+  usuario ya existente) ya funciona sin esto.
 - Enforcement estricto por nivel (mínimo $2,000 para wholesale, etc.) o
   nivel automático por total del carrito ("te faltan $X para precio
   mayorista") — opción C discutida.
@@ -476,10 +500,12 @@ src/
       ProductsAdmin.jsx Productos + carga Excel + fotos Excel
       PricesUpload.jsx  Precios Excel + matriz por lista
       ClientsAdmin.jsx  Clientes + niveles por inversión
-      VendedoresAdmin.jsx  Alta manual de vendedoras + teléfono
+      AuditLogAdmin.jsx Registro de movimientos (reasignar/eliminar clientes)
+      VendedoresAdmin.jsx  Alta manual de vendedoras + teléfono + acceso
       FlashSalesAdmin.jsx
       OrdersAdmin.jsx
       ui.jsx            Piezas compartidas (UploadZone, SearchIcon, ...)
 supabase/schema.sql     Esquema completo + RLS + RPCs + migraciones
 supabase/migration-*.sql  Deltas idempotentes para producción (no re-correr el schema completo)
+supabase/functions/admin-create-vendedora-user/  Edge Function (Deno) — crea el usuario de Auth de una vendedora, requiere deploy manual
 ```

@@ -133,11 +133,10 @@ export default function ClientsAdmin() {
   const [result, setResult] = useState(null)
   const [copiedId, setCopiedId] = useState(null)
 
-  // Reasignar / eliminar (admin) + su registro de auditoría.
+  // Reasignar / eliminar (admin) — el registro de auditoría vive en su
+  // propio panel, ver AuditLogAdmin.jsx.
   const [actionError, setActionError] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
-  const [auditOpen, setAuditOpen] = useState(false)
-  const [auditRows, setAuditRows] = useState([])
 
   // Alta individual (2026-07-07): la vendedora no elige a quién asignar,
   // el RLS (vendedora_insert_own_clients) exige que sea ella misma — acá
@@ -411,19 +410,6 @@ export default function ClientsAdmin() {
       return
     }
     await load()
-  }
-
-  const toggleAudit = async () => {
-    const next = !auditOpen
-    setAuditOpen(next)
-    if (next) {
-      const { data } = await supabase
-        .from('admin_audit_log')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(100)
-      setAuditRows(data ?? [])
-    }
   }
 
   // Monto que el cliente dice que va a invertir → nivel dentro de su
@@ -733,68 +719,6 @@ export default function ClientsAdmin() {
           {filtered.length} {t('results')}
         </div>
       </div>
-
-      {/* Registro de movimientos: reasignaciones y borrados de clientes,
-          con el usuario que los hizo. Solo admin (RLS admin_read_audit). */}
-      {isAdmin && (
-        <div className="rounded-2xl border border-line bg-surface shadow-sm">
-          <button
-            onClick={toggleAudit}
-            className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-semibold text-primary/70 transition-colors hover:text-primary"
-          >
-            <span>🛡️ {t('activityLog')}</span>
-            <span className="text-primary/40">{auditOpen ? '▲' : '▼'}</span>
-          </button>
-          {auditOpen && (
-            <div className="overflow-x-auto border-t border-line">
-              {auditRows.length === 0 ? (
-                <p className="px-4 py-3 text-xs text-primary/50">{t('noActivity')}</p>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-line text-left text-[11px] uppercase tracking-wider text-primary/45">
-                      <th className="p-3">{t('date')}</th>
-                      <th className="p-3">{t('user')}</th>
-                      <th className="p-3">{t('action')}</th>
-                      <th className="p-3">{t('client')}</th>
-                      <th className="p-3">Detalle</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {auditRows.map((a) => (
-                      <tr key={a.id} className="border-b border-line/60">
-                        <td className="whitespace-nowrap p-3 text-xs text-primary/60">
-                          {new Date(a.created_at).toLocaleString()}
-                        </td>
-                        <td className="p-3 text-xs text-primary/70">{a.performed_by_email}</td>
-                        <td className="p-3">
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
-                              a.action === 'delete_client'
-                                ? 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'
-                                : 'bg-gold-pale text-secondary-dark'
-                            }`}
-                          >
-                            {a.action === 'delete_client' ? t('actionDelete') : t('actionReassign')}
-                          </span>
-                        </td>
-                        <td className="p-3 font-medium">{a.client_name}</td>
-                        <td className="p-3 text-xs text-primary/60">
-                          {a.action === 'reassign_client'
-                            ? `${a.detail?.from_vendedora ?? t('unassigned')} → ${a.detail?.to_vendedora ?? t('unassigned')}`
-                            : [a.detail?.phone, a.detail?.vendedora, a.detail?.lista]
-                                .filter(Boolean)
-                                .join(' · ')}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   )
 }

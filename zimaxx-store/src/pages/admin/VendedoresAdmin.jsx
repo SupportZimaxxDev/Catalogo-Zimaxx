@@ -23,6 +23,13 @@ export default function VendedoresAdmin() {
   const [linkBusyId, setLinkBusyId] = useState(null)
   const [linkError, setLinkError] = useState({}) // id -> mensaje de error
 
+  // Crear un acceso nuevo (usuario de Supabase Auth) en vez de vincular
+  // uno ya existente: un solo formulario abierto a la vez (createOpenId).
+  const [createOpenId, setCreateOpenId] = useState(null)
+  const [createForm, setCreateForm] = useState({ email: '', password: '' })
+  const [createBusyId, setCreateBusyId] = useState(null)
+  const [createError, setCreateError] = useState({}) // id -> mensaje de error
+
   const load = async () => {
     try {
       const [vs, cs] = await Promise.all([
@@ -137,6 +144,40 @@ export default function VendedoresAdmin() {
     if (!error) {
       setVendedoras((prev) => prev.map((v) => (v.id === id ? { ...v, login_email: null } : v)))
     }
+  }
+
+  const openCreate = (id) => {
+    setCreateOpenId(id)
+    setCreateForm({ email: '', password: '' })
+    setCreateError((prev) => ({ ...prev, [id]: '' }))
+  }
+
+  // Crea el usuario de Auth y lo vincula, todo en un solo paso, vía la
+  // Edge Function admin-create-vendedora-user (necesita la service_role
+  // key, imposible desde el navegador — ver el archivo para el detalle).
+  const createAccess = async (id) => {
+    const email = createForm.email.trim()
+    const password = createForm.password
+    if (!email || password.length < 6) return
+    setCreateBusyId(id)
+    setCreateError((prev) => ({ ...prev, [id]: '' }))
+    const { data, error } = await supabase.functions.invoke('admin-create-vendedora-user', {
+      body: { vendedora_id: id, email, password },
+    })
+    if (error || data?.error) {
+      let message = data?.error || error.message
+      try {
+        const body = await error?.context?.json()
+        if (body?.error) message = body.error
+      } catch {
+        /* sin body JSON legible, se usa error.message */
+      }
+      setCreateError((prev) => ({ ...prev, [id]: message }))
+    } else {
+      setVendedoras((prev) => prev.map((v) => (v.id === id ? { ...v, login_email: email } : v)))
+      setCreateOpenId(null)
+    }
+    setCreateBusyId(null)
   }
 
   return (
@@ -255,29 +296,80 @@ export default function VendedoresAdmin() {
                         {t('unlinkAccess')}
                       </button>
                     </div>
-                  ) : (
-                    <div className="flex items-center gap-1.5">
+                  ) : createOpenId === v.id ? (
+                    <div className="w-48 space-y-1.5 rounded-lg border border-secondary/40 bg-gold-pale/10 p-2">
                       <input
                         type="email"
-                        value={linkEmail[v.id] ?? ''}
-                        onChange={(e) =>
-                          setLinkEmail((prev) => ({ ...prev, [v.id]: e.target.value }))
-                        }
+                        autoFocus
+                        value={createForm.email}
+                        onChange={(e) => setCreateForm((f) => ({ ...f, email: e.target.value }))}
                         placeholder={t('loginEmailPlaceholder')}
-                        className="w-40 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
+                        className="w-full rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
                       />
+                      <input
+                        type="text"
+                        value={createForm.password}
+                        onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))}
+                        placeholder={t('newPasswordPlaceholder')}
+                        className="w-full rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
+                      />
+                      <div className="flex gap-1.5">
+                        <button
+                          disabled={
+                            createBusyId === v.id ||
+                            !createForm.email.trim() ||
+                            createForm.password.length < 6
+                          }
+                          onClick={() => createAccess(v.id)}
+                          className="rounded-lg bg-secondary px-2.5 py-1 text-xs font-bold text-ink transition-colors hover:bg-secondary-dark disabled:opacity-50"
+                        >
+                          {t('createAccess')}
+                        </button>
+                        <button
+                          onClick={() => setCreateOpenId(null)}
+                          className="rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-primary/40"
+                        >
+                          {t('cancel')}
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-primary/50">{t('newPasswordHint')}</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="email"
+                          value={linkEmail[v.id] ?? ''}
+                          onChange={(e) =>
+                            setLinkEmail((prev) => ({ ...prev, [v.id]: e.target.value }))
+                          }
+                          placeholder={t('loginEmailPlaceholder')}
+                          className="w-40 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
+                        />
+                        <button
+                          disabled={linkBusyId === v.id || !(linkEmail[v.id] ?? '').trim()}
+                          onClick={() => linkAccess(v.id)}
+                          className="whitespace-nowrap rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary disabled:opacity-50"
+                        >
+                          {t('linkAccess')}
+                        </button>
+                      </div>
                       <button
-                        disabled={linkBusyId === v.id || !(linkEmail[v.id] ?? '').trim()}
-                        onClick={() => linkAccess(v.id)}
-                        className="whitespace-nowrap rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary disabled:opacity-50"
+                        onClick={() => openCreate(v.id)}
+                        className="text-[11px] font-semibold text-secondary-dark hover:underline"
                       >
-                        {t('linkAccess')}
+                        + {t('createAccess')}
                       </button>
                     </div>
                   )}
                   {linkError[v.id] && (
                     <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">
                       {linkError[v.id]}
+                    </p>
+                  )}
+                  {createError[v.id] && (
+                    <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">
+                      {createError[v.id]}
                     </p>
                   )}
                 </td>

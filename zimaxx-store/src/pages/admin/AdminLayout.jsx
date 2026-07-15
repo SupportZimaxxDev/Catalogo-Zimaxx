@@ -124,11 +124,14 @@ export default function AdminLayout() {
     )
   }
 
-  // Una vendedora no tiene pestaña Vendedoras ni Flash Sales, ni acceso a
-  // esas rutas; si llega por URL directa se la redirige.
+  // Una vendedora no tiene pestaña Registro de movimientos, Vendedoras ni
+  // Flash Sales, ni acceso a esas rutas; si llega por URL directa se la
+  // redirige.
   if (
     role === 'vendedora' &&
-    (location.pathname.startsWith('/admin/vendedoras') || location.pathname.startsWith('/admin/flash'))
+    (location.pathname.startsWith('/admin/audit') ||
+      location.pathname.startsWith('/admin/vendedoras') ||
+      location.pathname.startsWith('/admin/flash'))
   ) {
     return <Navigate to="/admin" replace />
   }
@@ -137,6 +140,7 @@ export default function AdminLayout() {
     { to: '/admin', label: t('products'), end: true },
     { to: '/admin/prices', label: t('prices') },
     { to: '/admin/clients', label: t('clients') },
+    ...(isAdmin ? [{ to: '/admin/audit', label: t('activityLog') }] : []),
     ...(isAdmin ? [{ to: '/admin/vendedoras', label: t('vendedoras') }] : []),
     ...(isAdmin ? [{ to: '/admin/flash', label: t('flashSales') }] : []),
     { to: '/admin/orders', label: t('orders'), badge: newOrders },

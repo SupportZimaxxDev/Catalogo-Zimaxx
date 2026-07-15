@@ -7,6 +7,7 @@ const AdminLayout = lazy(() => import('./pages/admin/AdminLayout'))
 const ProductsAdmin = lazy(() => import('./pages/admin/ProductsAdmin'))
 const PricesUpload = lazy(() => import('./pages/admin/PricesUpload'))
 const ClientsAdmin = lazy(() => import('./pages/admin/ClientsAdmin'))
+const AuditLogAdmin = lazy(() => import('./pages/admin/AuditLogAdmin'))
 const VendedorasAdmin = lazy(() => import('./pages/admin/VendedoresAdmin'))
 const FlashSalesAdmin = lazy(() => import('./pages/admin/FlashSalesAdmin'))
 const OrdersAdmin = lazy(() => import('./pages/admin/OrdersAdmin'))
@@ -29,6 +30,7 @@ export default function App() {
           <Route index element={<ProductsAdmin />} />
           <Route path="prices" element={<PricesUpload />} />
           <Route path="clients" element={<ClientsAdmin />} />
+          <Route path="audit" element={<AuditLogAdmin />} />
           <Route path="vendedoras" element={<VendedorasAdmin />} />
           <Route path="flash" element={<FlashSalesAdmin />} />
           <Route path="orders" element={<OrdersAdmin />} />
