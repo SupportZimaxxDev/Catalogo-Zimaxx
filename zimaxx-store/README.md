@@ -127,8 +127,12 @@ Login con email/password (Supabase Auth). Dos roles, resueltos por el RPC
 - **Vendedora** (`vendedores.user_id` vinculado a un login): ve **solo
   sus propios clientes y pedidos** (RLS filtra por fila, no por UI —
   nunca ve cuántos clientes/pedidos tienen otras vendedoras), y Productos
-  / Precios / Flash Sales **de solo lectura** (sin botones de carga ni
-  edición). No tiene pestaña Vendedoras.
+  / Precios **de solo lectura** (sin botones de carga ni edición). No
+  tiene pestaña Vendedoras ni **Flash Sales** (2026-07-15, oculta por
+  completo para el rol vendedora). En Precios, una lista "personal" (ej.
+  `luzmar`) solo la ve su dueña — el resto ni la ve en la matriz ni en el
+  selector de listas (2026-07-15, RLS `vendedora_select_price_lists`/
+  `vendedora_select_product_prices`).
 
 Pestañas:
 
@@ -356,15 +360,26 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   `admin_all`, no la reemplazan) le dan a ese usuario `select` de sus
   propios `clients`/`orders` (filtrado por `vendedora_id`), `select` de
   su propia fila en `vendedores`, `select` de solo lectura de
-  `price_lists`/`products`/`product_prices`/`flash_sales`, y `update`
-  acotado a sus propios `orders` (para marcar atendido/reabrir). También
-  tiene `insert` en `clients` (2026-07-07, `vendedora_insert_own_clients`)
-  pero **solo si `vendedora_id` = ella misma** — no puede crear un cliente
-  sin asignar ni para otra vendedora. Fuera de eso no puede
-  insertar/actualizar/borrar nada más — el frontend además oculta esos
-  controles para esa vista, pero la restricción real vive en RLS, no en
-  la UI. El RPC `get_my_role()` resuelve `'admin' | 'vendedora' | null`
-  para que `AdminLayout.jsx` arme las pestañas correctas.
+  `products`/`flash_sales`, y `update` acotado a sus propios `orders`
+  (para marcar atendido/reabrir). También tiene `insert` en `clients`
+  (2026-07-07, `vendedora_insert_own_clients`) pero **solo si
+  `vendedora_id` = ella misma** — no puede crear un cliente sin asignar
+  ni para otra vendedora. Fuera de eso no puede insertar/actualizar/
+  borrar nada más — el frontend además oculta esos controles para esa
+  vista, pero la restricción real vive en RLS, no en la UI. El RPC
+  `get_my_role()` resuelve `'admin' | 'vendedora' | null` para que
+  `AdminLayout.jsx` arme las pestañas correctas (2026-07-15: a una
+  vendedora ya no le arma pestaña Flash Sales, con redirect si entra por
+  URL directa).
+- **`price_lists`/`product_prices` con dueña** (2026-07-15,
+  `migration-2026-07-15-restrict-vendedora-luzmar.sql`): la policy de
+  solo-lectura de una vendedora sobre estas dos tablas ya no es un
+  blanket `is_vendedora()` — ahora exige que la lista sea general
+  (`owner_vendedora_id is null`) o suya (`owner_vendedora_id =
+  current_vendedora_id()`). Antes cualquier vendedora podía ver la
+  columna/precios de una lista "personal" ajena (ej. `luzmar`) en la
+  matriz de Precios y en el selector de listas; ahora esas filas
+  directamente no vienen en la respuesta de Supabase para el resto.
 - **Reasignar/eliminar clientes con auditoría** (2026-07-14,
   `migration-2026-07-14-client-admin-actions.sql`): solo admin, vía RPC
   `SECURITY DEFINER` `reassign_client(p_client_id, p_vendedora_id)` y
@@ -419,6 +434,13 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   payload). Falta: armar el workflow de n8n con la service_role key (que
   debe mapear `InventoryAvailableQTY` → `inventory` y `UPC` → `upc` en el
   payload de `sync_upsert_products`).
+- **Pendiente: correr `migration-2026-07-15-restrict-vendedora-luzmar.sql`**
+  en producción (restringe la lectura de `price_lists`/`product_prices`
+  para que una vendedora no vea la lista/precios "personales" de otra,
+  ver sección 6). El código de Flash Sales oculto para vendedora ya se
+  puede desplegar sin esperar esta migración (es solo frontend).
+- **Pendiente (próxima sesión, a pedido del usuario):** crear
+  usuarios/accesos para otras vendedoras desde el panel admin.
 - Enforcement estricto por nivel (mínimo $2,000 para wholesale, etc.) o
   nivel automático por total del carrito ("te faltan $X para precio
   mayorista") — opción C discutida.

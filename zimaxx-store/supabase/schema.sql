@@ -410,12 +410,15 @@ create policy vendedora_update_own_orders on public.orders
   using (client_id in (select id from public.clients where vendedora_id = public.current_vendedora_id()))
   with check (client_id in (select id from public.clients where vendedora_id = public.current_vendedora_id()));
 
--- Catálogo/precios/flash de solo lectura para cualquier vendedora
--- (consulta, no edición) — igual acceso de lectura que ya tienen los admins.
+-- Catálogo/flash de solo lectura para cualquier vendedora (consulta, no
+-- edición) — igual acceso de lectura que ya tienen los admins.
+-- price_lists/product_prices NO van acá: tienen su propia policy más abajo
+-- porque una lista "personal" (owner_vendedora_id, ej. 'luzmar') es de
+-- lectura exclusiva de esa vendedora, no de cualquiera con el rol.
 do $$
 declare t text;
 begin
-  foreach t in array array['price_lists','products','product_prices','flash_sales']
+  foreach t in array array['products','flash_sales']
   loop
     execute format('drop policy if exists vendedora_select_readonly on public.%I', t);
     execute format(
@@ -424,6 +427,33 @@ begin
     );
   end loop;
 end $$;
+
+-- price_lists/product_prices: cualquier vendedora ve las listas "generales"
+-- (owner_vendedora_id null), pero una lista "personal" (ej. 'luzmar') solo
+-- la ve su dueña — el resto de vendedoras no debe ver esa columna en la
+-- matriz de precios ni esa opción en los selectores de lista (2026-07-15,
+-- a pedido del usuario: son precios negociados en privado con esa vendedora).
+drop policy if exists vendedora_select_readonly on public.price_lists;
+drop policy if exists vendedora_select_price_lists on public.price_lists;
+create policy vendedora_select_price_lists on public.price_lists
+  for select to authenticated
+  using (
+    public.is_vendedora()
+    and (owner_vendedora_id is null or owner_vendedora_id = public.current_vendedora_id())
+  );
+
+drop policy if exists vendedora_select_readonly on public.product_prices;
+drop policy if exists vendedora_select_product_prices on public.product_prices;
+create policy vendedora_select_product_prices on public.product_prices
+  for select to authenticated
+  using (
+    public.is_vendedora()
+    and exists (
+      select 1 from public.price_lists pl
+      where pl.id = product_prices.price_list_id
+        and (pl.owner_vendedora_id is null or pl.owner_vendedora_id = public.current_vendedora_id())
+    )
+  );
 
 -- ---------- RPC: get_catalog ----------
 -- Resuelve el cliente por token y devuelve SOLO los precios de su lista.
