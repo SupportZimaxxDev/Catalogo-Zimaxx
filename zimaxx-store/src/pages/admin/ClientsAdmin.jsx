@@ -133,6 +133,12 @@ export default function ClientsAdmin() {
   const [result, setResult] = useState(null)
   const [copiedId, setCopiedId] = useState(null)
 
+  // Reasignar / eliminar (admin) + su registro de auditoría.
+  const [actionError, setActionError] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const [auditOpen, setAuditOpen] = useState(false)
+  const [auditRows, setAuditRows] = useState([])
+
   // Alta individual (2026-07-07): la vendedora no elige a quién asignar,
   // el RLS (vendedora_insert_own_clients) exige que sea ella misma — acá
   // se completa con la única fila de `vendedores` que puede leer, la suya.
@@ -377,6 +383,49 @@ export default function ClientsAdmin() {
     }
   }
 
+  // Reasignar el cliente a otra vendedora (o dejarlo sin asignar). Vía RPC
+  // reassign_client (SECURITY DEFINER): valida admin, rechaza listas
+  // personales y deja registro en admin_audit_log. No se usa un update
+  // directo justamente para que la acción quede auditada sí o sí.
+  const reassignClient = async (client, vendedoraId) => {
+    setActionError('')
+    const { error } = await supabase.rpc('reassign_client', {
+      p_client_id: client.id,
+      p_vendedora_id: vendedoraId || null,
+    })
+    if (error) {
+      setActionError(error.message)
+      return
+    }
+    await load()
+  }
+
+  // Eliminar el cliente. Vía RPC delete_client: valida admin, rechaza si
+  // tiene pedidos (para no perder el historial) y audita el borrado.
+  const deleteClient = async (client) => {
+    setActionError('')
+    const { error } = await supabase.rpc('delete_client', { p_client_id: client.id })
+    setConfirmDeleteId(null)
+    if (error) {
+      setActionError(error.message)
+      return
+    }
+    await load()
+  }
+
+  const toggleAudit = async () => {
+    const next = !auditOpen
+    setAuditOpen(next)
+    if (next) {
+      const { data } = await supabase
+        .from('admin_audit_log')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100)
+      setAuditRows(data ?? [])
+    }
+  }
+
   // Monto que el cliente dice que va a invertir → nivel dentro de su
   // región actual (us_/ve_), salvo que el nivel resultante sea 'special':
   // esa lista es general, sin región. Una vez en 'special' no se
@@ -548,6 +597,12 @@ export default function ClientsAdmin() {
         )}
       </div>
 
+      {actionError && (
+        <div className="rounded-xl border border-red-300 bg-red-50 px-4 py-2.5 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300">
+          {actionError}
+        </div>
+      )}
+
       <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-sm">
         <table className="w-full text-sm">
           <thead>
@@ -604,18 +659,66 @@ export default function ClientsAdmin() {
                     </span>
                   )}
                 </td>
-                <td className="p-3 text-primary/60">{c.vendedores?.name}</td>
-                <td className="p-3 text-right">
-                  <button
-                    onClick={() => copyLink(c)}
-                    className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all ${
-                      copiedId === c.id
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-secondary/15 text-secondary-dark hover:bg-secondary/30'
-                    }`}
-                  >
-                    {copiedId === c.id ? `✓ ${t('copied')}` : t('copyLink')}
-                  </button>
+                <td className="p-3 text-primary/60">
+                  {isAdmin && !ownerVendedoraId(c.price_list_id) ? (
+                    <select
+                      value={c.vendedora_id ?? ''}
+                      onChange={(e) => reassignClient(c, e.target.value)}
+                      className="w-40 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
+                      title={t('reassign')}
+                    >
+                      <option value="">{t('unassigned')}</option>
+                      {vendedoresList.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    c.vendedores?.name || (isAdmin ? t('unassigned') : '')
+                  )}
+                </td>
+                <td className="p-3">
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      onClick={() => copyLink(c)}
+                      className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all ${
+                        copiedId === c.id
+                          ? 'bg-green-100 text-green-800'
+                          : 'bg-secondary/15 text-secondary-dark hover:bg-secondary/30'
+                      }`}
+                    >
+                      {copiedId === c.id ? `✓ ${t('copied')}` : t('copyLink')}
+                    </button>
+                    {isAdmin &&
+                      (confirmDeleteId === c.id ? (
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-xs text-primary/60">{t('deleteConfirmClient')}</span>
+                          <button
+                            onClick={() => deleteClient(c)}
+                            className="rounded-full bg-red-600 px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-red-700"
+                          >
+                            {t('yes')}
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="rounded-full border border-line px-3 py-1.5 text-xs font-semibold text-primary/60 transition-colors hover:border-primary/40"
+                          >
+                            {t('no')}
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setActionError('')
+                            setConfirmDeleteId(c.id)
+                          }}
+                          className="rounded-full px-3 py-1.5 text-xs font-semibold text-red-600 transition-colors hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-900/40"
+                        >
+                          {t('deleteAction')}
+                        </button>
+                      ))}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -630,6 +733,68 @@ export default function ClientsAdmin() {
           {filtered.length} {t('results')}
         </div>
       </div>
+
+      {/* Registro de movimientos: reasignaciones y borrados de clientes,
+          con el usuario que los hizo. Solo admin (RLS admin_read_audit). */}
+      {isAdmin && (
+        <div className="rounded-2xl border border-line bg-surface shadow-sm">
+          <button
+            onClick={toggleAudit}
+            className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-semibold text-primary/70 transition-colors hover:text-primary"
+          >
+            <span>🛡️ {t('activityLog')}</span>
+            <span className="text-primary/40">{auditOpen ? '▲' : '▼'}</span>
+          </button>
+          {auditOpen && (
+            <div className="overflow-x-auto border-t border-line">
+              {auditRows.length === 0 ? (
+                <p className="px-4 py-3 text-xs text-primary/50">{t('noActivity')}</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-line text-left text-[11px] uppercase tracking-wider text-primary/45">
+                      <th className="p-3">{t('date')}</th>
+                      <th className="p-3">{t('user')}</th>
+                      <th className="p-3">{t('action')}</th>
+                      <th className="p-3">{t('client')}</th>
+                      <th className="p-3">Detalle</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {auditRows.map((a) => (
+                      <tr key={a.id} className="border-b border-line/60">
+                        <td className="whitespace-nowrap p-3 text-xs text-primary/60">
+                          {new Date(a.created_at).toLocaleString()}
+                        </td>
+                        <td className="p-3 text-xs text-primary/70">{a.performed_by_email}</td>
+                        <td className="p-3">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                              a.action === 'delete_client'
+                                ? 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'
+                                : 'bg-gold-pale text-secondary-dark'
+                            }`}
+                          >
+                            {a.action === 'delete_client' ? t('actionDelete') : t('actionReassign')}
+                          </span>
+                        </td>
+                        <td className="p-3 font-medium">{a.client_name}</td>
+                        <td className="p-3 text-xs text-primary/60">
+                          {a.action === 'reassign_client'
+                            ? `${a.detail?.from_vendedora ?? t('unassigned')} → ${a.detail?.to_vendedora ?? t('unassigned')}`
+                            : [a.detail?.phone, a.detail?.vendedora, a.detail?.lista]
+                                .filter(Boolean)
+                                .join(' · ')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
