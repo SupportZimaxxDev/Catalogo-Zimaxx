@@ -6,6 +6,14 @@ import { money, cleanPhone } from '../../utils/format'
 import { downloadOrderExcel } from '../../utils/excel'
 import { SearchIcon, inputCls } from './ui'
 
+// Estilos de badge por estado (2026-07-15 agrega 'cancelled': un pedido
+// se arma y confirma, pero a veces el cliente lo cancela después).
+const STATUS_STYLES = {
+  new: 'bg-gold-pale text-secondary-dark',
+  done: 'bg-primary/10 text-primary/50',
+  cancelled: 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
+}
+
 // Bandeja de pedidos: cada uno se marca atendido para no depender de la
 // memoria del chat de WhatsApp.
 export default function OrdersAdmin() {
@@ -100,6 +108,7 @@ export default function OrdersAdmin() {
           <option value="">{t('allStatuses')}</option>
           <option value="new">{t('statusNew')}</option>
           <option value="done">{t('statusDone')}</option>
+          <option value="cancelled">{t('statusCancelled')}</option>
         </select>
         <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className={inputCls}>
           <option value="">{t('allTypes')}</option>
@@ -183,23 +192,46 @@ export default function OrdersAdmin() {
                 </td>
                 <td className="whitespace-nowrap p-3">
                   <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      o.status === 'done'
-                        ? 'bg-primary/10 text-primary/50'
-                        : 'bg-gold-pale text-secondary-dark'
-                    }`}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${STATUS_STYLES[o.status ?? 'new']}`}
                   >
-                    {o.status === 'done' ? t('statusDone') : t('statusNew')}
+                    {o.status === 'done'
+                      ? t('statusDone')
+                      : o.status === 'cancelled'
+                        ? t('statusCancelled')
+                        : t('statusNew')}
                   </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setStatus(o.id, o.status === 'done' ? 'new' : 'done')
-                    }}
-                    className="ml-2 rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
-                  >
-                    {o.status === 'done' ? t('markNew') : t('markDone')}
-                  </button>
+                  {(o.status ?? 'new') === 'new' ? (
+                    <span className="ml-2 inline-flex gap-1.5">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setStatus(o.id, 'done')
+                        }}
+                        className="rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
+                      >
+                        {t('markDone')}
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setStatus(o.id, 'cancelled')
+                        }}
+                        className="rounded-lg border border-line px-2.5 py-1 text-xs text-red-600 transition-colors hover:border-red-400 dark:text-red-400"
+                      >
+                        {t('cancelOrder')}
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setStatus(o.id, 'new')
+                      }}
+                      className="ml-2 rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
+                    >
+                      {t('markNew')}
+                    </button>
+                  )}
                 </td>
                 <td className="p-3 text-right">
                   <button

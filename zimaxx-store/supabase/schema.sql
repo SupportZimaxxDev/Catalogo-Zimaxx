@@ -207,14 +207,51 @@ create table if not exists public.orders (
   created_at timestamptz not null default now()
 );
 
--- Ciclo de vida del pedido en el panel admin: 'new' (sin atender) | 'done'.
+-- Ciclo de vida del pedido en el panel admin: 'new' (sin atender) | 'done'
+-- | 'cancelled' (2026-07-15: el cliente arma el pedido y lo confirma, pero
+-- a veces lo cancela después). El check se recrea aparte (no en el ADD
+-- COLUMN) porque ese IF NOT EXISTS no vuelve a aplicarse una vez que la
+-- columna ya existe en una instalación en producción.
 alter table public.orders
-  add column if not exists status text not null default 'new'
-  check (status in ('new', 'done'));
+  add column if not exists status text not null default 'new';
+alter table public.orders drop constraint if exists orders_status_check;
+alter table public.orders add constraint orders_status_check
+  check (status in ('new', 'done', 'cancelled'));
 
 create table if not exists public.admins (
   user_id uuid primary key references auth.users (id) on delete cascade
 );
+
+-- Auditoría de acciones sensibles sobre clientes (2026-07-14,
+-- migration-2026-07-14-client-admin-actions.sql — agregada acá recién
+-- 2026-07-15 al sumar update_client_price_list, que también audita acá;
+-- schema.sql había quedado atrás desde el sync de SellerCloud). `action`
+-- texto genérico por si se auditan más acciones a futuro. `client_id` SIN
+-- FK a clients a propósito: la fila de auditoría de un borrado tiene que
+-- sobrevivir al cliente borrado. `client_name`/`detail` son un snapshot al
+-- momento de la acción.
+create table if not exists public.admin_audit_log (
+  id                 uuid primary key default gen_random_uuid(),
+  action             text not null,
+  performed_by       uuid,
+  performed_by_email text,
+  client_id          uuid,
+  client_name        text,
+  detail             jsonb,
+  created_at         timestamptz not null default now()
+);
+
+create index if not exists admin_audit_log_created_idx
+  on public.admin_audit_log (created_at desc);
+
+alter table public.admin_audit_log enable row level security;
+drop policy if exists admin_read_audit on public.admin_audit_log;
+create policy admin_read_audit on public.admin_audit_log
+  for select to authenticated
+  using (public.is_admin());
+-- Sin policy de insert/update/delete para nadie: inmutable para
+-- cualquier usuario autenticado, solo lo escriben las funciones
+-- SECURITY DEFINER (reassign_client/delete_client/update_client_price_list).
 
 -- ---------- Listas de precio fijas ----------
 -- Niveles por región: Minimum Order ($800+) y Wholesale ($2,000+).
@@ -337,6 +374,78 @@ revoke execute on function public.is_vendedora() from public, anon;
 grant execute on function public.is_vendedora() to authenticated;
 revoke execute on function public.current_vendedora_id() from public, anon;
 grant execute on function public.current_vendedora_id() to authenticated;
+
+-- ---------- RPC: update_client_price_list ----------
+-- Cambiar la lista de precio de un cliente (2026-07-15, a pedido del
+-- usuario: una vendedora ahora puede cambiarle la lista a SUS propios
+-- clientes, no solo el admin). SECURITY DEFINER y no un update directo
+-- por dos motivos: (a) una vendedora no tiene policy de UPDATE en
+-- `clients` (solo select/insert de lo suyo) — sin esta función no podría
+-- hacerlo ni con la UI habilitada; (b) igual que reassign_client/
+-- delete_client, así el cambio queda auditado sí o sí en
+-- `admin_audit_log`, sin importar quién lo haga.
+create or replace function public.update_client_price_list(p_client_id uuid, p_price_list_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_client   public.clients%rowtype;
+  v_new_list public.price_lists%rowtype;
+  v_old_list public.price_lists%rowtype;
+  v_email    text;
+begin
+  select * into v_client from public.clients where id = p_client_id;
+  if not found then
+    raise exception 'cliente no encontrado';
+  end if;
+
+  if not public.is_admin() then
+    if not public.is_vendedora() or v_client.vendedora_id is distinct from public.current_vendedora_id() then
+      raise exception 'no tenés permiso para cambiar la lista de este cliente';
+    end if;
+  end if;
+
+  select * into v_new_list from public.price_lists where id = p_price_list_id;
+  if not found then
+    raise exception 'lista de precio no encontrada';
+  end if;
+
+  -- Una vendedora (no admin) no puede asignar una lista "personal" ajena
+  -- (ej. luzmar) a un cliente suyo — mismo candado que ya aplica
+  -- selectablePriceLists en el frontend, reforzado acá server-side.
+  if not public.is_admin()
+     and v_new_list.owner_vendedora_id is not null
+     and v_new_list.owner_vendedora_id is distinct from public.current_vendedora_id() then
+    raise exception 'no podés asignar esa lista';
+  end if;
+
+  select * into v_old_list from public.price_lists where id = v_client.price_list_id;
+  select email into v_email from auth.users where id = auth.uid();
+
+  update public.clients set price_list_id = p_price_list_id where id = p_client_id;
+  -- El trigger clients_enforce_owner_vendedora corre acá mismo si la
+  -- lista nueva tiene dueña, y pisa vendedora_id sin que haga falta
+  -- replicar esa lógica en esta función.
+
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, client_id, client_name, detail)
+  values
+    ('update_price_list', auth.uid(), v_email, p_client_id, v_client.name,
+     jsonb_build_object(
+       'from_list_id', v_client.price_list_id,
+       'from_list',    v_old_list.label,
+       'to_list_id',   p_price_list_id,
+       'to_list',      v_new_list.label
+     ));
+
+  return jsonb_build_object('ok', true, 'from', v_old_list.label, 'to', v_new_list.label);
+end;
+$$;
+
+revoke execute on function public.update_client_price_list(uuid, uuid) from public;
+grant execute on function public.update_client_price_list(uuid, uuid) to authenticated;
 revoke execute on function public.get_my_role() from public, anon;
 grant execute on function public.get_my_role() to authenticated;
 

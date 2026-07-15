@@ -122,6 +122,58 @@ const LIST_CODE_ALIASES = {
 
 const EMPTY_CLIENT = { name: '', phone: '', price_list_id: '', vendedora_id: '' }
 
+// Selector de lista de precio con confirmación (2026-07-15, a pedido del
+// usuario): elegir una opción no aplica el cambio de una, muestra un
+// aviso "¿Cambiar a X?" con Confirmar/Cancelar — evita un cambio de
+// lista sin querer (afecta lo que el cliente ve y paga). Reutilizado
+// tanto para admin como para vendedora (con distintas `options`), así
+// que vive fuera de ClientsAdmin en vez de definirse adentro: un
+// componente definido dentro de otro se recrea en cada render.
+function ListPicker({ client, options, pending, onRequest, onConfirm, onCancel, t }) {
+  const isPending = pending?.clientId === client.id
+  return (
+    <div className="space-y-1">
+      <select
+        value={client.price_list_id}
+        disabled={isPending}
+        onChange={(e) => onRequest(client, e.target.value)}
+        className="w-40 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary disabled:opacity-60"
+      >
+        {options.map((l) => (
+          <option key={l.id} value={l.id}>
+            {l.label}
+          </option>
+        ))}
+      </select>
+      {isPending && (
+        <div className="w-40 space-y-1.5 rounded-lg border border-secondary/40 bg-gold-pale/20 p-2">
+          <p className="text-[11px] leading-snug text-primary/70">
+            {t('confirmListChangeText')}{' '}
+            <span className="font-semibold">
+              {options.find((l) => l.id === pending.listId)?.label}
+            </span>
+            ?
+          </p>
+          <div className="flex gap-1.5">
+            <button
+              onClick={onConfirm}
+              className="rounded-lg bg-secondary px-2.5 py-1 text-[11px] font-bold text-ink transition-colors hover:bg-secondary-dark"
+            >
+              {t('confirm')}
+            </button>
+            <button
+              onClick={onCancel}
+              className="rounded-lg border border-line px-2.5 py-1 text-[11px] text-primary/60 transition-colors hover:border-primary/40"
+            >
+              {t('cancel')}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ClientsAdmin() {
   const { t } = useI18n()
   const { role } = useOutletContext()
@@ -137,6 +189,10 @@ export default function ClientsAdmin() {
   // propio panel, ver AuditLogAdmin.jsx.
   const [actionError, setActionError] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+
+  // Cambio de lista de precio con confirmación (2026-07-15): un solo
+  // cambio pendiente a la vez, { clientId, listId } | null.
+  const [pendingList, setPendingList] = useState(null)
 
   // Alta individual (2026-07-07): la vendedora no elige a quién asignar,
   // el RLS (vendedora_insert_own_clients) exige que sea ella misma — acá
@@ -372,15 +428,42 @@ export default function ClientsAdmin() {
 
   // Cambiar la lista del cliente: el link que ya tiene muestra los
   // precios nuevos al instante (el token identifica al cliente, la
-  // lista se resuelve al abrir el catálogo).
+  // lista se resuelve al abrir el catálogo). Vía RPC
+  // update_client_price_list (2026-07-15): antes era un update directo
+  // (solo lo podía hacer admin, que tiene RLS de escritura total); ahora
+  // una vendedora también puede cambiarle la lista a sus propios
+  // clientes, y para eso hace falta la RPC (ella no tiene policy de
+  // UPDATE en `clients`) — que de paso audita el cambio en
+  // `admin_audit_log`, sea quien sea que lo haga.
   const updateList = async (client, listId) => {
+    setActionError('')
+    const { error } = await supabase.rpc('update_client_price_list', {
+      p_client_id: client.id,
+      p_price_list_id: listId,
+    })
+    if (error) {
+      setActionError(error.message)
+      return
+    }
     const owner = ownerVendedoraId(listId)
     const patch = { price_list_id: listId, ...(owner ? { vendedora_id: owner } : {}) }
-    const { error } = await supabase.from('clients').update(patch).eq('id', client.id)
-    if (!error) {
-      setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, ...patch } : c)))
-    }
+    setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, ...patch } : c)))
   }
+
+  // Elegir una opción en el selector de lista no aplica el cambio: queda
+  // pendiente hasta que se confirme (evita cambiar la lista de un
+  // cliente por error de un click).
+  const requestListChange = (client, listId) => {
+    if (!listId || listId === client.price_list_id) return
+    setPendingList({ clientId: client.id, listId })
+  }
+  const confirmListChange = () => {
+    const client = clients.find((c) => c.id === pendingList?.clientId)
+    const listId = pendingList?.listId
+    setPendingList(null)
+    if (client && listId) updateList(client, listId)
+  }
+  const cancelListChange = () => setPendingList(null)
 
   // Reasignar el cliente a otra vendedora (o dejarlo sin asignar). Vía RPC
   // reassign_client (SECURITY DEFINER): valida admin, rechaza listas
@@ -608,17 +691,15 @@ export default function ClientsAdmin() {
                 <td className="p-3">
                   {isAdmin ? (
                     <div className="flex flex-col gap-1.5">
-                      <select
-                        value={c.price_list_id}
-                        onChange={(e) => updateList(c, e.target.value)}
-                        className="w-40 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
-                      >
-                        {priceLists.map((l) => (
-                          <option key={l.id} value={l.id}>
-                            {l.label}
-                          </option>
-                        ))}
-                      </select>
+                      <ListPicker
+                        client={c}
+                        options={priceLists}
+                        pending={pendingList}
+                        onRequest={requestListChange}
+                        onConfirm={confirmListChange}
+                        onCancel={cancelListChange}
+                        t={t}
+                      />
                       <input
                         type="text"
                         inputMode="decimal"
@@ -640,9 +721,15 @@ export default function ClientsAdmin() {
                       />
                     </div>
                   ) : (
-                    <span className="text-primary/70">
-                      {priceLists.find((l) => l.id === c.price_list_id)?.label}
-                    </span>
+                    <ListPicker
+                      client={c}
+                      options={selectablePriceLists}
+                      pending={pendingList}
+                      onRequest={requestListChange}
+                      onConfirm={confirmListChange}
+                      onCancel={cancelListChange}
+                      t={t}
+                    />
                   )}
                 </td>
                 <td className="p-3 text-primary/60">
