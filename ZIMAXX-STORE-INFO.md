@@ -118,7 +118,7 @@
 > por nombre (podrían ser clientes que SellerCloud ya dio de baja, o
 > basura de la carga inicial — pendiente de decisión), y 35 clientes
 > reales que existen en SellerCloud pero todavía no están sincronizados a
-> la app. **Pendiente de correr ambas migraciones en producción.**
+> la app. **Ambas migraciones corridas en producción (2026-07-16).**
 
 ---
 
@@ -282,14 +282,13 @@ C:\Users\First Choice Online\Documents\Archivos JEsus\Catalogo Zimaxx\zimaxx-sto
   código de esta sesión (frontend + migración) está commiteado
   localmente (`9ce3020`), **pendiente de `git push`** (el usuario lo hace
   a su criterio).
-- [ ] **Pendiente: correr `migration-2026-07-16-cleanup-unlinked-duplicate-clients.sql`**
-  en producción — borra 86 clientes huérfanos de la carga inicial
-  (2026-07-02) confirmados como duplicados de un cliente que ya existe
-  vinculado a SellerCloud con otro teléfono (ver diagnóstico en sección 6
-  y en `ZIMAXX-STORE-INFO.md` arriba, punto 2026-07-16).
-- [ ] **Pendiente: correr `migration-2026-07-16-reassign-vendedora-mismatches.sql`**
-  en producción — reasigna 21 clientes reales que estaban con la
-  vendedora equivocada (mismo diagnóstico).
+- [x] `migration-2026-07-16-cleanup-unlinked-duplicate-clients.sql`
+  corrida en producción (2026-07-16) — borró 86 clientes huérfanos de la
+  carga inicial (2026-07-02) confirmados como duplicados de un cliente
+  que ya existe vinculado a SellerCloud con otro teléfono.
+- [x] `migration-2026-07-16-reassign-vendedora-mismatches.sql` corrida en
+  producción (2026-07-16) — reasignó 21 clientes reales que estaban con
+  la vendedora equivocada.
 - [x] **Ya explicado (2026-07-16), no es un bug de n8n**: por qué 18 de
   los 21 clientes de vendedora incorrecta quedaron bajo "Maria Fernanda
   Sardua". Los 21 tienen `created_at = 2026-07-02` (carga masiva manual
