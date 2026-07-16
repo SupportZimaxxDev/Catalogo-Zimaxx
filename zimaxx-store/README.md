@@ -546,14 +546,14 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   requiere que `migration-2026-07-14-client-admin-actions.sql` ya haya
   corrido antes (crea `admin_audit_log`, donde esta función también
   audita).
-- **Pendiente y urgente: correr `migration-2026-07-15-fix-duplicate-client-phones.sql`**
-  en producción (limpia ~180 clientes duplicados que creó el sync por el
-  bug de formato de teléfono, corrige `sync_upsert_clients` para que no
-  lo vuelva a hacer, y agrega el índice único **parcial** por teléfono
-  normalizado con la excepción `allow_shared_phone` para 2 pares de
-  clientes reales que comparten número a propósito — ver sección 6). Si
-  el sync de n8n sigue corriendo antes de aplicar esta migración, va a
-  seguir generando duplicados nuevos cada vez.
+- `migration-2026-07-15-fix-duplicate-client-phones.sql` corrida en
+  producción (2026-07-16): limpió 315 clientes duplicados que había
+  creado el sync por el bug de formato de teléfono, corrigió
+  `sync_upsert_clients` para que no lo vuelva a hacer, y agregó el
+  índice único **parcial** por teléfono normalizado con la excepción
+  `allow_shared_phone` para 2 pares de clientes reales que comparten
+  número a propósito — ver sección 6. Pendiente: `git push` del commit
+  local `9ce3020` (a criterio del usuario).
 - Enforcement estricto por nivel (mínimo $2,000 para wholesale, etc.) o
   nivel automático por total del carrito ("te faltan $X para precio
   mayorista") — opción C discutida.

@@ -253,16 +253,17 @@ C:\Users\First Choice Online\Documents\Archivos JEsus\Catalogo Zimaxx\zimaxx-sto
   para TODOS, admin incluido** — el frontend ya no usa el update viejo.
   Requiere que `migration-2026-07-14-client-admin-actions.sql` ya haya
   corrido (crea `admin_audit_log`, donde esta función también audita).
-- [ ] **Pendiente y URGENTE: correr `migration-2026-07-15-fix-duplicate-client-phones.sql`**
-  en producción — limpia ~180 clientes duplicados (mismo cliente cargado
-  con y sin código de país en el teléfono) que creó una corrida del sync
-  de SellerCloud, y corrige `sync_upsert_clients` para que no lo vuelva a
-  hacer + agrega un índice único **parcial** por teléfono normalizado
-  (respeta la excepción `allow_shared_phone`, ver sección 6 — 2 pares de
-  clientes reales que comparten teléfono y el usuario decidió mantener
-  separados). Si el sync de n8n sigue corriendo (todo indica que sí, sin
-  confirmación explícita aún), cada corrida antes de esta migración
-  genera más duplicados.
+- [x] `migration-2026-07-15-fix-duplicate-client-phones.sql` corrida en
+  producción (2026-07-16, confirmado con query de diagnóstico): limpió
+  315 clientes duplicados (mismo cliente cargado con y sin código de país
+  en el teléfono), corrigió `sync_upsert_clients` para que no lo vuelva a
+  hacer, y agregó el índice único **parcial** por teléfono normalizado
+  (`clients_phone_normalized_key`, respeta la excepción
+  `allow_shared_phone` — 2 pares de clientes reales que comparten
+  teléfono y el usuario decidió mantener separados, ver sección 6). El
+  código de esta sesión (frontend + migración) está commiteado
+  localmente (`9ce3020`), **pendiente de `git push`** (el usuario lo hace
+  a su criterio).
 
 ---
 
