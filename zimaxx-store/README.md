@@ -429,6 +429,52 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   No hace falta configurar secrets: `SUPABASE_URL`/`SUPABASE_ANON_KEY`/
   `SUPABASE_SERVICE_ROLE_KEY` ya vienen inyectadas por el runtime de Edge
   Functions.
+- **Fix de clientes duplicados por formato de teléfono** (2026-07-15,
+  `migration-2026-07-15-fix-duplicate-client-phones.sql`): el mismo
+  cliente real quedaba cargado dos veces cuando un lado tenía el teléfono
+  con código de país (ej. `51902191277`, Perú) y el otro sin él
+  (`1902191277`) — tanto la carga por Excel (`ClientsAdmin.jsx`, ya
+  corregido en el frontend con `phoneKey()`, compara por los **últimos 10
+  dígitos**) como el paso de "adopción por teléfono" de
+  `sync_upsert_clients` (el sync de SellerCloud) comparaban el string
+  completo. La migración corre dentro de una transacción explícita
+  (`begin`/`commit`) en 4 pasos: (1a) backup completo de `clients`
+  (`clients_backup_20260715`, tabla normal, a pedido del usuario — se
+  borra a mano una vez confirmado que todo quedó bien); (1b) captura en
+  tablas temporales qué fila basura borrar (sin lista, con
+  `sellercloud_id`, sin pedidos) y a qué fila real le corresponde adoptar
+  su `sellercloud_id`; (1c) borra primero las filas basura; (1d) recién
+  ahí copia el `sellercloud_id` capturado a la fila real. **El primer
+  intento hacía (1d) antes que (1c)** (adoptar antes de borrar) y falló
+  con `duplicate key value violates unique constraint
+  clients_sellercloud_id_key` — con las dos filas compartiendo el mismo
+  `sellercloud_id` por un instante, el índice único lo rechaza antes de
+  llegar al DELETE. Además, (2) reescribe `sync_upsert_clients` para que
+  compare por los últimos 10 dígitos igual que el frontend, y (3) agrega
+  un índice único sobre el teléfono normalizado
+  (`clients_phone_normalized_key`) para que esto no pueda volver a pasar
+  por ningún camino (Excel, alta manual, sync) — un intento de insertar
+  choca con `unique_violation`, que `sync_upsert_clients` ya contaba en
+  `phone_conflicts` y que el frontend ya evita de entrada. **El segundo
+  intento también falló** (mismo día): con los ~180 duplicados "basura
+  del sync" ya limpios, el `create unique index` chocó igual con un
+  teléfono duplicado — revisando a mano aparecieron 2 pares de clientes
+  reales (no basura del sync, ya cargados desde el 2026-07-02, cada uno
+  con su propia lista de precio y vendedora) que comparten teléfono
+  porque el mismo negocio quedó agendado una vez con nombre personal y
+  otra con nombre de empresa. El usuario confirmó que quiere mantenerlos
+  como 2 clientes distintos, no fusionarlos, así que se agregó
+  `clients.allow_shared_phone` (boolean, marcada `true` solo en esos 4
+  registros puntuales por id) y el índice quedó **parcial**
+  (`where not allow_shared_phone`) — exige unicidad para todo el resto,
+  ignora esas 4 filas. Si en el futuro aparece otro caso legítimo igual,
+  se marca a mano con `update clients set allow_shared_phone = true
+  where id = '...'` (no hay UI para esto todavía). En el frontend,
+  `ClientsAdmin.jsx` ahora excluye del mapa de matching de la carga por
+  Excel cualquier clave de teléfono que ya sea ambigua entre 2+ clientes
+  existentes — una fila de Excel para uno de esos 2 pares cae al alta de
+  un cliente nuevo en vez de arriesgarse a actualizar el cliente
+  equivocado.
 - Tokens de cliente: 10 caracteres, `crypto.getRandomValues`, sin caracteres
   ambiguos.
 - **`Referrer-Policy: no-referrer`** (meta + header en `netlify.toml`): el
@@ -470,9 +516,13 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   toca el sync (es manual). `migration-2026-07-14-product-upc.sql`
   (2026-07-14) agrega `products.upc` (código de barras, dato interno del
   admin) y hace que `sync_upsert_products` lo guarde (campo `upc` del
-  payload). Falta: armar el workflow de n8n con la service_role key (que
-  debe mapear `InventoryAvailableQTY` → `inventory` y `UPC` → `upc` en el
-  payload de `sync_upsert_products`).
+  payload). **2026-07-15: todo indica que el workflow de n8n ya está
+  corriendo en producción** (se detectó por evidencia indirecta — una
+  tanda de ~45 clientes duplicados creados en el mismo segundo, todos sin
+  lista de precio y con `sellercloud_id`, la huella de `sync_upsert_clients`
+  — no porque alguien lo haya confirmado explícitamente; conviene
+  confirmarlo con el usuario). Ver el bug de teléfonos duplicados más
+  abajo (sección 6) que salió de esto.
 - **Pendiente: correr `migration-2026-07-15-restrict-vendedora-luzmar.sql`**
   en producción (restringe la lectura de `price_lists`/`product_prices`
   para que una vendedora no vea la lista/precios "personales" de otra,
@@ -496,6 +546,14 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   requiere que `migration-2026-07-14-client-admin-actions.sql` ya haya
   corrido antes (crea `admin_audit_log`, donde esta función también
   audita).
+- **Pendiente y urgente: correr `migration-2026-07-15-fix-duplicate-client-phones.sql`**
+  en producción (limpia ~180 clientes duplicados que creó el sync por el
+  bug de formato de teléfono, corrige `sync_upsert_clients` para que no
+  lo vuelva a hacer, y agrega el índice único **parcial** por teléfono
+  normalizado con la excepción `allow_shared_phone` para 2 pares de
+  clientes reales que comparten número a propósito — ver sección 6). Si
+  el sync de n8n sigue corriendo antes de aplicar esta migración, va a
+  seguir generando duplicados nuevos cada vez.
 - Enforcement estricto por nivel (mínimo $2,000 para wholesale, etc.) o
   nivel automático por total del carrito ("te faltan $X para precio
   mayorista") — opción C discutida.

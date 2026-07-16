@@ -122,6 +122,17 @@ const LIST_CODE_ALIASES = {
 
 const EMPTY_CLIENT = { name: '', phone: '', price_list_id: '', vendedora_id: '' }
 
+// Clave de match para deduplicar por teléfono (2026-07-15, bug real
+// detectado por el usuario: el mismo cliente quedó duplicado porque un
+// Excel lo cargó con código de país — "13055551234" — y otro sin él —
+// "3055551234" —, y comparar el string completo los trataba como dos
+// personas distintas). Los últimos 10 dígitos son el número nacional real
+// tanto en US (10 dígitos, código "1") como en Venezuela (national
+// significant number de 10 dígitos, con o sin el "0" de troncal o el "58"
+// de país por delante) — no hace falta adivinar ni agregar ningún código,
+// solo ignorarlo al comparar.
+const phoneKey = (phone) => cleanPhone(phone).slice(-10)
+
 // Selector de lista de precio con confirmación (2026-07-15, a pedido del
 // usuario): elegir una opción no aplica el cambio de una, muestra un
 // aviso "¿Cambiar a X?" con Confirmar/Cancelar — evita un cambio de
@@ -259,7 +270,22 @@ export default function ClientsAdmin() {
       const rows = await parseSheet(file)
       if (rows.length === 0) throw new Error('Archivo vacío')
 
-      const byPhone = new Map(clients.map((c) => [cleanPhone(c.phone), c]))
+      // Si 2+ clientes YA existentes comparten la misma clave (caso real,
+      // confirmado 2026-07-15: negocios agendados una vez con nombre
+      // personal y otra con nombre de empresa, que se decidió mantener
+      // como clientes distintos — ver allow_shared_phone en la DB), no
+      // se puede saber a cuál de los dos le pertenece una fila del Excel
+      // que llegue con esa clave. Se excluyen del mapa a propósito: una
+      // fila así cae al camino de alta nueva en vez de arriesgarse a
+      // pisar el cliente equivocado.
+      const phoneKeyCounts = new Map()
+      for (const c of clients) {
+        const k = phoneKey(c.phone)
+        phoneKeyCounts.set(k, (phoneKeyCounts.get(k) || 0) + 1)
+      }
+      const byPhone = new Map(
+        clients.filter((c) => phoneKeyCounts.get(phoneKey(c.phone)) === 1).map((c) => [phoneKey(c.phone), c])
+      )
       // Vendedora por nombre (sin distinguir mayúsculas): se completa con
       // las que ya existen y se crean sobre la marcha las que falten,
       // igual que antes se creaba el texto libre.
@@ -332,7 +358,7 @@ export default function ClientsAdmin() {
         const listOwner = priceLists.find((l) => l.id === listId)?.owner_vendedora_id
         if (listOwner) vendedoraId = listOwner
 
-        const existing = byPhone.get(phone)
+        const existing = byPhone.get(phoneKey(phone))
         if (existing) {
           const { error } = await supabase
             .from('clients')
@@ -358,9 +384,9 @@ export default function ClientsAdmin() {
           if (error) throw error
           created++
           // Registrar el alta recién hecha: si el archivo repite este
-          // mismo teléfono más adelante, esa fila actualiza en vez de
-          // chocar contra el unique constraint de clients.phone.
-          if (insertedRows?.[0]) byPhone.set(phone, insertedRows[0])
+          // mismo teléfono más adelante (con o sin código de país), esa
+          // fila actualiza en vez de crear un duplicado.
+          if (insertedRows?.[0]) byPhone.set(phoneKey(phone), insertedRows[0])
         }
       }
 
@@ -385,6 +411,14 @@ export default function ClientsAdmin() {
     const name = newClientForm.name.trim()
     const phone = cleanPhone(newClientForm.phone)
     if (!name || phone.length < 7 || !newClientForm.price_list_id) return
+    // El unique constraint de la base compara el string completo: no
+    // pesca un duplicado si el existente está guardado con código de
+    // país y este nuevo no (o viceversa). Se chequea acá antes de
+    // insertar, comparando por los últimos 10 dígitos.
+    if (clients.some((c) => phoneKey(c.phone) === phoneKey(phone))) {
+      setNewClientError(t('phoneInUse'))
+      return
+    }
     setNewClientBusy(true)
     const owner = ownerVendedoraId(newClientForm.price_list_id)
     const vendedoraId = owner || (isAdmin ? newClientForm.vendedora_id || null : myVendedoraId)
