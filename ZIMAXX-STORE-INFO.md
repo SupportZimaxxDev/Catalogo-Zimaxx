@@ -1,7 +1,10 @@
 # Zimaxx Store — Referencia completa del proyecto
 
 > Documento de referencia para retomar el trabajo en cualquier sesión.
-> Creado: 2026-07-02. Actualizado: 2026-07-09 (PDF separa Pre-Order;
+> Creado: 2026-07-02. Última actualización: 2026-07-16 (auditoría de
+> clientes app vs. SellerCloud, ver el final de esta sección para el
+> resumen más reciente). Historial anterior desde 2026-07-09: PDF separa
+> Pre-Order;
 > grupos de Flash Sales por lote O mismo vencimiento con desactivación y
 > reprogramación de fechas en grupo; buscador + chips en Header sticky;
 > optimización de rendimiento; etiqueta ✨ Nuevo automática ~10 días para

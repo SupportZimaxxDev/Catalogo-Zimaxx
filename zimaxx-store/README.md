@@ -507,6 +507,21 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   vendedora asignada) — dato relevante para antes de salir a
   producción, no forma parte de esta limpieza. Ambas migraciones toman
   backup propio (`clients_backup_20260716_*`) antes de tocar nada.
+  **Ambas migraciones corridas en producción** (2026-07-16, confirmado
+  por el usuario). El caso de "vendedora incorrecta" se coordinó con la
+  sesión que lleva el flujo de n8n (Claude Desktop): confirmado que NO es
+  un bug de n8n (los 21 casos vienen de la carga manual del 2026-07-02,
+  antes de que existiera el sync — la vendedora vieja quedó preservada
+  por el `coalesce()` de la rama `linked_by_phone` de
+  `sync_upsert_clients` cuando el salesman no matcheaba en el momento del
+  primer vínculo). El n8n hace *resync completo* dos veces al día, así
+  que los 21 casos ya corregidos no deberían volver a desactualizarse
+  solos. Sobre los 35 faltantes, se filtró la lista a 24 candidatos
+  reales (excluyendo ~11 cuentas de prueba/test de SellerCloud) para que
+  Claude Desktop los cruce contra logs de timeout (`ETIMEDOUT`) de
+  corridas recientes — pendiente esa respuesta. Los 103 sin match quedan
+  a decisión del usuario con su equipo, fuera del alcance de esta
+  limpieza.
 - Tokens de cliente: 10 caracteres, `crypto.getRandomValues`, sin caracteres
   ambiguos.
 - **`Referrer-Policy: no-referrer`** (meta + header en `netlify.toml`): el
