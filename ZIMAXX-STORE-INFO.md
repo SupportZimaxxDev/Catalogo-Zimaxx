@@ -290,6 +290,56 @@ C:\Users\First Choice Online\Documents\Archivos JEsus\Catalogo Zimaxx\zimaxx-sto
 - [ ] **Pendiente: correr `migration-2026-07-16-reassign-vendedora-mismatches.sql`**
   en producción — reasigna 21 clientes reales que estaban con la
   vendedora equivocada (mismo diagnóstico).
+- [x] **Ya explicado (2026-07-16), no es un bug de n8n**: por qué 18 de
+  los 21 clientes de vendedora incorrecta quedaron bajo "Maria Fernanda
+  Sardua". Los 21 tienen `created_at = 2026-07-02` (carga masiva manual
+  original, **antes** de que existiera el sync con SellerCloud) y ya
+  tenían `price_list_id` asignado — la vendedora vieja viene de esa
+  carga, no de un fallback de n8n. Lo que pasó después: un sync
+  posterior los vinculó a SellerCloud por teléfono (rama `linked_by_phone`
+  de `sync_upsert_clients`), que hace `vendedora_id = coalesce(v_vendedora_id,
+  vendedora_id)` — si en ese momento no matcheó el `Internal.SalesMan`
+  contra ninguna vendedora, conservó la vendedora vieja en vez de
+  corregirla. No hace falta tocar el n8n por esto — la migración
+  `migration-2026-07-16-reassign-vendedora-mismatches.sql` ya corrige el
+  dato puntual. **Pregunta real pendiente para el n8n** (la lleva otra
+  sesión con Claude Desktop, que no tenía visibilidad de los cambios de
+  esquema aplicados hoy vía SQL Editor en esta sesión): ¿el flujo hace
+  *resync completo* de clientes que YA tienen `sellercloud_id` (para
+  refrescar el vendedor si cambió en SellerCloud), o solo procesa
+  altas/cambios nuevos? Si es solo incremental, este tipo de
+  desactualización puede repetirse y explicaría también por qué hay 35
+  clientes reales de SellerCloud que todavía no existen en la app.
+
+**Respuesta de Claude Desktop (2026-07-16, mismo día)**: el flujo de n8n
+SÍ hace resync completo en cada corrida — `SC: Clientes listado` pagina
+el listado entero de SellerCloud (`Customers?model.companyIds=172`, sin
+filtro de fecha/delta, ~882-884 `UserID`) y **todos** pasan por
+`SC: Cliente detalle` → `sync_upsert_clients` dos veces al día, no solo
+los nuevos/cambiados. Con el `coalesce()` de la función, la vendedora de
+los 21 casos debería autocorregirse sola en la próxima corrida una vez
+que SellerCloud tenga el `Internal.SalesMan` correcto (que aparentemente
+ya lo tiene, según el export real que generó el usuario) — no hace falta
+ninguna acción de n8n para esto.
+
+**Sobre los 35 faltantes**: Claude Desktop reportó que en la última
+corrida real, de 884 clientes solo 867 llegaron completos a
+"Mapear cliente" — ~17 se cayeron por timeouts intermitentes
+(`ETIMEDOUT`) contra la API de SellerCloud, a pesar de retry/batching.
+Eso explica una parte del gap, no las 35 completas. Lista exacta de los
+35 `sellercloud_id` faltantes (generada cruzando `Clientes+Salesman.txt`
+vs `clients_export.txt`, ambos locales, no en git) para cotejar contra
+los logs de timeouts de corridas recientes: **~11-12 son basura/test de
+SellerCloud** ("PruebaVendedor1-4", "TEST API NO USAR", "Test Uno",
+"Cliente Interno" ×2, etc. — está bien que NO estén en la app) y **~23
+son clientes con nombre/teléfono real** (ej. Roxana Ortega tel.
+`7864779121`, Dadlie Desir tel. `7869560554`, Karla Romero) — estos son
+los candidatos genuinos a cruzar contra los timeouts.
+
+**Pendiente, prioridad de la sesión de n8n**: armar el nodo de cierre de
+`sync_runs` (el `PATCH` final con los conteos) — sin esto no hay forma de
+ver desde la tabla de auditoría cuántos clientes procesó cada corrida
+exacta, lo que habría hecho este diagnóstico mucho más directo.
 
 ---
 
