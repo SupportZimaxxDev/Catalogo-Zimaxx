@@ -475,6 +475,38 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   existentes — una fila de Excel para uno de esos 2 pares cae al alta de
   un cliente nuevo en vez de arriesgarse a actualizar el cliente
   equivocado.
+- **Auditoría clientes app vs. SellerCloud** (2026-07-16, a pedido del
+  usuario: notó que Adriana Montilla tenía 190 clientes en la app pero
+  solo 150 en SellerCloud, y quería confirmar que no fueran "fantasma" —
+  la app todavía no está en producción, así que su tabla `clients`
+  debería reflejar solo lo real de SellerCloud). Se comparó el export
+  real de SellerCloud (868 clientes activos, generado por el usuario vía
+  n8n) contra los 1023 de la app, cruzando por `sellercloud_id` y por
+  nombre normalizado. Encontró 3 causas distintas, no solo la de
+  Adriana: (1) **86 duplicados huérfanos** — el cliente real ya existe en
+  la app correctamente vinculado a SellerCloud con otro
+  `sellercloud_id`, pero desde la carga masiva inicial (2026-07-02)
+  quedó una segunda fila con el mismo nombre y un teléfono mal tipeado
+  que ni siquiera coincidía en los últimos 10 dígitos (por eso el índice
+  único de teléfono del punto anterior no lo detectó) —
+  `migration-2026-07-16-cleanup-unlinked-duplicate-clients.sql` los
+  borra por teléfono exacto, solo si siguen sin `sellercloud_id` y sin
+  pedidos; (2) **21 clientes con vendedora incorrecta** — el cliente es
+  real y su `sellercloud_id` es correcto, pero la app lo tenía asignado
+  a otra vendedora que la que dice SellerCloud (18 de ellos mal puestos
+  bajo Maria Fernanda Sardua, en realidad de Manuela
+  Henriquez/Luzmila Ernandez/Yusleidy Romero/Jesus Rodriguez/Daniela
+  Bohorquez — esto también explica por qué esas 4 aparecían con MENOS
+  clientes en la app que en SellerCloud) —
+  `migration-2026-07-16-reassign-vendedora-mismatches.sql` los reasigna
+  por `sellercloud_id`; (3) **103 sin match** que no corresponden a
+  ningún nombre del export real — podrían ser clientes que SellerCloud
+  ya dio de baja o basura de la carga inicial, el usuario pidió
+  dejarlos sin tocar por ahora. Aparte, **35 clientes reales de
+  SellerCloud todavía no están sincronizados a la app** (sobre todo sin
+  vendedora asignada) — dato relevante para antes de salir a
+  producción, no forma parte de esta limpieza. Ambas migraciones toman
+  backup propio (`clients_backup_20260716_*`) antes de tocar nada.
 - Tokens de cliente: 10 caracteres, `crypto.getRandomValues`, sin caracteres
   ambiguos.
 - **`Referrer-Policy: no-referrer`** (meta + header en `netlify.toml`): el

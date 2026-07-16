@@ -100,7 +100,25 @@
 > equivocado — una fila así cae al alta de un cliente nuevo en vez de
 > pisar uno de los dos. **Pendiente y urgente de correr en producción**
 > (si el sync sigue activo, cada corrida antes de esta migración sigue
-> generando más duplicados).
+> generando más duplicados). 2026-07-16: auditoría completa comparando el
+> export real de SellerCloud (868 clientes activos, vía n8n) contra los
+> 1023 de la app — confirmó la sospecha del usuario de que Adriana
+> Montilla tenía clientes "de más" (150 reales vs 190 en la app) y
+> encontró el mismo patrón en otras vendedoras. Dos causas distintas, dos
+> migraciones: `migration-2026-07-16-cleanup-unlinked-duplicate-clients.sql`
+> borra 86 filas huérfanas de la carga inicial (2026-07-02) que son
+> duplicados confirmados de un cliente que ya existe correctamente
+> vinculado a SellerCloud con otro teléfono/sellercloud_id;
+> `migration-2026-07-16-reassign-vendedora-mismatches.sql` reasigna 21
+> clientes reales que estaban con la vendedora equivocada (18 de ellos
+> mal puestos bajo Maria Fernanda Sardua, en realidad de Manuela
+> Henriquez/Luzmila Ernandez/Yusleidy Romero/Jesus Rodriguez/Daniela
+> Bohorquez). Quedan aparte, sin tocar a pedido del usuario: 103 clientes
+> sin `sellercloud_id` que no matchean ningún cliente real de SellerCloud
+> por nombre (podrían ser clientes que SellerCloud ya dio de baja, o
+> basura de la carga inicial — pendiente de decisión), y 35 clientes
+> reales que existen en SellerCloud pero todavía no están sincronizados a
+> la app. **Pendiente de correr ambas migraciones en producción.**
 
 ---
 
@@ -264,6 +282,14 @@ C:\Users\First Choice Online\Documents\Archivos JEsus\Catalogo Zimaxx\zimaxx-sto
   código de esta sesión (frontend + migración) está commiteado
   localmente (`9ce3020`), **pendiente de `git push`** (el usuario lo hace
   a su criterio).
+- [ ] **Pendiente: correr `migration-2026-07-16-cleanup-unlinked-duplicate-clients.sql`**
+  en producción — borra 86 clientes huérfanos de la carga inicial
+  (2026-07-02) confirmados como duplicados de un cliente que ya existe
+  vinculado a SellerCloud con otro teléfono (ver diagnóstico en sección 6
+  y en `ZIMAXX-STORE-INFO.md` arriba, punto 2026-07-16).
+- [ ] **Pendiente: correr `migration-2026-07-16-reassign-vendedora-mismatches.sql`**
+  en producción — reasigna 21 clientes reales que estaban con la
+  vendedora equivocada (mismo diagnóstico).
 
 ---
 
