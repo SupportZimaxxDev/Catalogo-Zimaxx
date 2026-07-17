@@ -8,12 +8,17 @@ import { inputCls } from './ui'
 // ver update_client_price_list en schema.sql — ahora una vendedora también
 // puede cambiarle la lista a sus clientes, y queda auditado igual que
 // reassign/delete. 2026-07-17 suma 'edit_order_items', ver
-// update_order_items — edición de ítems de un pedido, mismo criterio).
+// update_order_items — edición de ítems de un pedido, mismo criterio;
+// misma tanda: 'update_order_status' (marcar atendido/cancelar/reabrir,
+// antes sin auditar) y 'convert_quote_to_order' (cerrar una cotización
+// como pedido real, precio congelado desde ese momento)).
 const ACTION_STYLES = {
   delete_client: 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
   update_price_list: 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
   reassign_client: 'bg-gold-pale text-secondary-dark',
   edit_order_items: 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
+  update_order_status: 'bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300',
+  convert_quote_to_order: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
 }
 
 // Historial de reasignaciones/eliminaciones de clientes y cambios de
@@ -46,6 +51,9 @@ export default function AuditLogAdmin() {
     [rows],
   )
 
+  const statusLabel = (status) =>
+    status === 'done' ? t('statusDone') : status === 'cancelled' ? t('statusCancelled') : t('statusNew')
+
   const actionLabel = (action) =>
     action === 'delete_client'
       ? t('actionDelete')
@@ -53,7 +61,11 @@ export default function AuditLogAdmin() {
         ? t('actionUpdateList')
         : action === 'edit_order_items'
           ? t('actionEditOrder')
-          : t('actionReassign')
+          : action === 'update_order_status'
+            ? t('actionUpdateOrderStatus')
+            : action === 'convert_quote_to_order'
+              ? t('actionConvertQuote')
+              : t('actionReassign')
 
   const detailText = (a) => {
     if (a.action === 'reassign_client') {
@@ -68,6 +80,13 @@ export default function AuditLogAdmin() {
       const beforeTotal = a.detail?.before_total != null ? money(a.detail.before_total) : '—'
       const afterTotal = a.detail?.after_total != null ? money(a.detail.after_total) : '—'
       return `${before}→${after} ${t('items')} · ${beforeTotal} → ${afterTotal}`
+    }
+    if (a.action === 'update_order_status') {
+      return `${statusLabel(a.detail?.from_status)} → ${statusLabel(a.detail?.to_status)}`
+    }
+    if (a.action === 'convert_quote_to_order') {
+      const total = a.detail?.total != null ? money(a.detail.total) : '—'
+      return `${t('quote')} → ${t('order')} · ${total}`
     }
     return [a.detail?.phone, a.detail?.vendedora, a.detail?.lista].filter(Boolean).join(' · ')
   }
@@ -108,6 +127,8 @@ export default function AuditLogAdmin() {
           <option value="delete_client">{t('actionDelete')}</option>
           <option value="update_price_list">{t('actionUpdateList')}</option>
           <option value="edit_order_items">{t('actionEditOrder')}</option>
+          <option value="update_order_status">{t('actionUpdateOrderStatus')}</option>
+          <option value="convert_quote_to_order">{t('actionConvertQuote')}</option>
         </select>
         <label className="flex items-center gap-1.5 text-xs text-primary/60">
           {t('dateFrom')}

@@ -218,21 +218,27 @@ alter table public.orders drop constraint if exists orders_status_check;
 alter table public.orders add constraint orders_status_check
   check (status in ('new', 'done', 'cancelled'));
 
--- Blinda items/total de un pedido para que solo se editen a través de la
--- RPC update_order_items (2026-07-17): así el cambio queda auditado sí o
--- sí en admin_audit_log, igual que reassign_client/delete_client/
--- update_client_price_list. La RPC prende la bandera de sesión
--- app.allow_order_edit antes de escribir; cualquier otro update directo a
--- la tabla (ej. marcar atendido/cancelado, que no toca items/total) sigue
--- funcionando sin tocar el trigger.
+-- Blinda items/total/status/kind de un pedido para que solo se editen a
+-- través de las RPC update_order_items/update_order_status/
+-- convert_quote_to_order (2026-07-17, ampliado el mismo día: originalmente
+-- solo cubría items/total): así cualquier cambio queda auditado sí o sí
+-- en admin_audit_log, igual que reassign_client/delete_client/
+-- update_client_price_list. Cada RPC prende la bandera de sesión
+-- app.allow_order_edit antes de escribir; sin esto, la policy
+-- vendedora_update_own_orders (pensada para que una vendedora marque sus
+-- pedidos atendido/nuevo) le hubiera permitido tocar cualquier columna
+-- directo, sin auditar.
 create or replace function public.orders_guard_items_edit()
 returns trigger
 language plpgsql
 as $$
 begin
-  if (new.items is distinct from old.items or new.total is distinct from old.total)
+  if (new.items is distinct from old.items
+      or new.total is distinct from old.total
+      or new.status is distinct from old.status
+      or new.kind is distinct from old.kind)
      and coalesce(current_setting('app.allow_order_edit', true), '') <> 'on' then
-    raise exception 'los items de un pedido solo se editan via update_order_items';
+    raise exception 'los pedidos solo se editan via update_order_items/update_order_status/convert_quote_to_order';
   end if;
   return new;
 end;
@@ -1075,8 +1081,14 @@ begin
     raise exception 'no tenés permiso para editar este pedido';
   end if;
 
-  if v_order.status = 'cancelled' then
-    raise exception 'no se puede editar un pedido cancelado';
+  -- Solo se editan cotizaciones (2026-07-17, a pedido del usuario: un
+  -- pedido real ya confirmado no se toca desde acá) y solo mientras
+  -- siguen 'new' — una vez atendida o cancelada, tampoco se edita.
+  if v_order.kind <> 'quote' then
+    raise exception 'solo se pueden editar cotizaciones';
+  end if;
+  if v_order.status <> 'new' then
+    raise exception 'solo se pueden editar cotizaciones nuevas';
   end if;
 
   if p_items is null or jsonb_typeof(p_items) <> 'array'
@@ -1117,6 +1129,139 @@ $$;
 
 revoke execute on function public.update_order_items(uuid, jsonb) from public;
 grant execute on function public.update_order_items(uuid, jsonb) to authenticated;
+
+-- ---------- RPC: update_order_status ----------
+-- Antes "Marcar atendido"/"Cancelar"/"Reabrir" hacían un update directo
+-- (`vendedora_update_own_orders` ya lo permitía) sin dejar rastro. A
+-- pedido del usuario (2026-07-17), ahora queda auditado igual que la
+-- edición de ítems.
+create or replace function public.update_order_status(
+  p_order_id uuid,
+  p_status   text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order  public.orders%rowtype;
+  v_client public.clients%rowtype;
+  v_email  text;
+begin
+  if not (public.is_admin() or public.is_vendedora()) then
+    raise exception 'no autorizado';
+  end if;
+
+  if p_status not in ('new', 'done', 'cancelled') then
+    raise exception 'estado inválido';
+  end if;
+
+  select * into v_order from public.orders where id = p_order_id;
+  if not found then
+    raise exception 'pedido no encontrado';
+  end if;
+
+  select * into v_client from public.clients where id = v_order.client_id;
+
+  if not public.is_admin()
+     and v_client.vendedora_id is distinct from public.current_vendedora_id() then
+    raise exception 'no tenés permiso para modificar este pedido';
+  end if;
+
+  if v_order.status = p_status then
+    return jsonb_build_object('ok', true, 'status', p_status);
+  end if;
+
+  select email into v_email from auth.users where id = auth.uid();
+
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, client_id, client_name, order_id, detail)
+  values
+    ('update_order_status', auth.uid(), v_email, v_client.id, v_client.name, p_order_id,
+     jsonb_build_object('from_status', v_order.status, 'to_status', p_status));
+
+  perform set_config('app.allow_order_edit', 'on', true);
+  update public.orders set status = p_status where id = p_order_id;
+
+  return jsonb_build_object('ok', true, 'status', p_status);
+end;
+$$;
+
+revoke execute on function public.update_order_status(uuid, text) from public;
+grant execute on function public.update_order_status(uuid, text) to authenticated;
+
+-- ---------- RPC: convert_quote_to_order ----------
+-- A pedido del usuario (2026-07-17): una cotización se puede "convertir"
+-- en pedido real. A diferencia de una cotización (que nunca congela
+-- precio, ver get_quotes_live_pricing), un pedido SÍ lo congela — desde
+-- acá en adelante ya no se sigue ajustando a cambios de precio futuros.
+create or replace function public.convert_quote_to_order(p_order_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order     public.orders%rowtype;
+  v_client    public.clients%rowtype;
+  v_list_code text;
+  v_result    jsonb;
+  v_email     text;
+begin
+  if not (public.is_admin() or public.is_vendedora()) then
+    raise exception 'no autorizado';
+  end if;
+
+  select * into v_order from public.orders where id = p_order_id;
+  if not found then
+    raise exception 'pedido no encontrado';
+  end if;
+
+  select * into v_client from public.clients where id = v_order.client_id;
+
+  if not public.is_admin()
+     and v_client.vendedora_id is distinct from public.current_vendedora_id() then
+    raise exception 'no tenés permiso para modificar este pedido';
+  end if;
+
+  if v_order.kind <> 'quote' then
+    raise exception 'solo se pueden convertir cotizaciones';
+  end if;
+
+  if v_order.status = 'cancelled' then
+    raise exception 'no se puede convertir una cotización cancelada';
+  end if;
+
+  select code into v_list_code from public.price_lists where id = v_client.price_list_id;
+  if v_list_code = 'quote' then
+    raise exception 'asigná una lista de precio real al cliente antes de convertir la cotización en pedido';
+  end if;
+
+  v_result := public.compute_order_items(v_client.id, v_order.items, 'order');
+
+  select email into v_email from auth.users where id = auth.uid();
+
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, client_id, client_name, order_id, detail)
+  values
+    ('convert_quote_to_order', auth.uid(), v_email, v_client.id, v_client.name, p_order_id,
+     jsonb_build_object(
+       'items', v_result->'items',
+       'total', v_result->'total'
+     ));
+
+  perform set_config('app.allow_order_edit', 'on', true);
+  update public.orders
+  set kind = 'order', items = v_result->'items', total = (v_result->>'total')::numeric
+  where id = p_order_id;
+
+  return v_result;
+end;
+$$;
+
+revoke execute on function public.convert_quote_to_order(uuid) from public;
+grant execute on function public.convert_quote_to_order(uuid) to authenticated;
 
 -- ---------- RPC: get_quotes_live_pricing ----------
 -- Una cotización (kind = 'quote') nunca guarda precio congelado (ver

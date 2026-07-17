@@ -44,6 +44,11 @@ export default function OrdersAdmin() {
   const [productQuery, setProductQuery] = useState('')
   const [products, setProducts] = useState(null)
 
+  // Confirmación antes de marcar atendido/cancelar/reabrir (2026-07-17,
+  // a pedido del usuario) y feedback de error para "Convertir en pedido".
+  const [confirmStatus, setConfirmStatus] = useState(null) // { id, status }
+  const [convertError, setConvertError] = useState(null) // { id, message }
+
   const loadLivePricing = async (list) => {
     const quoteIds = list.filter((o) => o.kind === 'quote').map((o) => o.id)
     if (quoteIds.length === 0) return
@@ -66,9 +71,30 @@ export default function OrdersAdmin() {
       })
   }, [])
 
-  const setStatus = async (id, status) => {
-    const { error } = await supabase.from('orders').update({ status }).eq('id', id)
+  // Antes era un update directo; ahora pasa por la RPC auditada
+  // (2026-07-17) — cada cambio de estado queda en admin_audit_log. La UI
+  // pide confirmación antes de llamarla (ver confirmStatus más abajo).
+  const applyStatus = async (id, status) => {
+    const { error } = await supabase.rpc('update_order_status', { p_order_id: id, p_status: status })
     if (!error) setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status } : o)))
+  }
+
+  const statusLabel = (status) =>
+    status === 'done' ? t('statusDone') : status === 'cancelled' ? t('statusCancelled') : t('statusNew')
+
+  // Convertir una cotización en pedido real (2026-07-17): congela precio
+  // (a diferencia de una cotización, que siempre se ve con precio
+  // vigente — ver displayOf) y queda auditado del lado del servidor.
+  const convertToOrder = async (o) => {
+    setConvertError(null)
+    const { data, error } = await supabase.rpc('convert_quote_to_order', { p_order_id: o.id })
+    if (error) {
+      setConvertError({ id: o.id, message: error.message })
+      return
+    }
+    setOrders((prev) =>
+      prev.map((x) => (x.id === o.id ? { ...x, kind: 'order', items: data.items, total: data.total } : x)),
+    )
   }
 
   // Ítems/total a mostrar: los de la cotización se pisan con el precio
@@ -244,7 +270,10 @@ export default function OrdersAdmin() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((o) => (
+            {filtered.map((o) => {
+              const canEdit = o.kind === 'quote' && (o.status ?? 'new') === 'new'
+              const canConvert = o.kind === 'quote' && (o.status ?? 'new') !== 'cancelled'
+              return (
               <Fragment key={o.id}>
               <tr
                 onClick={() => setExpanded(expanded === o.id ? null : o.id)}
@@ -271,112 +300,168 @@ export default function OrdersAdmin() {
                   </span>
                 </td>
                 <td className="p-3">
-                  {expanded === o.id ? (
-                    <ul className="space-y-1">
-                      {(displayOf(o).items ?? []).map((i, n) => (
-                        <li key={n} className="text-xs">
-                          <span className="font-mono text-primary/50">[{i.sku}]</span> {i.name} ×
-                          {i.qty}
-                          {i.price != null && <> @ {money(i.price)}</>}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <span className="text-primary/60">
-                      {(o.items ?? []).reduce((n, i) => n + (i.qty ?? 0), 0)} {t('items')} ▾
-                    </span>
-                  )}
+                  <span className="inline-flex items-center gap-1 text-primary/60">
+                    {(o.items ?? []).reduce((n, i) => n + (i.qty ?? 0), 0)} {t('items')}
+                    <svg
+                      viewBox="0 0 24 24"
+                      className={`h-3 w-3 shrink-0 transition-transform ${expanded === o.id ? 'rotate-180' : ''}`}
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
+                  </span>
                 </td>
                 <td className="p-3 text-right font-bold">
                   {displayOf(o).total != null ? money(displayOf(o).total) : '—'}
                 </td>
                 <td className="whitespace-nowrap p-3">
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${STATUS_STYLES[o.status ?? 'new']}`}
-                  >
-                    {o.status === 'done'
-                      ? t('statusDone')
-                      : o.status === 'cancelled'
-                        ? t('statusCancelled')
-                        : t('statusNew')}
-                  </span>
-                  {(o.status ?? 'new') === 'new' ? (
-                    <span className="ml-2 inline-flex gap-1.5">
+                  <div className="flex flex-col items-start gap-1.5">
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${STATUS_STYLES[o.status ?? 'new']}`}
+                    >
+                      {statusLabel(o.status ?? 'new')}
+                    </span>
+                    {(o.status ?? 'new') === 'new' ? (
+                      <span className="inline-flex gap-1.5">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setConfirmStatus({ id: o.id, status: 'done' })
+                          }}
+                          className="rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
+                        >
+                          {t('markDone')}
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setConfirmStatus({ id: o.id, status: 'cancelled' })
+                          }}
+                          className="rounded-lg border border-line px-2.5 py-1 text-xs text-red-600 transition-colors hover:border-red-400 dark:text-red-400"
+                        >
+                          {t('cancelOrder')}
+                        </button>
+                      </span>
+                    ) : (
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
-                          setStatus(o.id, 'done')
+                          setConfirmStatus({ id: o.id, status: 'new' })
                         }}
                         className="rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
                       >
-                        {t('markDone')}
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setStatus(o.id, 'cancelled')
-                        }}
-                        className="rounded-lg border border-line px-2.5 py-1 text-xs text-red-600 transition-colors hover:border-red-400 dark:text-red-400"
-                      >
-                        {t('cancelOrder')}
-                      </button>
-                    </span>
-                  ) : (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setStatus(o.id, 'new')
-                      }}
-                      className="ml-2 rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
-                    >
-                      {t('markNew')}
-                    </button>
-                  )}
-                </td>
-                <td className="whitespace-nowrap p-3 text-right">
-                  <span className="inline-flex gap-1.5">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        exportPdf(o)
-                      }}
-                      className="rounded-full border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
-                    >
-                      {t('downloadPdf')}
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        exportOrder(o)
-                      }}
-                      className="rounded-full border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
-                    >
-                      {t('downloadExcel')}
-                    </button>
-                    {(o.status ?? 'new') !== 'cancelled' && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          startEdit(o)
-                        }}
-                        className="rounded-full border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
-                      >
-                        {t('edit')}
+                        {t('markNew')}
                       </button>
                     )}
-                  </span>
+                  </div>
+                </td>
+                <td className="p-3 text-right align-top">
+                  <div className="flex flex-col items-end gap-1.5">
+                    <span className="inline-flex gap-1.5">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          exportPdf(o)
+                        }}
+                        className="whitespace-nowrap rounded-full border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
+                      >
+                        {t('downloadPdf')}
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          exportOrder(o)
+                        }}
+                        className="whitespace-nowrap rounded-full border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
+                      >
+                        {t('downloadExcel')}
+                      </button>
+                    </span>
+                    {(canEdit || canConvert) && (
+                      <span className="inline-flex gap-1.5">
+                        {canEdit && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              startEdit(o)
+                            }}
+                            className="whitespace-nowrap rounded-full border border-secondary/60 px-2.5 py-1 text-xs text-secondary-dark transition-colors hover:bg-gold-pale/40"
+                          >
+                            {t('edit')}
+                          </button>
+                        )}
+                        {canConvert && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              convertToOrder(o)
+                            }}
+                            className="whitespace-nowrap rounded-full border border-secondary/60 px-2.5 py-1 text-xs text-secondary-dark transition-colors hover:bg-gold-pale/40"
+                          >
+                            {t('convertToOrder')}
+                          </button>
+                        )}
+                      </span>
+                    )}
+                    {convertError?.id === o.id && (
+                      <p className="max-w-[12rem] text-right text-[11px] font-medium text-red-600 dark:text-red-400">
+                        {convertError.message}
+                      </p>
+                    )}
+                  </div>
                 </td>
               </tr>
-              {editing === o.id && (
-                <tr className="border-b border-primary/10 bg-gold-pale/10">
+              {expanded === o.id && (
+                <tr className="border-b border-primary/10 bg-primary/[0.02]">
                   <td colSpan={7} className="p-4">
-                    <div className="space-y-3">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left uppercase tracking-wide text-primary/45">
+                            <th className="pb-2 pr-4 font-semibold">{t('product')}</th>
+                            <th className="pb-2 pr-4 text-right font-semibold">{t('quantity')}</th>
+                            <th className="pb-2 pr-4 text-right font-semibold">{t('unitPrice')}</th>
+                            <th className="pb-2 text-right font-semibold">{t('subtotal')}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(displayOf(o).items ?? []).map((i, n) => (
+                            <tr key={n} className="border-t border-primary/10">
+                              <td className="py-1.5 pr-4">
+                                <span className="font-mono text-primary/40">[{i.sku}]</span> {i.name}
+                                {i.flash && <span className="ml-1 text-secondary-dark">⚡</span>}
+                              </td>
+                              <td className="py-1.5 pr-4 text-right">{i.qty}</td>
+                              <td className="py-1.5 pr-4 text-right">{i.price != null ? money(i.price) : '—'}</td>
+                              <td className="py-1.5 text-right font-semibold">
+                                {i.price != null ? money(i.price * i.qty) : '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </td>
+                </tr>
+              )}
+              {editing === o.id && (
+                <tr className="border-b border-primary/10 bg-primary/[0.02]">
+                  <td colSpan={7} className="p-4">
+                    <div className="mx-auto max-w-2xl rounded-2xl border border-secondary/30 bg-surface p-4 shadow-sm">
+                      <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-secondary-dark">
+                        {t('editingQuote')} — {o.clients?.name}
+                      </p>
+
                       {editItems.length === 0 ? (
-                        <p className="text-xs text-primary/50">{t('emptyCart')}</p>
+                        <p className="py-3 text-center text-xs text-primary/50">{t('emptyCart')}</p>
                       ) : (
-                        <ul className="space-y-1.5">
+                        <ul className="divide-y divide-line rounded-xl border border-line">
                           {editItems.map((i) => (
-                            <li key={i.id} className="flex items-center gap-2 text-sm">
+                            <li key={i.id} className="flex items-center gap-3 p-2.5 text-sm">
                               <span className="min-w-0 flex-1 truncate">
                                 <span className="font-mono text-xs text-primary/50">[{i.sku}]</span> {i.name}
                               </span>
@@ -400,7 +485,7 @@ export default function OrdersAdmin() {
                         </ul>
                       )}
 
-                      <div className="relative max-w-md">
+                      <div className="relative mt-3">
                         <input
                           type="search"
                           value={productQuery}
@@ -433,9 +518,11 @@ export default function OrdersAdmin() {
                         )}
                       </div>
 
-                      {editError && <p className="text-xs font-medium text-red-600 dark:text-red-400">{editError}</p>}
+                      {editError && (
+                        <p className="mt-3 text-xs font-medium text-red-600 dark:text-red-400">{editError}</p>
+                      )}
 
-                      <div className="flex gap-2">
+                      <div className="mt-4 flex gap-2">
                         <button
                           type="button"
                           disabled={editBusy}
@@ -457,10 +544,46 @@ export default function OrdersAdmin() {
                 </tr>
               )}
               </Fragment>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>
+      )}
+
+      {confirmStatus && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[2px] md:items-center"
+          onClick={() => setConfirmStatus(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm animate-fade-up rounded-t-3xl border-t-4 border-secondary bg-surface p-6 shadow-2xl md:rounded-3xl"
+          >
+            <h3 className="font-brand text-lg font-semibold">{t('confirmOrderActionTitle')}</h3>
+            <p className="mt-1.5 text-sm leading-relaxed text-primary/60">
+              {t('confirmOrderActionBody')} <span className="font-semibold">{statusLabel(confirmStatus.status)}</span>.
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button
+                onClick={() => setConfirmStatus(null)}
+                className="flex-1 rounded-xl border border-line py-2.5 text-sm font-semibold transition-colors hover:border-primary/40"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={() => {
+                  const { id, status } = confirmStatus
+                  setConfirmStatus(null)
+                  applyStatus(id, status)
+                }}
+                className="flex-1 rounded-xl bg-ink py-2.5 text-sm font-bold text-secondary transition-opacity hover:opacity-90"
+              >
+                {t('confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

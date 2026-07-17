@@ -27,15 +27,24 @@ alter table public.admin_audit_log add column if not exists order_id uuid;
 create index if not exists admin_audit_log_order_idx
   on public.admin_audit_log (order_id) where order_id is not null;
 
--- ---------- 2) trigger: blindar items/total de orders ----------
+-- ---------- 2) trigger: blindar items/total/status/kind de orders ----------
+-- Blinda las 4 columnas que hoy se escriben desde RPC auditadas (2026-07-17,
+-- segunda pasada del mismo día: originalmente solo cubría items/total —
+-- se suma status/kind porque marcar atendido/cancelar/reabrir y convertir
+-- una cotización en pedido también tienen que quedar auditados, y
+-- `vendedora_update_own_orders` le da a una vendedora `update` crudo
+-- sobre sus propios pedidos sin distinguir columna).
 create or replace function public.orders_guard_items_edit()
 returns trigger
 language plpgsql
 as $$
 begin
-  if (new.items is distinct from old.items or new.total is distinct from old.total)
+  if (new.items is distinct from old.items
+      or new.total is distinct from old.total
+      or new.status is distinct from old.status
+      or new.kind is distinct from old.kind)
      and coalesce(current_setting('app.allow_order_edit', true), '') <> 'on' then
-    raise exception 'los items de un pedido solo se editan via update_order_items';
+    raise exception 'los pedidos solo se editan via update_order_items/update_order_status/convert_quote_to_order';
   end if;
   return new;
 end;
@@ -221,8 +230,14 @@ begin
     raise exception 'no tenés permiso para editar este pedido';
   end if;
 
-  if v_order.status = 'cancelled' then
-    raise exception 'no se puede editar un pedido cancelado';
+  -- Solo se editan cotizaciones (2026-07-17, a pedido del usuario: un
+  -- pedido real ya confirmado no se toca desde acá) y solo mientras
+  -- siguen 'new' — una vez atendida o cancelada, tampoco se edita.
+  if v_order.kind <> 'quote' then
+    raise exception 'solo se pueden editar cotizaciones';
+  end if;
+  if v_order.status <> 'new' then
+    raise exception 'solo se pueden editar cotizaciones nuevas';
   end if;
 
   if p_items is null or jsonb_typeof(p_items) <> 'array'
@@ -261,6 +276,139 @@ $$;
 
 revoke execute on function public.update_order_items(uuid, jsonb) from public;
 grant execute on function public.update_order_items(uuid, jsonb) to authenticated;
+
+-- ---------- 5b) update_order_status: cambio de estado auditado ----------
+-- Antes "Marcar atendido"/"Cancelar"/"Reabrir" hacían un update directo
+-- (`vendedora_update_own_orders` ya lo permitía) sin dejar rastro. A
+-- pedido del usuario, ahora queda auditado igual que la edición de
+-- ítems.
+create or replace function public.update_order_status(
+  p_order_id uuid,
+  p_status   text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order  public.orders%rowtype;
+  v_client public.clients%rowtype;
+  v_email  text;
+begin
+  if not (public.is_admin() or public.is_vendedora()) then
+    raise exception 'no autorizado';
+  end if;
+
+  if p_status not in ('new', 'done', 'cancelled') then
+    raise exception 'estado inválido';
+  end if;
+
+  select * into v_order from public.orders where id = p_order_id;
+  if not found then
+    raise exception 'pedido no encontrado';
+  end if;
+
+  select * into v_client from public.clients where id = v_order.client_id;
+
+  if not public.is_admin()
+     and v_client.vendedora_id is distinct from public.current_vendedora_id() then
+    raise exception 'no tenés permiso para modificar este pedido';
+  end if;
+
+  if v_order.status = p_status then
+    return jsonb_build_object('ok', true, 'status', p_status);
+  end if;
+
+  select email into v_email from auth.users where id = auth.uid();
+
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, client_id, client_name, order_id, detail)
+  values
+    ('update_order_status', auth.uid(), v_email, v_client.id, v_client.name, p_order_id,
+     jsonb_build_object('from_status', v_order.status, 'to_status', p_status));
+
+  perform set_config('app.allow_order_edit', 'on', true);
+  update public.orders set status = p_status where id = p_order_id;
+
+  return jsonb_build_object('ok', true, 'status', p_status);
+end;
+$$;
+
+revoke execute on function public.update_order_status(uuid, text) from public;
+grant execute on function public.update_order_status(uuid, text) to authenticated;
+
+-- ---------- 5c) convert_quote_to_order: cerrar una cotización como pedido real ----------
+-- A pedido del usuario: una cotización se puede "convertir" en pedido
+-- real. A diferencia de una cotización (que nunca congela precio, ver
+-- get_quotes_live_pricing), un pedido SÍ lo congela — desde acá en
+-- adelante ya no se sigue ajustando a cambios de precio futuros.
+create or replace function public.convert_quote_to_order(p_order_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order     public.orders%rowtype;
+  v_client    public.clients%rowtype;
+  v_list_code text;
+  v_result    jsonb;
+  v_email     text;
+begin
+  if not (public.is_admin() or public.is_vendedora()) then
+    raise exception 'no autorizado';
+  end if;
+
+  select * into v_order from public.orders where id = p_order_id;
+  if not found then
+    raise exception 'pedido no encontrado';
+  end if;
+
+  select * into v_client from public.clients where id = v_order.client_id;
+
+  if not public.is_admin()
+     and v_client.vendedora_id is distinct from public.current_vendedora_id() then
+    raise exception 'no tenés permiso para modificar este pedido';
+  end if;
+
+  if v_order.kind <> 'quote' then
+    raise exception 'solo se pueden convertir cotizaciones';
+  end if;
+
+  if v_order.status = 'cancelled' then
+    raise exception 'no se puede convertir una cotización cancelada';
+  end if;
+
+  select code into v_list_code from public.price_lists where id = v_client.price_list_id;
+  if v_list_code = 'quote' then
+    raise exception 'asigná una lista de precio real al cliente antes de convertir la cotización en pedido';
+  end if;
+
+  v_result := public.compute_order_items(v_client.id, v_order.items, 'order');
+
+  select email into v_email from auth.users where id = auth.uid();
+
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, client_id, client_name, order_id, detail)
+  values
+    ('convert_quote_to_order', auth.uid(), v_email, v_client.id, v_client.name, p_order_id,
+     jsonb_build_object(
+       'items', v_result->'items',
+       'total', v_result->'total'
+     ));
+
+  perform set_config('app.allow_order_edit', 'on', true);
+  update public.orders
+  set kind = 'order', items = v_result->'items', total = (v_result->>'total')::numeric
+  where id = p_order_id;
+
+  return v_result;
+end;
+$$;
+
+revoke execute on function public.convert_quote_to_order(uuid) from public;
+grant execute on function public.convert_quote_to_order(uuid) to authenticated;
 
 -- ---------- 6) get_quotes_live_pricing: precio vigente para cotizaciones ----------
 create or replace function public.get_quotes_live_pricing(p_order_ids uuid[])
@@ -304,19 +452,33 @@ grant execute on function public.get_quotes_live_pricing(uuid[]) to authenticate
 -- ---------- Selects de prueba (comentados) ----------
 -- Correr a mano en el SQL Editor antes de dar por buena la migración.
 --
--- 1) Editar un pedido propio (como la vendedora dueña, o como admin):
+-- 1) Editar una cotización nueva propia (como la vendedora dueña, o como admin):
 -- select public.update_order_items(
---   '<order_id>',
+--   '<quote_order_id>',
 --   '[{"id": "<product_id>", "qty": 3, "flash": false}]'::jsonb
 -- );
 -- -- Debe devolver {items:[...], total:...} y sumar una fila en
 -- -- admin_audit_log con action = 'edit_order_items'.
 --
--- 2) Confirmar el bloqueo de update directo:
--- update public.orders set items = '[]'::jsonb where id = '<order_id>';
--- -- Debe fallar con "los items de un pedido solo se editan via update_order_items".
+-- 2) Confirmar que un pedido real (kind='order') no se puede editar:
+-- select public.update_order_items('<order_kind_order_id>', '[]'::jsonb);
+-- -- Debe fallar con "solo se pueden editar cotizaciones".
 --
--- 3) Precio vigente de una cotización:
+-- 3) Confirmar el bloqueo de update directo (items/total/status/kind):
+-- update public.orders set items = '[]'::jsonb where id = '<order_id>';
+-- update public.orders set status = 'done' where id = '<order_id>';
+-- -- Ambos deben fallar con "los pedidos solo se editan via update_order_items/...".
+--
+-- 4) Cambiar estado auditado:
+-- select public.update_order_status('<order_id>', 'done');
+-- -- Debe sumar una fila en admin_audit_log con action = 'update_order_status'.
+--
+-- 5) Convertir una cotización en pedido:
+-- select public.convert_quote_to_order('<quote_order_id>');
+-- -- El pedido debe quedar con kind='order' y precio congelado; sumar una
+-- -- fila en admin_audit_log con action = 'convert_quote_to_order'.
+--
+-- 6) Precio vigente de una cotización:
 -- select public.get_quotes_live_pricing(array['<quote_order_id>']::uuid[]);
 -- -- Cambiar el precio del producto en product_prices y volver a correr:
 -- -- el total tiene que reflejar el nuevo precio, no el guardado en orders.items.
