@@ -6,7 +6,9 @@ import { parseSheet, normalizeHeader } from '../../utils/excel'
 import { money } from '../../utils/format'
 import { SearchIcon, inputCls, useInfiniteRows } from './ui'
 
-// Alias aceptados por lista para las columnas del Excel de precios.
+// Alias aceptados por lista para la columna de precio del Excel (algunos
+// archivos reales nombran la columna igual que la lista, ej. "US Minimum
+// Order", en vez de un genérico "Price").
 const LIST_ALIASES = {
   us_min: ['us minimum order', 'us min', 'us minimum', 'us_min'],
   us_wholesale: ['us wholesale', 'us_wholesale'],
@@ -17,10 +19,17 @@ const LIST_ALIASES = {
 }
 const SKU_ALIASES = ['sku', 'codigo', 'código', 'code', 'productid']
 
-// Listas "generales" reales (ej. "Wholesale Perfume"): una sola columna
-// de precio sin decir a qué lista pertenece. Se detecta y el admin elige
-// la lista destino en un selector antes de subir.
+// Columna de precio genérica (la mayoría de los archivos reales, ej.
+// "Wholesale Perfume": una sola columna de precio sin decir a qué lista
+// pertenece — por eso el admin elige la lista destino en un selector
+// antes de subir el archivo).
 const GENERIC_PRICE_ALIASES = ['price', 'precio', 'precio unitario', 'unit price']
+
+// Columna de disponibilidad (misma que usa ProductsAdmin para el Excel
+// de productos): Available / Pre Order / Flash Sale. La RPC hace el
+// mapeo a 'available'/'preorder'/'flash', acá solo se detecta y se manda
+// el texto crudo.
+const TYPE_ALIASES = ['type', 'tipo', 'disponibilidad']
 
 // Orden fijo de columnas en la matriz de precios.
 const LIST_ORDER = ['us_min', 'us_wholesale', 've_min', 've_wholesale', 'special', 'luzmar']
@@ -31,8 +40,13 @@ export default function PricesUpload() {
   const isAdmin = role === 'admin'
   const [priceLists, setPriceLists] = useState([])
   const [busy, setBusy] = useState(false)
+  const [committing, setCommitting] = useState(false)
   const [result, setResult] = useState(null)
-  const [targetList, setTargetList] = useState('')
+  const [selectedListCode, setSelectedListCode] = useState('')
+  // Preview de apply_price_list (p_commit: false) pendiente de confirmar:
+  // { rows, data } | null. rows es lo mismo que se manda al confirmar, así
+  // no hay que re-parsear el Excel al aplicar.
+  const [preview, setPreview] = useState(null)
 
   // Matriz de precios: producto × lista.
   const [products, setProducts] = useState([])
@@ -106,84 +120,87 @@ export default function PricesUpload() {
     const file = e.target.files?.[0]
     if (!file) return
     e.target.value = ''
-    setBusy(true)
     setResult(null)
+    setPreview(null)
 
+    if (!selectedListCode) {
+      setResult({ ok: false, message: t('chooseTargetList') })
+      return
+    }
+
+    setBusy(true)
     try {
       const rows = await parseSheet(file)
       if (rows.length === 0) throw new Error('Archivo vacío')
 
-      // Detectar qué columnas del archivo corresponden a cada lista.
       const headers = Object.keys(rows[0])
-      const listByHeader = {}
-      for (const list of priceLists) {
-        const aliases = [
-          ...(LIST_ALIASES[list.code] ?? []),
-          normalizeHeader(list.label),
-          list.code,
-        ]
-        const match = headers.find((h) => aliases.includes(h))
-        if (match) listByHeader[match] = list.id
-      }
       const skuHeader = headers.find((h) => SKU_ALIASES.includes(h))
       if (!skuHeader) throw new Error('No se encontró la columna SKU')
 
-      // Columna de precio genérica (lista "general"): requiere que el
-      // admin haya elegido la lista destino en el selector.
-      if (Object.keys(listByHeader).length === 0) {
-        const generic = headers.find((h) => GENERIC_PRICE_ALIASES.includes(h))
-        if (generic && targetList) {
-          listByHeader[generic] = targetList
-        } else if (generic) {
-          throw new Error(t('chooseTargetList'))
-        } else {
-          throw new Error('No se encontró ninguna columna de lista de precios')
-        }
-      }
+      const selectedList = priceLists.find((l) => l.code === selectedListCode)
+      const priceAliases = [
+        ...GENERIC_PRICE_ALIASES,
+        ...(LIST_ALIASES[selectedListCode] ?? []),
+        normalizeHeader(selectedList?.label ?? ''),
+        selectedListCode,
+      ]
+      const priceHeader = headers.find((h) => priceAliases.includes(h))
+      if (!priceHeader) throw new Error('No se encontró ninguna columna de precio')
 
-      // Mapear SKU -> product_id (paginado: la tabla supera las 1,000
-      // filas del límite por consulta de Supabase)
-      const allProducts = await fetchAll('products', 'id, sku')
-      const bySku = new Map(allProducts.map((p) => [String(p.sku).toLowerCase(), p.id]))
+      const typeHeader = headers.find((h) => TYPE_ALIASES.includes(h))
 
-      const upserts = []
-      const skippedSkus = []
+      // La RPC deduplica por SKU y valida el precio/tipo del lado del
+      // servidor: acá solo se arma { sku, price, type } por fila, sin
+      // filtrar nada (para que el preview reporte precios inválidos y
+      // SKU desconocidos con precisión, en vez de descartarlos en
+      // silencio).
+      const filas = []
       for (const row of rows) {
         const sku = String(row[skuHeader] ?? '').trim()
         if (!sku) continue
-        const productId = bySku.get(sku.toLowerCase())
-        if (!productId) {
-          skippedSkus.push(sku)
-          continue
-        }
-        for (const [header, listId] of Object.entries(listByHeader)) {
-          const raw = String(row[header] ?? '').replace(/[$,\s]/g, '')
-          if (raw === '') continue
-          const price = Number(raw)
-          if (!Number.isFinite(price) || price < 0) continue
-          upserts.push({ product_id: productId, price_list_id: listId, price })
-        }
+        const price = String(row[priceHeader] ?? '').replace(/[$,\s]/g, '')
+        const type = typeHeader ? String(row[typeHeader] ?? '').trim() : ''
+        filas.push({ sku, price, type })
       }
+      if (filas.length === 0) throw new Error('El archivo no tiene filas con SKU')
 
-      if (upserts.length > 0) {
-        const { error } = await supabase
-          .from('product_prices')
-          .upsert(upserts, { onConflict: 'product_id,price_list_id' })
-        if (error) throw error
-      }
-
-      setResult({
-        ok: true,
-        message: `${upserts.length} ${t('updated')} · ${skippedSkus.length} SKU ${t('skipped')}${
-          skippedSkus.length ? `: ${skippedSkus.slice(0, 10).join(', ')}` : ''
-        }`,
+      const { data, error } = await supabase.rpc('apply_price_list', {
+        p_price_list_code: selectedListCode,
+        p_rows: filas,
+        p_commit: false,
       })
-      await load()
+      if (error) throw error
+
+      setPreview({ rows: filas, data })
     } catch (err) {
       setResult({ ok: false, message: err.message })
     }
     setBusy(false)
   }
+
+  const confirmApply = async () => {
+    if (!preview) return
+    setCommitting(true)
+    try {
+      const { data, error } = await supabase.rpc('apply_price_list', {
+        p_price_list_code: selectedListCode,
+        p_rows: preview.rows,
+        p_commit: true,
+      })
+      if (error) throw error
+      setResult({
+        ok: true,
+        message: `${data.to_upsert} ${t('updated')} · ${data.to_reactivate} ${t('reactivated')} · ${data.to_deactivate} ${t('deactivated')}`,
+      })
+      setPreview(null)
+      await load()
+    } catch (err) {
+      setResult({ ok: false, message: err.message })
+    }
+    setCommitting(false)
+  }
+
+  const cancelPreview = () => setPreview(null)
 
   return (
     <div className="space-y-4">
@@ -198,24 +215,96 @@ export default function PricesUpload() {
                 {t('targetListLabel')}
               </span>
               <select
-                value={targetList}
-                onChange={(e) => setTargetList(e.target.value)}
+                value={selectedListCode}
+                onChange={(e) => {
+                  setSelectedListCode(e.target.value)
+                  setPreview(null)
+                  setResult(null)
+                }}
                 className="w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none transition-colors focus:border-secondary md:max-w-xs"
               >
                 <option value="">—</option>
                 {orderedLists.map((l) => (
-                  <option key={l.id} value={l.id}>
+                  <option key={l.id} value={l.code}>
                     {l.label}
                   </option>
                 ))}
               </select>
             </label>
 
-            <label className="block cursor-pointer rounded-2xl border-2 border-dashed border-secondary/50 bg-surface p-10 text-center shadow-sm transition-colors hover:border-secondary hover:bg-gold-pale/20">
-              <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} className="hidden" />
-              <span className="text-3xl">📊</span>
-              <p className="mt-2 font-semibold">{busy ? t('processing') : t('uploadExcel')}</p>
-            </label>
+            {!preview && (
+              <label className="block cursor-pointer rounded-2xl border-2 border-dashed border-secondary/50 bg-surface p-10 text-center shadow-sm transition-colors hover:border-secondary hover:bg-gold-pale/20">
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} className="hidden" />
+                <span className="text-3xl">📊</span>
+                <p className="mt-2 font-semibold">{busy ? t('processing') : t('uploadExcel')}</p>
+              </label>
+            )}
+
+            {preview && (
+              <div className="space-y-3 rounded-2xl border border-secondary/40 bg-gold-pale/10 p-4">
+                <h3 className="font-brand text-lg font-semibold">{t('previewTitle')}</h3>
+                <div className="flex flex-wrap gap-2 text-xs font-semibold">
+                  <span className="rounded-full bg-green-100 px-3 py-1 text-green-800 dark:bg-green-900/50 dark:text-green-300">
+                    {preview.data.to_upsert} {t('toUpsertLabel')}
+                  </span>
+                  <span className="rounded-full bg-secondary/15 px-3 py-1 text-secondary-dark">
+                    {preview.data.to_reactivate} {t('toReactivateLabel')}
+                  </span>
+                  <span className="rounded-full bg-red-100 px-3 py-1 text-red-700 dark:bg-red-900/50 dark:text-red-300">
+                    {preview.data.to_deactivate} {t('toDeactivateLabel')}
+                  </span>
+                  <span className="rounded-full bg-primary/10 px-3 py-1 text-primary/60">
+                    {preview.data.unknown_skus} {t('unknownSkusLabel')}
+                  </span>
+                  <span className="rounded-full bg-primary/10 px-3 py-1 text-primary/60">
+                    {preview.data.invalid_prices} {t('invalidPricesLabel')}
+                  </span>
+                </div>
+
+                {preview.data.deactivate_sample?.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-primary/60">{t('deactivateSampleHint')}</p>
+                    <ul className="max-h-40 space-y-0.5 overflow-y-auto text-xs">
+                      {preview.data.deactivate_sample.map((p) => (
+                        <li
+                          key={p.sku}
+                          className="flex justify-between gap-2 border-b border-line/40 py-0.5"
+                        >
+                          <span className="truncate">{p.name}</span>
+                          <span className="shrink-0 font-mono text-primary/45">{p.sku}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {preview.data.unknown_sample?.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-primary/60">{t('unknownSampleHint')}</p>
+                    <p className="max-h-24 overflow-y-auto break-words font-mono text-xs text-primary/70">
+                      {preview.data.unknown_sample.join(', ')}
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={confirmApply}
+                    disabled={committing}
+                    className="rounded-xl bg-secondary px-4 py-2 text-sm font-bold text-ink transition-colors hover:bg-secondary-dark disabled:opacity-50"
+                  >
+                    {committing ? t('applying') : t('confirmApply')}
+                  </button>
+                  <button
+                    onClick={cancelPreview}
+                    disabled={committing}
+                    className="rounded-xl border border-line px-4 py-2 text-sm text-primary/60 transition-colors hover:border-primary/40 disabled:opacity-50"
+                  >
+                    {t('cancel')}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {result && (
               <p

@@ -213,15 +213,32 @@ Excel con SKU y/o nombre + columna con el link directo a la imagen
 
 ### Precios (pestaña Precios)
 
-Dos formatos:
-1. **Multi-lista**: columna SKU + una columna por lista (`US Minimum Order`,
-   `US Wholesale`, `VE Minimum Order`, `VE Wholesale`, `Special`). Celdas
-   vacías se ignoran.
-2. **Lista general** (una sola columna `Price`): elegir la **lista destino**
-   en el selector antes de subir (Special es una opción más).
+Una **lista de precio por archivo** (2026-07-17, reemplaza el formato
+multi-columna anterior): elegir arriba a qué lista corresponde el Excel
+(selector con las listas de `price_lists`, sin `quote`), luego subirlo.
+Columnas: SKU, precio (`Price`/`Precio`/genérica o con el nombre de la
+lista, ej. `US Minimum Order`) y `Type`/`Tipo`/`Disponibilidad`
+(`Available`/`Pre Order`/`Flash Sale`, igual que el Excel de productos).
 
-La matriz de precios tiene botones con contador para ver solo productos
-**con precio** o **sin precio** (según la lista seleccionada en el filtro).
+El archivo sube a la RPC `apply_price_list` en dos pasos:
+1. **Preview** (`p_commit: false`): sin escribir nada, muestra cuántos
+   productos se van a actualizar, reactivar y **desactivar**, más SKU sin
+   producto y precios inválidos (con muestra de los primeros 50 de cada
+   uno).
+2. **Confirmar** (`p_commit: true`): recién ahí se aplica.
+
+Es una carga "reemplaza todo" por lista: un producto que **hoy tiene
+precio en esa lista pero no viene en el archivo** (o viene con SKU/precio
+inválido) pierde el precio de esa lista y queda **inactivo globalmente**
+— por eso el preview es obligatorio antes de escribir. La dedup por SKU
+repetido en el archivo la hace la RPC del lado del servidor (última fila
+gana), así un SKU duplicado ya no puede reventar el `upsert` con "ON
+CONFLICT DO UPDATE command cannot affect row a second time" como pasaba
+antes.
+
+La matriz de precios (debajo, de solo lectura) tiene botones con contador
+para ver solo productos **con precio** o **sin precio** (según la lista
+seleccionada en el filtro).
 
 ### Flash Sales (pestaña Flash Sales, 2026-07-08)
 
@@ -593,6 +610,15 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   requiere que `migration-2026-07-14-client-admin-actions.sql` ya haya
   corrido antes (crea `admin_audit_log`, donde esta función también
   audita).
+- **Pendiente: correr `migration-2026-07-17-apply-price-list.sql`** en
+  producción (crea la RPC `apply_price_list`). Sin esto, subir un Excel de
+  precios desde `/admin/prices` falla contra la base — el frontend ya
+  quedó desplegable con el flujo nuevo (una lista por archivo + preview/
+  confirmar). Reemplaza el `.upsert()` directo a `product_prices` que
+  reventaba con "ON CONFLICT DO UPDATE command cannot affect row a second
+  time" si el Excel traía un SKU repetido (pasó con el archivo real de US
+  Minimum Order, SKU `ZX_PE-MA-U-599175` duplicado) — la dedup por SKU
+  ahora la hace la RPC del lado del servidor.
 - `migration-2026-07-15-fix-duplicate-client-phones.sql` corrida en
   producción (2026-07-16): limpió 315 clientes duplicados que había
   creado el sync por el bug de formato de teléfono, corrigió

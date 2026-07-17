@@ -85,7 +85,7 @@ const dict = {
     uploadExcel: 'Subir Excel',
     processing: 'Procesando...',
     priceUploadHint:
-      'Excel/CSV con columna SKU y una columna por lista de precio (US Minimum Order, US Wholesale, VE Minimum Order, VE Wholesale, Special, Luzmar).',
+      'Excel/CSV de UNA lista de precio por archivo: columna SKU, columna de precio y columna Type/Tipo/Disponibilidad (Available / Pre Order / Flash Sale). Elegí arriba a qué lista corresponde antes de subirlo — se muestra una vista previa para confirmar antes de aplicar los cambios.',
     productUploadHint:
       'Excel/CSV con columnas: nombre (o Title Product), categoría (o Brand), línea/tipo de perfume (PRODUCT_CATEGORY: Perfume / Perfume - Arabes), imagen (URL), Type (Available / Pre Order / Flash Sale), activo y opcional SKU. Acepta las listas wholesale con membrete y los exports de SellerCloud: detecta la fila de encabezados y la columna de fotos automáticamente. El SKU es interno, nunca se muestra al cliente; si falta se genera uno. Actualiza existentes por SKU y crea los nuevos; los campos que el archivo no trae no se tocan.',
     imageUploadHint:
@@ -127,12 +127,24 @@ const dict = {
     investmentPlaceholder: '$ inversión → nivel',
     investmentHint:
       'Monto que el cliente va a invertir: hasta $1,999 → Minimum Order, $2,000+ → Wholesale, $15,000+ → Special. Enter para aplicar.',
-    targetListLabel: 'Lista destino (para archivos con una sola columna "Price")',
+    targetListLabel: 'Lista de precio del archivo',
     priceMatrixTitle: 'Precios por lista',
     withPrices: 'con precios',
     withoutPrices: 'sin precios',
-    chooseTargetList:
-      'Este archivo trae una sola columna de precio: elegí arriba la lista destino y volvé a subirlo.',
+    chooseTargetList: 'Elegí primero a qué lista corresponde este archivo.',
+    previewTitle: 'Vista previa',
+    toUpsertLabel: 'a actualizar',
+    toReactivateLabel: 'a reactivar',
+    toDeactivateLabel: 'a desactivar',
+    unknownSkusLabel: 'SKU sin producto',
+    invalidPricesLabel: 'precios inválidos',
+    deactivateSampleHint:
+      'Se desactivan (dejan de verse en el catálogo) por no venir en el archivo:',
+    unknownSampleHint: 'No coinciden con ningún producto del catálogo:',
+    confirmApply: 'Confirmar y aplicar',
+    applying: 'Aplicando...',
+    reactivated: 'reactivados',
+    deactivated: 'desactivados',
     copyLink: 'Copiar link',
     copied: 'Copiado',
     expiresAt: 'Expira',
@@ -295,7 +307,7 @@ const dict = {
     uploadExcel: 'Upload Excel',
     processing: 'Processing...',
     priceUploadHint:
-      'Excel/CSV with a SKU column plus one column per price list (US Minimum Order, US Wholesale, VE Minimum Order, VE Wholesale, Special, Luzmar).',
+      'Excel/CSV for ONE price list per file: SKU column, price column, and a Type/Availability column (Available / Pre Order / Flash Sale). Choose which list it belongs to above before uploading — you\'ll get a preview to confirm before anything is applied.',
     productUploadHint:
       'Excel/CSV with columns: name (or Title Product), category (or Brand), perfume line/type (PRODUCT_CATEGORY: Perfume / Perfume - Arabes), image (URL), Type (Available / Pre Order / Flash Sale), active, and optional SKU. Accepts letterhead wholesale lists and SellerCloud exports: header row and photo column are detected automatically. SKU is internal and never shown to clients; missing SKUs are generated. Updates existing products by SKU and creates new ones; fields the file lacks are left untouched.',
     imageUploadHint:
@@ -337,12 +349,23 @@ const dict = {
     investmentPlaceholder: '$ investment → tier',
     investmentHint:
       'Amount the client will invest: up to $1,999 → Minimum Order, $2,000+ → Wholesale, $15,000+ → Special. Press Enter to apply.',
-    targetListLabel: 'Target list (for files with a single "Price" column)',
+    targetListLabel: 'Price list for this file',
     priceMatrixTitle: 'Prices by list',
     withPrices: 'with prices',
     withoutPrices: 'without prices',
-    chooseTargetList:
-      'This file has a single price column: choose the target list above and upload again.',
+    chooseTargetList: 'Choose which list this file belongs to first.',
+    previewTitle: 'Preview',
+    toUpsertLabel: 'to update',
+    toReactivateLabel: 'to reactivate',
+    toDeactivateLabel: 'to deactivate',
+    unknownSkusLabel: 'unknown SKUs',
+    invalidPricesLabel: 'invalid prices',
+    deactivateSampleHint: 'Will be deactivated (hidden from the catalog) for not being in the file:',
+    unknownSampleHint: "Don't match any product in the catalog:",
+    confirmApply: 'Confirm and apply',
+    applying: 'Applying...',
+    reactivated: 'reactivated',
+    deactivated: 'deactivated',
     copyLink: 'Copy link',
     copied: 'Copied',
     expiresAt: 'Expires',
