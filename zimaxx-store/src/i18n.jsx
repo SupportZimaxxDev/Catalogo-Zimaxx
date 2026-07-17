@@ -165,6 +165,8 @@ const dict = {
     markDone: 'Marcar atendido',
     markNew: 'Reabrir',
     cancelOrder: 'Cancelar',
+    orderNeedsItem: 'El pedido debe tener al menos un producto.',
+    actionEditOrder: 'Edición de pedido',
     newVendedora: 'Nueva vendedora',
     phone: 'Teléfono',
     phoneHint:
@@ -386,6 +388,8 @@ const dict = {
     markDone: 'Mark as done',
     markNew: 'Reopen',
     cancelOrder: 'Cancel',
+    orderNeedsItem: 'The order must have at least one product.',
+    actionEditOrder: 'Order edit',
     newVendedora: 'New sales rep',
     phone: 'Phone',
     phoneHint:

@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n'
 import { supabase } from '../../lib/supabase'
+import { money } from '../../utils/format'
 import { inputCls } from './ui'
 
 // Badge + texto de detalle por acción (2026-07-15 suma 'update_price_list',
 // ver update_client_price_list en schema.sql — ahora una vendedora también
 // puede cambiarle la lista a sus clientes, y queda auditado igual que
-// reassign/delete).
+// reassign/delete. 2026-07-17 suma 'edit_order_items', ver
+// update_order_items — edición de ítems de un pedido, mismo criterio).
 const ACTION_STYLES = {
   delete_client: 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
   update_price_list: 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
   reassign_client: 'bg-gold-pale text-secondary-dark',
+  edit_order_items: 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
 }
 
 // Historial de reasignaciones/eliminaciones de clientes y cambios de
@@ -48,7 +51,9 @@ export default function AuditLogAdmin() {
       ? t('actionDelete')
       : action === 'update_price_list'
         ? t('actionUpdateList')
-        : t('actionReassign')
+        : action === 'edit_order_items'
+          ? t('actionEditOrder')
+          : t('actionReassign')
 
   const detailText = (a) => {
     if (a.action === 'reassign_client') {
@@ -56,6 +61,13 @@ export default function AuditLogAdmin() {
     }
     if (a.action === 'update_price_list') {
       return `${a.detail?.from_list ?? '—'} → ${a.detail?.to_list ?? '—'}`
+    }
+    if (a.action === 'edit_order_items') {
+      const before = a.detail?.before_items?.length ?? 0
+      const after = a.detail?.after_items?.length ?? 0
+      const beforeTotal = a.detail?.before_total != null ? money(a.detail.before_total) : '—'
+      const afterTotal = a.detail?.after_total != null ? money(a.detail.after_total) : '—'
+      return `${before}→${after} ${t('items')} · ${beforeTotal} → ${afterTotal}`
     }
     return [a.detail?.phone, a.detail?.vendedora, a.detail?.lista].filter(Boolean).join(' · ')
   }
@@ -95,6 +107,7 @@ export default function AuditLogAdmin() {
           <option value="reassign_client">{t('actionReassign')}</option>
           <option value="delete_client">{t('actionDelete')}</option>
           <option value="update_price_list">{t('actionUpdateList')}</option>
+          <option value="edit_order_items">{t('actionEditOrder')}</option>
         </select>
         <label className="flex items-center gap-1.5 text-xs text-primary/60">
           {t('dateFrom')}

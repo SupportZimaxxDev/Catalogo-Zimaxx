@@ -218,6 +218,31 @@ alter table public.orders drop constraint if exists orders_status_check;
 alter table public.orders add constraint orders_status_check
   check (status in ('new', 'done', 'cancelled'));
 
+-- Blinda items/total de un pedido para que solo se editen a través de la
+-- RPC update_order_items (2026-07-17): así el cambio queda auditado sí o
+-- sí en admin_audit_log, igual que reassign_client/delete_client/
+-- update_client_price_list. La RPC prende la bandera de sesión
+-- app.allow_order_edit antes de escribir; cualquier otro update directo a
+-- la tabla (ej. marcar atendido/cancelado, que no toca items/total) sigue
+-- funcionando sin tocar el trigger.
+create or replace function public.orders_guard_items_edit()
+returns trigger
+language plpgsql
+as $$
+begin
+  if (new.items is distinct from old.items or new.total is distinct from old.total)
+     and coalesce(current_setting('app.allow_order_edit', true), '') <> 'on' then
+    raise exception 'los items de un pedido solo se editan via update_order_items';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists orders_guard_items_edit on public.orders;
+create trigger orders_guard_items_edit
+  before update on public.orders
+  for each row execute function public.orders_guard_items_edit();
+
 create table if not exists public.admins (
   user_id uuid primary key references auth.users (id) on delete cascade
 );
@@ -241,8 +266,15 @@ create table if not exists public.admin_audit_log (
   created_at         timestamptz not null default now()
 );
 
+-- order_id (2026-07-17, edit_order_items): igual criterio que client_id,
+-- SIN FK a orders — la fila de auditoría sobrevive aunque el pedido se
+-- borre en el futuro.
+alter table public.admin_audit_log add column if not exists order_id uuid;
+
 create index if not exists admin_audit_log_created_idx
   on public.admin_audit_log (created_at desc);
+create index if not exists admin_audit_log_order_idx
+  on public.admin_audit_log (order_id) where order_id is not null;
 
 alter table public.admin_audit_log enable row level security;
 drop policy if exists admin_read_audit on public.admin_audit_log;
@@ -841,31 +873,27 @@ $$;
 revoke execute on function public.get_flash_sales() from public;
 grant execute on function public.get_flash_sales() to anon, authenticated;
 
--- ---------- RPC: create_order ----------
--- INSERT público de pedidos, pero validado por token (más estricto que
--- abrir INSERT directo sobre la tabla). El cliente nunca puede leer,
--- actualizar ni borrar orders.
---
--- El navegador solo aporta producto, cantidad y si venía de flash sale:
--- precio unitario y total se recalculan aquí con la lista del cliente
--- (y flash sales vigentes), así la tabla orders es fuente de verdad
--- aunque alguien manipule el payload. p_total se ignora; se mantiene en
--- la firma para no romper clientes ya desplegados.
-create or replace function public.create_order(
-  p_token text,
-  p_items jsonb,
-  p_total numeric,
-  p_kind  text default 'order'
+-- ---------- helper: compute_order_items ----------
+-- Recalcula id/sku/name/qty/price/flash de una lista de ítems para un
+-- cliente dado (flash vigente si aplica, si no precio de su lista; nunca
+-- precio si p_kind = 'quote'). Factorizado 2026-07-17 de lo que antes era
+-- el cuerpo de create_order, para reusarlo también en update_order_items
+-- (edición auditada de pedidos) y get_quotes_live_pricing (una
+-- cotización siempre se recalcula con el precio VIGENTE, nunca el
+-- congelado al momento del pedido). SECURITY INVOKER a propósito: solo la
+-- llaman otras funciones SECURITY DEFINER (mismo dueño), nunca
+-- directamente anon/authenticated.
+create or replace function public.compute_order_items(
+  p_client_id uuid,
+  p_items     jsonb,
+  p_kind      text
 )
-returns uuid
+returns jsonb
 language plpgsql
-security definer
 set search_path = public
 as $$
 declare
   v_client    public.clients%rowtype;
-  v_list_code text;
-  v_kind      text;
   v_item      jsonb;
   v_id        uuid;
   v_qty       int;
@@ -875,24 +903,11 @@ declare
   v_items     jsonb   := '[]'::jsonb;
   v_total     numeric := 0;
   v_has_price boolean := false;
-  v_order_id  uuid;
 begin
-  select * into v_client from public.clients where token = p_token;
+  select * into v_client from public.clients where id = p_client_id;
   if not found then
-    return null; -- token inválido: no registra ni explica
+    return jsonb_build_object('items', '[]'::jsonb, 'total', null);
   end if;
-
-  if p_items is null or jsonb_typeof(p_items) <> 'array'
-     or jsonb_array_length(p_items) = 0
-     or jsonb_array_length(p_items) > 200 then
-    return null;
-  end if;
-
-  select code into v_list_code from public.price_lists where id = v_client.price_list_id;
-
-  -- El cliente nunca decide esto: la lista 'quote' siempre guarda
-  -- 'quote' sin precio, sin importar lo que mande el frontend.
-  v_kind := case when v_list_code = 'quote' or p_kind = 'quote' then 'quote' else 'order' end;
 
   for v_item in select value from jsonb_array_elements(p_items) loop
     begin
@@ -910,7 +925,7 @@ begin
     if not found then continue; end if;
 
     v_price := null;
-    if v_kind = 'order' then
+    if p_kind = 'order' then
       if v_flash then
         select fs.price into v_price
         from public.flash_sales fs
@@ -944,17 +959,73 @@ begin
     end if;
   end loop;
 
+  return jsonb_build_object(
+    'items', v_items,
+    'total', case when p_kind = 'order' and v_has_price then round(v_total, 2) else null end
+  );
+end;
+$$;
+
+revoke execute on function public.compute_order_items(uuid, jsonb, text) from public;
+
+-- ---------- RPC: create_order ----------
+-- INSERT público de pedidos, pero validado por token (más estricto que
+-- abrir INSERT directo sobre la tabla). El cliente nunca puede leer,
+-- actualizar ni borrar orders.
+--
+-- El navegador solo aporta producto, cantidad y si venía de flash sale:
+-- precio unitario y total se recalculan aquí con la lista del cliente
+-- (y flash sales vigentes), así la tabla orders es fuente de verdad
+-- aunque alguien manipule el payload. p_total se ignora; se mantiene en
+-- la firma para no romper clientes ya desplegados.
+create or replace function public.create_order(
+  p_token text,
+  p_items jsonb,
+  p_total numeric,
+  p_kind  text default 'order'
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_client    public.clients%rowtype;
+  v_list_code text;
+  v_kind      text;
+  v_result    jsonb;
+  v_items     jsonb;
+  v_order_id  uuid;
+begin
+  select * into v_client from public.clients where token = p_token;
+  if not found then
+    return null; -- token inválido: no registra ni explica
+  end if;
+
+  if p_items is null or jsonb_typeof(p_items) <> 'array'
+     or jsonb_array_length(p_items) = 0
+     or jsonb_array_length(p_items) > 200 then
+    return null;
+  end if;
+
+  select code into v_list_code from public.price_lists where id = v_client.price_list_id;
+
+  -- El cliente nunca decide esto: la lista 'quote' siempre guarda
+  -- 'quote' sin precio, sin importar lo que mande el frontend. Desde
+  -- 2026-07-17 el frontend también manda p_kind = 'quote' explícito al
+  -- descargar el PDF desde el carrito (sin importar la lista del
+  -- cliente), para que quede registrado como cotización en el panel.
+  v_kind := case when v_list_code = 'quote' or p_kind = 'quote' then 'quote' else 'order' end;
+
+  v_result := public.compute_order_items(v_client.id, p_items, v_kind);
+  v_items  := v_result->'items';
+
   if jsonb_array_length(v_items) = 0 then
     return null;
   end if;
 
   insert into public.orders (client_id, items, total, kind)
-  values (
-    v_client.id,
-    v_items,
-    case when v_kind = 'order' and v_has_price then round(v_total, 2) else null end,
-    v_kind
-  )
+  values (v_client.id, v_items, (v_result->>'total')::numeric, v_kind)
   returning id into v_order_id;
 
   return v_order_id;
@@ -963,6 +1034,137 @@ $$;
 
 revoke execute on function public.create_order(text, jsonb, numeric, text) from public;
 grant execute on function public.create_order(text, jsonb, numeric, text) to anon, authenticated;
+
+-- ---------- RPC: update_order_items ----------
+-- Edición auditada de los ítems de un pedido (2026-07-17, a pedido del
+-- usuario: una vendedora puede corregir un pedido ya recibido —
+-- cantidades, productos agregados/quitados— sin tener que pedirle al
+-- admin que entre a la base). SECURITY DEFINER + el trigger
+-- orders_guard_items_edit (ver arriba, tabla orders) garantizan que la
+-- única forma de tocar items/total de un pedido sea por acá, y que quede
+-- registrado en admin_audit_log sí o sí — igual criterio que
+-- reassign_client/delete_client/update_client_price_list.
+create or replace function public.update_order_items(
+  p_order_id uuid,
+  p_items    jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order  public.orders%rowtype;
+  v_client public.clients%rowtype;
+  v_result jsonb;
+  v_email  text;
+begin
+  if not (public.is_admin() or public.is_vendedora()) then
+    raise exception 'no autorizado';
+  end if;
+
+  select * into v_order from public.orders where id = p_order_id;
+  if not found then
+    raise exception 'pedido no encontrado';
+  end if;
+
+  select * into v_client from public.clients where id = v_order.client_id;
+
+  if not public.is_admin()
+     and v_client.vendedora_id is distinct from public.current_vendedora_id() then
+    raise exception 'no tenés permiso para editar este pedido';
+  end if;
+
+  if v_order.status = 'cancelled' then
+    raise exception 'no se puede editar un pedido cancelado';
+  end if;
+
+  if p_items is null or jsonb_typeof(p_items) <> 'array'
+     or jsonb_array_length(p_items) = 0
+     or jsonb_array_length(p_items) > 200 then
+    raise exception 'items inválidos';
+  end if;
+
+  -- Igual que create_order: nunca se congela precio de una cotización,
+  -- se recalcula siempre al vuelo (ver get_quotes_live_pricing).
+  v_result := public.compute_order_items(v_client.id, p_items, v_order.kind);
+
+  if jsonb_array_length(v_result->'items') = 0 then
+    raise exception 'el pedido debe tener al menos un producto válido';
+  end if;
+
+  select email into v_email from auth.users where id = auth.uid();
+
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, client_id, client_name, order_id, detail)
+  values
+    ('edit_order_items', auth.uid(), v_email, v_client.id, v_client.name, p_order_id,
+     jsonb_build_object(
+       'before_items', v_order.items,
+       'before_total', v_order.total,
+       'after_items',  v_result->'items',
+       'after_total',  v_result->'total'
+     ));
+
+  perform set_config('app.allow_order_edit', 'on', true);
+  update public.orders
+  set items = v_result->'items', total = (v_result->>'total')::numeric
+  where id = p_order_id;
+
+  return v_result;
+end;
+$$;
+
+revoke execute on function public.update_order_items(uuid, jsonb) from public;
+grant execute on function public.update_order_items(uuid, jsonb) to authenticated;
+
+-- ---------- RPC: get_quotes_live_pricing ----------
+-- Una cotización (kind = 'quote') nunca guarda precio congelado (ver
+-- compute_order_items): el panel de Pedidos necesita calcularlo al vuelo
+-- con el precio VIGENTE de cada producto en la lista del cliente, para
+-- que se ajuste sola a cambios de precio posteriores (2026-07-17, a
+-- pedido del usuario). Devuelve un objeto {order_id: {items, total}} —
+-- se omiten los pedidos que el caller no tiene permiso de ver (RLS no
+-- aplica acá por ser SECURITY DEFINER, se replica el mismo filtro a
+-- mano) en vez de tirar error, para poder pedir varios de una sola vez
+-- sin que uno ajeno tumbe el resto.
+create or replace function public.get_quotes_live_pricing(p_order_ids uuid[])
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_is_admin boolean := public.is_admin();
+  v_vend_id  uuid    := public.current_vendedora_id();
+  v_result   jsonb   := '{}'::jsonb;
+  v_order    public.orders%rowtype;
+  v_client   public.clients%rowtype;
+  v_priced   jsonb;
+begin
+  if not (v_is_admin or public.is_vendedora()) then
+    raise exception 'no autorizado';
+  end if;
+
+  for v_order in
+    select * from public.orders where id = any(p_order_ids) and kind = 'quote'
+  loop
+    select * into v_client from public.clients where id = v_order.client_id;
+    if not found then continue; end if;
+    if not v_is_admin and v_client.vendedora_id is distinct from v_vend_id then
+      continue;
+    end if;
+
+    v_priced := public.compute_order_items(v_client.id, v_order.items, 'order');
+    v_result := v_result || jsonb_build_object(v_order.id::text, v_priced);
+  end loop;
+
+  return v_result;
+end;
+$$;
+
+revoke execute on function public.get_quotes_live_pricing(uuid[]) from public;
+grant execute on function public.get_quotes_live_pricing(uuid[]) to authenticated;
 
 -- ---------- RPC: link_vendedora_login ----------
 -- Vincula una vendedora a un usuario ya existente en Supabase Auth (el

@@ -111,7 +111,10 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
    registrado en `orders` (auditoría) → se abre WhatsApp con el pedido
    armado, dirigido a su vendedora (`vendedora_phone`, con fallback
    `VITE_DEFAULT_WHATSAPP`).
-3. Opcional: descarga PDF del pedido.
+3. Opcional: descarga PDF del pedido — desde 2026-07-17 esto **también**
+   registra un pedido `kind = 'quote'` en `orders` (antes solo generaba el
+   archivo, sin tocar la base), así queda visible como cotización en
+   `/admin/orders` sin bloquear la descarga si el guardado falla.
 4. Pendiente (planificado): push automático a SellerCloud como orden On Hold
    vía Supabase Edge Function — ver sección 7.
 
@@ -147,7 +150,7 @@ Pestañas:
 | **🛡️ Registro de movimientos** (solo admin, pestaña propia desde 2026-07-15 — antes vivía colapsada dentro de Clientes) | Historial de quién reasignó/borró un cliente o le cambió la lista de precio (fecha, usuario, acción, cliente, detalle), leído directo de `admin_audit_log`. **Filtros** (2026-07-15): por usuario, por acción (Reasignación/Eliminación/Cambio de lista) y por rango de fechas (desde/hasta). Es de solo lectura: la tabla no tiene policy de insert/update/delete para nadie, solo la escriben las RPC `reassign_client`/`delete_client`/`update_client_price_list`. |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**, dos formas de dar acceso a una vendedora sin cuenta: **"Vincular acceso"** (email de un usuario que ya existe en Supabase Auth, RPC `link_vendedora_login`) o **"+ Crear acceso"** (2026-07-15: crea el usuario de una — el admin define email + contraseña inicial ahí mismo, sin pasar por el dashboard de Supabase — vía la Edge Function `admin-create-vendedora-user`, ver sección 6). "Desvincular" le quita el acceso sin borrar la vendedora ni el usuario de Auth. |
 | **Flash Sales** | Crear ofertas con precio promo y vencimiento (alta manual, un producto a la vez) o **carga masiva por Excel** (2026-07-08: mismo archivo semanal "Special Flash Sale" con formato letterhead — UPC/Sku/Brand/Title Product/Price/Type/Qty/Total —, matchea por SKU y precio propio de cada fila; la fecha de inicio/fin se elige una vez con el selector de arriba y se aplica a todos los productos del archivo). Visibles para todos con countdown; **se apagan solas por fecha, sin acción manual** (`get_flash_sales()` ya filtra por `expires_at`). La tabla del admin distingue 4 estados (`LIVE` / Programada / Expiró / Desactivada, 2026-07-08) — el botón "Desactivar" es solo para cortar una oferta *antes* de su fecha de fin, no hace falta para que termine normalmente. |
-| **Pedidos** | Últimos 200 con detalle expandible; cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado — un pedido `new` muestra botones "Marcar atendido" y "Cancelar"; uno `done`/`cancelled` muestra "Reabrir") y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) + filtros por estado (Nuevo/Atendido/Cancelado), tipo (Pedido/Cotización) y, solo admin, vendedora. Botón **"Descargar Excel"** por fila: exporta el pedido con las columnas exactas de `UploadTemplate.xls` (`ProductID`, `ProductName`, `UnitPrice`, `Qty`, `ShipFromWarehouseName`, este último fijo en `"Zimaxx"`) para subirlo directo al bulk-order upload de SellerCloud. |
+| **Pedidos** | Últimos 200 con detalle expandible; cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado — un pedido `new` muestra botones "Marcar atendido" y "Cancelar"; uno `done`/`cancelled` muestra "Reabrir") y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) + filtros por estado (Nuevo/Atendido/Cancelado), tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"** (2026-07-17, mismo generador que el carrito del cliente) y **"Descargar Excel"** por fila (este último con las columnas exactas de `UploadTemplate.xls`: `ProductID`, `ProductName`, `UnitPrice`, `Qty`, `ShipFromWarehouseName` fijo en `"Zimaxx"`, para subirlo directo al bulk-order upload de SellerCloud). **"Editar"** (2026-07-17, oculto si el pedido está cancelado): cantidad/quitar/agregar producto, vía RPC auditada `update_order_items` — cualquiera con acceso al pedido puede editarlo (admin siempre, vendedora solo los de sus propios clientes). Las cotizaciones (`kind = 'quote'`) muestran el precio **vigente** del producto (no el congelado al pedirla), calculado al vuelo por `get_quotes_live_pricing` — ver sección 6. |
 
 Las tablas grandes usan **scroll infinito** (lotes de 100) y todas las
 consultas están **paginadas** para superar el límite de 1,000 filas por
@@ -539,6 +542,36 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   corridas recientes — pendiente esa respuesta. Los 103 sin match quedan
   a decisión del usuario con su equipo, fuera del alcance de esta
   limpieza.
+- **Editar ítems de un pedido con auditoría** (2026-07-17,
+  `migration-2026-07-17-orders-edit-live-quotes.sql`, a pedido del
+  usuario: una vendedora ahora puede corregir un pedido ya recibido, no
+  solo cambiarle el estado): RPC `SECURITY DEFINER`
+  `update_order_items(p_order_id, p_items)` — permite admin (cualquier
+  pedido) o vendedora (solo los de sus propios clientes), rechaza
+  pedidos `cancelled`, recalcula precio/total en el servidor (nunca
+  confía en lo que manda el navegador) y **audita el antes/después en
+  `admin_audit_log`** (acción `edit_order_items`, columna `order_id`
+  nueva) antes de escribir. La policy `vendedora_update_own_orders` ya le
+  daba a una vendedora `update` crudo sobre sus propios pedidos (pensada
+  solo para el status) — sin un candado extra, esa misma policy le
+  hubiera dejado reescribir `items`/`total` a mano sin pasar por la RPC
+  ni quedar auditado. El trigger `orders_guard_items_edit` cierra ese
+  hueco: bloquea cualquier `update` directo a `orders` que cambie
+  `items`/`total` salvo que la bandera de sesión transacción-local
+  `app.allow_order_edit` esté prendida, cosa que solo hace
+  `update_order_items` justo antes de escribir.
+- **Cotizaciones con precio vigente, no congelado** (2026-07-17, mismo
+  archivo): una cotización (`kind = 'quote'`) nunca guardó precio en
+  `orders.items` (siempre `null`, ver `get_catalog`/`create_order`) — lo
+  nuevo es que el panel ya no la muestra "sin precio" sin más: la RPC
+  `get_quotes_live_pricing(p_order_ids)` recalcula al vuelo el precio
+  **actual** de cada ítem contra `product_prices`/`flash_sales` de la
+  lista del cliente (reusa el helper `compute_order_items`, factorizado
+  del cuerpo que antes tenía `create_order`), así una cotización se
+  ajusta sola si el admin cambia un precio después de que el cliente la
+  pidió. Omite del resultado los pedidos que el caller no tiene permiso
+  de ver en vez de tirar error (para pedir varias de una sola vez sin que
+  una ajena tumbe el resto).
 - Tokens de cliente: 10 caracteres, `crypto.getRandomValues`, sin caracteres
   ambiguos.
 - **`Referrer-Policy: no-referrer`** (meta + header en `netlify.toml`): el
@@ -619,6 +652,13 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   time" si el Excel traía un SKU repetido (pasó con el archivo real de US
   Minimum Order, SKU `ZX_PE-MA-U-599175` duplicado) — la dedup por SKU
   ahora la hace la RPC del lado del servidor.
+- **Pendiente: correr `migration-2026-07-17-orders-edit-live-quotes.sql`**
+  en producción (crea `admin_audit_log.order_id`, el trigger
+  `orders_guard_items_edit`, el helper `compute_order_items` y las RPC
+  `update_order_items`/`get_quotes_live_pricing` — ver sección 6). Sin
+  esto, el botón "Editar" de Pedidos falla (la RPC no existe) y las
+  cotizaciones se ven sin precio en vez de mostrar el precio vigente. El
+  frontend (OrdersAdmin, CartDrawer, AuditLogAdmin) ya está desplegable.
 - `migration-2026-07-15-fix-duplicate-client-phones.sql` corrida en
   producción (2026-07-16): limpió 315 clientes duplicados que había
   creado el sync por el bug de formato de teléfono, corrigió

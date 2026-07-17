@@ -55,6 +55,14 @@ export default function CartDrawer({ token, client }) {
   const handlePdf = () => {
     if (cart.items.length === 0) return
     downloadOrderPdf({ t, clientName, items: cart.items, total: cart.total })
+    // Registrarlo como cotización en el panel (2026-07-17, a pedido del
+    // usuario): a diferencia del checkout, no bloquea la descarga si
+    // falla — el PDF ya se generó igual.
+    supabase
+      .rpc('create_order', { p_token: token, p_items: cart.items, p_total: cart.total, p_kind: 'quote' })
+      .then(({ error }) => {
+        if (error) console.warn('No se pudo registrar la cotización:', error)
+      })
   }
 
   return (
