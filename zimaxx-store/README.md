@@ -154,7 +154,10 @@ Pestañas:
 
 Las tablas grandes usan **scroll infinito** (lotes de 100) y todas las
 consultas están **paginadas** para superar el límite de 1,000 filas por
-consulta de Supabase.
+consulta de Supabase. Desde 2026-07-20, `fetchAll` pide todas las páginas
+**en paralelo** (antes era secuencial, una tras otra) — mismo dato, pero
+la carga de tablas grandes como la matriz de Precios ya no espera cada
+página por turno.
 
 ---
 
