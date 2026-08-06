@@ -223,7 +223,11 @@ export default function ClientsAdmin() {
     try {
       const [cs, pls, vs] = await Promise.all([
         fetchAll('clients', '*, vendedores(name, phone)', 'name'),
-        fetchAll('price_lists'),
+        // Las dueñas vienen embebidas (2026-08-04): una lista puede tener
+        // varias (compartida), así que ya no alcanza una columna —
+        // price_list_owners es la fuente de verdad. RLS ya filtra las listas
+        // que esta vendedora no puede usar.
+        fetchAll('price_lists', '*, price_list_owners(vendedora_id, is_primary)'),
         fetchAll('vendedores', '*', 'name'),
       ])
       setClients(cs)
@@ -352,11 +356,13 @@ export default function ClientsAdmin() {
           vendedoraId = v.id
         }
 
-        // Lista "personal" de una vendedora (ej. 'luzmar'): pisa lo que
-        // traiga el archivo, aunque la columna Vendedora diga otra cosa —
-        // un cliente con esos precios no puede quedar con otra vendedora.
-        const listOwner = priceLists.find((l) => l.id === listId)?.owner_vendedora_id
-        if (listOwner) vendedoraId = listOwner
+        // Lista con dueña (ej. 'luzmar'): pisa lo que traiga el archivo,
+        // aunque la columna Vendedora diga otra cosa — un cliente con esos
+        // precios no puede quedar con una vendedora que no sea dueña. Si la
+        // lista es compartida y el archivo nombra a una de las dueñas, esa
+        // se respeta (mismo criterio que el trigger de la base).
+        const forcedOwner = ownerFor(listId, vendedoraId)
+        if (forcedOwner !== undefined) vendedoraId = forcedOwner
 
         const existing = byPhone.get(phoneKey(phone))
         if (existing) {
@@ -420,8 +426,11 @@ export default function ClientsAdmin() {
       return
     }
     setNewClientBusy(true)
-    const owner = ownerVendedoraId(newClientForm.price_list_id)
-    const vendedoraId = owner || (isAdmin ? newClientForm.vendedora_id || null : myVendedoraId)
+    // Elegida en el form (admin) o ella misma (vendedora); si la lista tiene
+    // dueñas, ownerFor la valida/corrige igual que el trigger.
+    const chosen = isAdmin ? newClientForm.vendedora_id || null : myVendedoraId
+    const forced = ownerFor(newClientForm.price_list_id, chosen)
+    const vendedoraId = forced !== undefined ? forced : chosen
     const { error } = await supabase.from('clients').insert({
       name,
       phone,
@@ -445,20 +454,43 @@ export default function ClientsAdmin() {
     setTimeout(() => setCopiedId(null), 1500)
   }
 
-  // Listas "personales" de una vendedora (ej. 'luzmar', 2026-07-09): si
-  // owner_vendedora_id está seteado, un cliente con esa lista SIEMPRE
-  // tiene que quedar asignado a esa vendedora — evita que precios
-  // especiales negociados por ella terminen en la cuenta de otra.
-  const ownerVendedoraId = (listId) => priceLists.find((l) => l.id === listId)?.owner_vendedora_id
+  // Listas con dueña (ej. 'luzmar', 2026-07-09; varias dueñas desde
+  // 2026-08-04): un cliente con esa lista SIEMPRE tiene que quedar asignado
+  // a UNA de sus dueñas — evita que precios especiales negociados por ellas
+  // terminen en la cuenta de otra vendedora. Espejo exacto del trigger
+  // clients_enforce_owner_vendedora; la garantía real está en la base.
+  const listOwners = (listId) =>
+    (priceLists.find((l) => l.id === listId)?.price_list_owners ?? []).map((o) => o.vendedora_id)
+
+  // Dueña principal: la que se asigna cuando la vendedora que viene no es
+  // dueña (mismo criterio que price_list_primary_owner en SQL).
+  const primaryOwner = (listId) => {
+    const owners = priceLists.find((l) => l.id === listId)?.price_list_owners ?? []
+    if (owners.length === 0) return null
+    return (owners.find((o) => o.is_primary) ?? owners[0]).vendedora_id
+  }
+
+  // Vendedora final para un cliente en esta lista: si la elegida ya es
+  // dueña se respeta (así se reparten los clientes de una lista compartida);
+  // si no, cae en la principal. Devuelve undefined si la lista no tiene
+  // dueñas (o sea: decide quien carga el cliente).
+  const ownerFor = (listId, vendedoraId) => {
+    const owners = listOwners(listId)
+    if (owners.length === 0) return undefined
+    return owners.includes(vendedoraId) ? vendedoraId : primaryOwner(listId)
+  }
 
   // Una vendedora sin rol admin no elige a quién asignar (siempre se
   // asigna a sí misma, ver RLS vendedora_insert_own_clients): si además
-  // no ve las listas "personales" de otras, ni por error puede armar un
+  // no ve las listas con dueña ajenas, ni por error puede armar un
   // cliente que termine con precios especiales ajenos asignado a ella.
   // Admin sí ve todas — el candado de vendedora se maneja en el form.
   const selectablePriceLists = isAdmin
     ? priceLists
-    : priceLists.filter((l) => !l.owner_vendedora_id || l.owner_vendedora_id === myVendedoraId)
+    : priceLists.filter((l) => {
+        const owners = listOwners(l.id)
+        return owners.length === 0 || owners.includes(myVendedoraId)
+      })
 
   // Cambiar la lista del cliente: el link que ya tiene muestra los
   // precios nuevos al instante (el token identifica al cliente, la
@@ -479,8 +511,18 @@ export default function ClientsAdmin() {
       setActionError(error.message)
       return
     }
-    const owner = ownerVendedoraId(listId)
-    const patch = { price_list_id: listId, ...(owner ? { vendedora_id: owner } : {}) }
+    // Reflejar lo que hizo el trigger: si la lista nueva tiene dueñas y la
+    // vendedora actual del cliente no es una, quedó con la principal. Se
+    // parchea también el nombre embebido (`vendedores`), que es lo que
+    // muestra la tabla — si no, la columna quedaba con el nombre viejo hasta
+    // la próxima recarga.
+    const forced = ownerFor(listId, client.vendedora_id)
+    const patch = { price_list_id: listId }
+    if (forced !== undefined && forced !== client.vendedora_id) {
+      patch.vendedora_id = forced
+      const v = vendedoresList.find((x) => x.id === forced)
+      patch.vendedores = v ? { name: v.name, phone: v.phone } : null
+    }
     setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, ...patch } : c)))
   }
 
@@ -586,11 +628,13 @@ export default function ClientsAdmin() {
             value={newClientForm.price_list_id}
             onChange={(e) => {
               const listId = e.target.value
-              const owner = ownerVendedoraId(listId)
+              // Al elegir una lista con dueñas, la vendedora del form se
+              // preselecciona: la actual si ya es dueña, si no la principal.
+              const forced = ownerFor(listId, newClientForm.vendedora_id)
               setNewClientForm({
                 ...newClientForm,
                 price_list_id: listId,
-                ...(owner ? { vendedora_id: owner } : {}),
+                ...(forced !== undefined ? { vendedora_id: forced } : {}),
               })
             }}
             className={inputCls}
@@ -603,12 +647,37 @@ export default function ClientsAdmin() {
             ))}
           </select>
           {(() => {
-            const owner = ownerVendedoraId(newClientForm.price_list_id)
-            if (owner) {
+            const owners = listOwners(newClientForm.price_list_id)
+            // Una sola dueña: no hay nada que elegir (igual que antes).
+            if (owners.length === 1) {
               return (
                 <p className="flex items-center text-xs text-primary/50">
-                  {t('assignedToOwner')} <span className="ml-1 font-semibold text-primary/70">{vendedoresList.find((v) => v.id === owner)?.name}</span>
+                  {t('assignedToOwner')} <span className="ml-1 font-semibold text-primary/70">{vendedoresList.find((v) => v.id === owners[0])?.name}</span>
                 </p>
+              )
+            }
+            // Lista compartida (2026-08-04): el admin elige entre las dueñas;
+            // una vendedora dueña se lo asigna a sí misma sin elegir.
+            if (owners.length > 1) {
+              return isAdmin ? (
+                <label className="text-xs text-primary/50">
+                  {t('sharedListOwners')}
+                  <select
+                    value={newClientForm.vendedora_id}
+                    onChange={(e) => setNewClientForm({ ...newClientForm, vendedora_id: e.target.value })}
+                    className={`${inputCls} mt-1 w-full`}
+                  >
+                    {vendedoresList
+                      .filter((v) => owners.includes(v.id))
+                      .map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              ) : (
+                <p className="flex items-center text-xs text-primary/50">{t('assignedToYou')}</p>
               )
             }
             return isAdmin ? (
@@ -767,15 +836,25 @@ export default function ClientsAdmin() {
                   )}
                 </td>
                 <td className="p-3 text-primary/60">
-                  {isAdmin && !ownerVendedoraId(c.price_list_id) ? (
+                  {/* Lista sin dueñas: se reasigna a cualquiera. Lista
+                      compartida (2+ dueñas): solo entre ellas — es lo que
+                      permite repartir sus clientes, y reassign_client rechaza
+                      el resto server-side. Con una sola dueña no hay nada que
+                      elegir, queda texto fijo. */}
+                  {isAdmin && listOwners(c.price_list_id).length !== 1 ? (
                     <select
                       value={c.vendedora_id ?? ''}
                       onChange={(e) => reassignClient(c, e.target.value)}
                       className="w-40 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
                       title={t('reassign')}
                     >
-                      <option value="">{t('unassigned')}</option>
-                      {vendedoresList.map((v) => (
+                      {listOwners(c.price_list_id).length === 0 && (
+                        <option value="">{t('unassigned')}</option>
+                      )}
+                      {(listOwners(c.price_list_id).length > 0
+                        ? vendedoresList.filter((v) => listOwners(c.price_list_id).includes(v.id))
+                        : vendedoresList
+                      ).map((v) => (
                         <option key={v.id} value={v.id}>
                           {v.name}
                         </option>

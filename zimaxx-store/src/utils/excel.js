@@ -79,6 +79,21 @@ export async function downloadMissingPhotosExcel(products, filenameStamp) {
   XLSX.writeFile(wb, `zimaxx-productos-sin-foto-${filenameStamp}.xlsx`)
 }
 
+// Exporta el Registro de movimientos (`admin_audit_log`) a Excel
+// (2026-08-05). A diferencia de los otros dos exports, acá las filas y los
+// encabezados llegan **ya armados** desde `AuditLogAdmin.jsx`: las etiquetas de
+// acción y el texto de detalle dependen de `t()` (idioma del panel) y de la
+// forma del `detail` jsonb de cada acción, que ya vive resuelta ahí. Esta
+// función solo escribe el archivo.
+export async function downloadAuditLogExcel({ rows, header, widths, sheetName, filenameStamp }) {
+  const XLSX = await import('xlsx')
+  const ws = XLSX.utils.json_to_sheet(rows, { header })
+  if (widths) ws['!cols'] = widths.map((wch) => ({ wch }))
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, sheetName)
+  XLSX.writeFile(wb, `zimaxx-registro-movimientos-${filenameStamp}.xlsx`)
+}
+
 export function normalizeHeader(h) {
   return String(h)
     .toLowerCase()

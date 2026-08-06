@@ -45,12 +45,33 @@ alter table public.vendedores add column if not exists login_email text;
 
 create unique index if not exists vendedoras_user_id_idx on public.vendedores (user_id) where user_id is not null;
 
--- Lista "personal" de una vendedora (2026-07-09, ej. Luzmar Quintero):
--- nullable, null en las listas de nivel general (us_min, special, etc.).
--- Cuando está seteado, el admin panel fuerza vendedora_id = este valor
--- al elegir esa lista para un cliente — evita que un cliente con precios
--- especiales de una vendedora quede asignado a otra por error.
-alter table public.price_lists add column if not exists owner_vendedora_id uuid references public.vendedores (id);
+-- Dueñas de una lista de precio (2026-07-09 como columna única
+-- `price_lists.owner_vendedora_id`; 2026-08-04 pasó a esta tabla para poder
+-- COMPARTIR una lista entre varias vendedoras, ver
+-- migration-2026-08-04-shared-price-lists.sql). Tres estados posibles:
+--
+--   * sin filas acá  → lista general (us_min, special, etc.): la ve y la usa
+--                      cualquier vendedora
+--   * una fila       → lista "personal" (ej. Luzmar Quintero): solo ella la ve
+--                      y todo cliente con esa lista queda asignado a ella
+--   * varias filas   → lista compartida: solo esas vendedoras la ven, y cada
+--                      cliente de la lista queda con UNA de ellas
+--
+-- `is_primary` (una sola por lista) es la dueña por defecto: la que se asigna
+-- cuando el cliente entra a la lista con una vendedora que no es dueña.
+create table if not exists public.price_list_owners (
+  price_list_id uuid        not null references public.price_lists (id) on delete cascade,
+  vendedora_id  uuid        not null references public.vendedores (id) on delete cascade,
+  is_primary    boolean     not null default false,
+  created_at    timestamptz not null default now(),
+  primary key (price_list_id, vendedora_id)
+);
+
+create unique index if not exists price_list_owners_primary_key
+  on public.price_list_owners (price_list_id) where is_primary;
+
+create index if not exists price_list_owners_vendedora_idx
+  on public.price_list_owners (vendedora_id);
 
 create table if not exists public.clients (
   id              uuid primary key default gen_random_uuid(),
@@ -111,27 +132,44 @@ begin
   end if;
 end $$;
 
--- Garantiza a nivel de base de datos que un cliente con una lista
--- "personal" (price_lists.owner_vendedora_id, ej. 'luzmar') SIEMPRE
--- queda con esa vendedora asignada (2026-07-09, a pedido del usuario:
--- evitar que un cliente con precios especiales de Luzmar termine en la
--- cuenta de otra vendedora). ClientsAdmin.jsx ya evita esto en la UI
--- (auto-completa y bloquea el selector), pero eso es solo UX — este
--- trigger es la garantía real, cubre también la carga por Excel y
+-- Garantiza a nivel de base de datos que un cliente con una lista que tiene
+-- dueñas (`price_list_owners`, ej. 'luzmar') SIEMPRE queda asignado a UNA de
+-- ellas (2026-07-09, a pedido del usuario: evitar que un cliente con precios
+-- especiales de Luzmar termine en la cuenta de otra vendedora; 2026-08-04
+-- adaptado a listas compartidas entre varias). ClientsAdmin.jsx ya evita esto
+-- en la UI (preselecciona y acota el selector), pero eso es solo UX — este
+-- trigger es la garantía real, cubre también la carga por Excel, el sync y
 -- cualquier escritura directa a la tabla que se le escape al frontend.
+--
+--   * lista sin dueñas → no se toca nada
+--   * la vendedora que viene YA es dueña → se respeta (así se reparten los
+--     clientes de una lista compartida entre sus dueñas)
+--   * si no → se fuerza la dueña principal
+--
+-- Corre en TODO insert/update a propósito: si se le quita una dueña a una
+-- lista, sus clientes quedan asignados a alguien que ya no es dueña, y esto
+-- es lo que los endereza en la próxima escritura (una versión que se salteaba
+-- los updates "irrelevantes" dejaba esas filas inconsistentes para siempre).
 create or replace function public.enforce_owner_vendedora()
 returns trigger
 language plpgsql
+security definer
+set search_path = public
 as $$
-declare
-  v_owner uuid;
 begin
-  select owner_vendedora_id into v_owner
-  from public.price_lists where id = new.price_list_id;
-
-  if v_owner is not null then
-    new.vendedora_id := v_owner;
+  if new.price_list_id is null then
+    return new;
   end if;
+
+  if not public.price_list_has_owners(new.price_list_id) then
+    return new;
+  end if;
+
+  if public.is_price_list_owner(new.price_list_id, new.vendedora_id) then
+    return new;
+  end if;
+
+  new.vendedora_id := public.price_list_primary_owner(new.price_list_id);
   return new;
 end;
 $$;
@@ -176,6 +214,44 @@ alter table public.products
 alter table public.products
   add column if not exists new_until timestamptz;
 
+-- Stock real del producto (2026-07-14, migration-2026-07-14-inventory-stock.sql
+-- — mergeado acá 2026-08-04 al sumarle el descuento por pedido). Nullable:
+-- null = "todavía no se sabe el stock" (producto cargado antes de que el sync
+-- trajera InventoryAvailableQTY), distinto de 0 = "sin stock". NO se expone en
+-- el catálogo del cliente (get_catalog arma el JSON con campos explícitos y no
+-- la incluye), solo se ve en el panel admin.
+alter table public.products
+  add column if not exists stock int;
+
+-- Disponibilidad derivada del stock (2026-08-04,
+-- migration-2026-08-04-order-stock.sql). La regla vivía duplicada en cada
+-- camino de escritura (sync_upsert_products, resolveAvailability de
+-- ProductsAdmin.jsx) y apply_price_list la pisaba sin querer; acá pasa a ser
+-- una invariante de la tabla: no importa quién escriba (sync, Excel, carga
+-- masiva, formulario, el descuento de un pedido atendido o un request
+-- directo), un producto con stock 0 no puede quedar marcado Disponible.
+--
+--   stock null → no se toca (no se sabe el stock; manda availability)
+--   stock >= 1 → 'available'
+--   stock <= 0 → 'preorder'
+--   'flash'    → se conserva siempre (el stock solo alterna available↔preorder)
+create or replace function public.products_availability_from_stock()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.stock is not null and coalesce(new.availability, '') <> 'flash' then
+    new.availability := case when new.stock >= 1 then 'available' else 'preorder' end;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists products_availability_from_stock on public.products;
+create trigger products_availability_from_stock
+  before insert or update on public.products
+  for each row execute function public.products_availability_from_stock();
+
 create table if not exists public.product_prices (
   product_id    uuid not null references public.products (id) on delete cascade,
   price_list_id uuid not null references public.price_lists (id) on delete cascade,
@@ -218,16 +294,39 @@ alter table public.orders drop constraint if exists orders_status_check;
 alter table public.orders add constraint orders_status_check
   check (status in ('new', 'done', 'cancelled'));
 
--- Blinda items/total/status/kind de un pedido para que solo se editen a
--- través de las RPC update_order_items/update_order_status/
--- convert_quote_to_order (2026-07-17, ampliado el mismo día: originalmente
--- solo cubría items/total): así cualquier cambio queda auditado sí o sí
--- en admin_audit_log, igual que reassign_client/delete_client/
--- update_client_price_list. Cada RPC prende la bandera de sesión
--- app.allow_order_edit antes de escribir; sin esto, la policy
--- vendedora_update_own_orders (pensada para que una vendedora marque sus
--- pedidos atendido/nuevo) le hubiera permitido tocar cualquier columna
--- directo, sin auditar.
+-- ¿Este pedido ya descontó su stock? (2026-08-04,
+-- migration-2026-08-04-order-stock.sql.) Marcar Atendido descuenta las
+-- cantidades de products.stock; reabrir o cancelar las devuelve. No se puede
+-- deducir del estado: un pedido puede ir done → new → done varias veces, y la
+-- bandera es la que evita el doble descuento.
+alter table public.orders
+  add column if not exists stock_applied boolean not null default false;
+
+-- Idempotencia del alta (2026-08-05, migration-2026-08-05-order-capture.sql):
+-- el navegador genera un uuid por CARRITO y lo manda en cada intento de ese
+-- mismo pedido, así reintentar un envío que falló devuelve el pedido ya
+-- guardado en vez de duplicarlo. Null en los pedidos previos al cambio y en
+-- los que llegan de un frontend sin actualizar — de ahí que el índice sea
+-- parcial: sin el `where`, dos pedidos sin request_id chocarían entre sí.
+alter table public.orders
+  add column if not exists request_id uuid;
+
+create unique index if not exists orders_request_id_key
+  on public.orders (request_id) where request_id is not null;
+
+-- Blinda items/total/status/kind/stock_applied/request_id de un pedido para
+-- que solo se editen a través de las RPC update_order_items/
+-- update_order_status/convert_quote_to_order (2026-07-17, ampliado el mismo
+-- día: originalmente solo cubría items/total; 2026-08-04 suma stock_applied;
+-- 2026-08-05 suma request_id, que si se pudiera reescribir a mano permitiría
+-- romper la idempotencia de arriba): así cualquier cambio queda auditado sí o
+-- sí en admin_audit_log, igual que
+-- reassign_client/delete_client/update_client_price_list. Cada RPC prende la
+-- bandera de sesión app.allow_order_edit antes de escribir; sin esto, la
+-- policy vendedora_update_own_orders (pensada para que una vendedora marque
+-- sus pedidos atendido/nuevo) le hubiera permitido tocar cualquier columna
+-- directo, sin auditar — incluida stock_applied, con lo que podría saltarse o
+-- duplicar el descuento de stock.
 create or replace function public.orders_guard_items_edit()
 returns trigger
 language plpgsql
@@ -236,7 +335,9 @@ begin
   if (new.items is distinct from old.items
       or new.total is distinct from old.total
       or new.status is distinct from old.status
-      or new.kind is distinct from old.kind)
+      or new.kind is distinct from old.kind
+      or new.stock_applied is distinct from old.stock_applied
+      or new.request_id is distinct from old.request_id)
      and coalesce(current_setting('app.allow_order_edit', true), '') <> 'on' then
     raise exception 'los pedidos solo se editan via update_order_items/update_order_status/convert_quote_to_order';
   end if;
@@ -249,9 +350,70 @@ create trigger orders_guard_items_edit
   before update on public.orders
   for each row execute function public.orders_guard_items_edit();
 
+-- Los pedidos que el cliente envió y NO entraron (2026-08-05,
+-- migration-2026-08-05-order-capture.sql). Existe porque un pedido de ~10k se
+-- perdió sin dejar rastro: create_order lo rechazó con un `return null` mudo
+-- (superaba el tope de líneas de entonces, 200), el frontend igual abrió
+-- WhatsApp y el cliente vio el ✓ de enviado. El único registro del rechazo era
+-- un console.warn en el teléfono del cliente.
+--
+-- `items` se guarda solo cuando el token era válido (cliente real): con un
+-- token inválido se registra el motivo y el conteo, si no cualquiera con la
+-- anon key podría inflar la tabla mandando payloads enormes a repetición.
+-- recover_order_failure (más abajo) los rescata sin que el cliente rearme nada.
+create table if not exists public.order_failures (
+  id          uuid primary key default gen_random_uuid(),
+  client_id   uuid references public.clients (id) on delete set null,
+  token_hint  text,               -- primeros 8 caracteres, para rastrear sin guardar la credencial
+  reason      text not null,
+  line_count  int,
+  kind        text,
+  items       jsonb,              -- null cuando el token no era válido
+  created_at  timestamptz not null default now()
+);
+
+-- Apunta al pedido creado al rescatar este fallo. Null = sin recuperar, que es
+-- lo que muestra el aviso de OrdersAdmin.jsx.
+alter table public.order_failures
+  add column if not exists recovered_order_id uuid references public.orders (id) on delete set null;
+
+create index if not exists order_failures_created_idx
+  on public.order_failures (created_at desc);
+
+alter table public.order_failures enable row level security;
+
 create table if not exists public.admins (
   user_id uuid primary key references auth.users (id) on delete cascade
 );
+
+-- Superadmin (2026-08-05, migration-2026-08-05-superadmin.sql): un solo
+-- perfil que puede hacer, desde el panel, lo que antes solo se podía hacer en
+-- el SQL Editor o en el dashboard de Auth — nombrar admins, cambiar
+-- contraseñas y asignar/desasignar listas de precio a vendedoras.
+--
+-- Por qué una tabla aparte y no una columna en `admins`: hasta esta migración
+-- `admins` tenía la policy `admin_all`, o sea que cualquier admin podía
+-- escribirla vía API. Si la marca de superadmin viviera ahí, cualquiera se
+-- habría podido coronar. Esta tabla tiene RLS activo y CERO policies: desde la
+-- app no existe: solo la leen las funciones SECURITY DEFINER (que corren como
+-- el dueño y saltan RLS) y el SQL Editor. Sumar o quitar un superadmin es, a
+-- propósito, una acción de SQL Editor — es la llave maestra, no un permiso más
+-- del panel.
+create table if not exists public.superadmins (
+  user_id    uuid primary key references auth.users (id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+alter table public.superadmins enable row level security;
+revoke all on table public.superadmins from anon, authenticated;
+
+-- Semilla del único superadmin. No-op si ese usuario todavía no existe en
+-- Auth (instalación desde cero): se puede re-correr este archivo después de
+-- crearlo. La migración equivalente sí corta con error si no lo encuentra,
+-- porque ahí es el objetivo del cambio.
+insert into public.superadmins (user_id)
+select id from auth.users where lower(email) = lower('support5@firstchoiceonline.com')
+on conflict do nothing;
 
 -- Auditoría de acciones sensibles sobre clientes (2026-07-14,
 -- migration-2026-07-14-client-admin-actions.sql — agregada acá recién
@@ -282,14 +444,13 @@ create index if not exists admin_audit_log_created_idx
 create index if not exists admin_audit_log_order_idx
   on public.admin_audit_log (order_id) where order_id is not null;
 
-alter table public.admin_audit_log enable row level security;
-drop policy if exists admin_read_audit on public.admin_audit_log;
-create policy admin_read_audit on public.admin_audit_log
-  for select to authenticated
-  using (public.is_admin());
--- Sin policy de insert/update/delete para nadie: inmutable para
--- cualquier usuario autenticado, solo lo escriben las funciones
--- SECURITY DEFINER (reassign_client/delete_client/update_client_price_list).
+-- La RLS de admin_audit_log vive en la sección "RLS" del final, junto con la
+-- del resto de las tablas: la policy usa `is_admin()`, que se define más
+-- abajo en este archivo, y una policy sí valida sus funciones al crearse.
+-- Estuvo acá arriba entre 2026-07-15 y 2026-08-04 y rompía `schema.sql` en
+-- una instalación desde cero ("function public.is_admin() does not exist") —
+-- no se notó porque producción ya existía desde antes y nadie volvió a correr
+-- el archivo completo.
 
 -- ---------- Listas de precio fijas ----------
 -- Niveles por región: Minimum Order ($800+) y Wholesale ($2,000+).
@@ -320,14 +481,17 @@ insert into public.price_lists (code, label) values
   ('luzmar',       'Luzmar - Precio Especial')
 on conflict (code) do nothing;
 
--- Vincula la lista 'luzmar' a la fila de Luzmar Quintero en `vendedores`
--- (por nombre, sin distinguir mayúsculas — hay índice único sobre
--- lower(name)). No-op si todavía no existe esa vendedora: se puede
--- re-correr después de crearla.
-update public.price_lists
-set owner_vendedora_id = (select id from public.vendedores where lower(name) = 'luzmar quintero')
-where code = 'luzmar'
-  and owner_vendedora_id is null;
+-- Hace a Luzmar Quintero dueña principal de la lista 'luzmar' (por nombre,
+-- sin distinguir mayúsculas — hay índice único sobre lower(name)). No-op si
+-- todavía no existe esa vendedora: se puede re-correr después de crearla.
+-- Para COMPARTIR la lista con otra vendedora, agregar otra fila a
+-- price_list_owners con is_primary = false (ver
+-- migration-2026-08-04-shared-price-lists.sql, al final tiene los queries).
+insert into public.price_list_owners (price_list_id, vendedora_id, is_primary)
+select pl.id, v.id, true
+from public.price_lists pl, public.vendedores v
+where pl.code = 'luzmar' and lower(v.name) = 'luzmar quintero'
+on conflict (price_list_id, vendedora_id) do nothing;
 
 -- Migración: el nivel $15,000+ pasó por los nombres "distribuidor" y
 -- luego "Special" separados por región (us_special/ve_special). La
@@ -354,7 +518,27 @@ begin
   end loop;
 end $$;
 
+-- ---------- Helper: es superadmin ----------
+-- Va antes de is_admin() porque este lo llama y Postgres valida el cuerpo de
+-- una función `language sql` al crearla.
+create or replace function public.is_superadmin()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (select 1 from public.superadmins where user_id = auth.uid());
+$$;
+
+revoke execute on function public.is_superadmin() from public, anon;
+grant execute on function public.is_superadmin() to authenticated;
+
 -- ---------- Helper: es admin ----------
+-- El superadmin es admin por definición (2026-08-05): así no puede quedarse
+-- afuera del panel ni borrándose a sí mismo de `admins` desde la UI nueva, y
+-- todas las policies/RPC que ya usaban is_admin() lo siguen dejando entrar sin
+-- tocarlas una por una.
 create or replace function public.is_admin()
 returns boolean
 language sql
@@ -362,7 +546,8 @@ security definer
 set search_path = public
 stable
 as $$
-  select exists (select 1 from public.admins where user_id = auth.uid());
+  select exists (select 1 from public.admins where user_id = auth.uid())
+      or public.is_superadmin();
 $$;
 
 revoke execute on function public.is_admin() from public, anon;
@@ -413,6 +598,71 @@ grant execute on function public.is_vendedora() to authenticated;
 revoke execute on function public.current_vendedora_id() from public, anon;
 grant execute on function public.current_vendedora_id() to authenticated;
 
+-- ---------- Helpers: dueñas de una lista de precio ----------
+-- (2026-08-04, migration-2026-08-04-shared-price-lists.sql.) SECURITY
+-- DEFINER a propósito: los usan las policies RLS de price_lists/
+-- product_prices y el trigger de clients, así que no pueden depender de que
+-- quien pregunta tenga permiso de leer price_list_owners — si no, la policy
+-- se muerde la cola. Mismo criterio que is_admin()/current_vendedora_id().
+create or replace function public.price_list_has_owners(p_price_list_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.price_list_owners where price_list_id = p_price_list_id
+  );
+$$;
+
+create or replace function public.is_price_list_owner(p_price_list_id uuid, p_vendedora_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select p_vendedora_id is not null and exists (
+    select 1 from public.price_list_owners
+    where price_list_id = p_price_list_id and vendedora_id = p_vendedora_id
+  );
+$$;
+
+-- Dueña principal (null si la lista no tiene dueñas). El order by cubre el
+-- caso raro de que ninguna esté marcada como principal.
+create or replace function public.price_list_primary_owner(p_price_list_id uuid)
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select vendedora_id
+  from public.price_list_owners
+  where price_list_id = p_price_list_id
+  order by is_primary desc, created_at, vendedora_id
+  limit 1;
+$$;
+
+-- ¿La vendedora logueada puede usar esta lista? (general, o es una de sus
+-- dueñas.) Es la regla que aplican las policies de price_lists/product_prices.
+create or replace function public.can_vendedora_use_price_list(p_price_list_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select not public.price_list_has_owners(p_price_list_id)
+      or public.is_price_list_owner(p_price_list_id, public.current_vendedora_id());
+$$;
+
+revoke execute on function public.price_list_primary_owner(uuid) from public;
+grant execute on function public.price_list_has_owners(uuid) to authenticated;
+grant execute on function public.is_price_list_owner(uuid, uuid) to authenticated;
+grant execute on function public.can_vendedora_use_price_list(uuid) to authenticated;
+
 -- ---------- RPC: update_client_price_list ----------
 -- Cambiar la lista de precio de un cliente (2026-07-15, a pedido del
 -- usuario: una vendedora ahora puede cambiarle la lista a SUS propios
@@ -450,12 +700,12 @@ begin
     raise exception 'lista de precio no encontrada';
   end if;
 
-  -- Una vendedora (no admin) no puede asignar una lista "personal" ajena
-  -- (ej. luzmar) a un cliente suyo — mismo candado que ya aplica
+  -- Una vendedora (no admin) no puede asignar una lista con dueñas si no es
+  -- una de ellas (ej. luzmar) — mismo candado que ya aplica
   -- selectablePriceLists en el frontend, reforzado acá server-side.
   if not public.is_admin()
-     and v_new_list.owner_vendedora_id is not null
-     and v_new_list.owner_vendedora_id is distinct from public.current_vendedora_id() then
+     and public.price_list_has_owners(p_price_list_id)
+     and not public.is_price_list_owner(p_price_list_id, public.current_vendedora_id()) then
     raise exception 'no podés asignar esa lista';
   end if;
 
@@ -637,25 +887,87 @@ grant execute on function public.apply_price_list(text, jsonb, boolean) to authe
 -- Regla no negociable: clients y product_prices NUNCA legibles por anon.
 -- El catálogo público solo pasa por las RPC security definer.
 
-alter table public.price_lists    enable row level security;
-alter table public.clients        enable row level security;
-alter table public.vendedores     enable row level security;
-alter table public.products       enable row level security;
-alter table public.product_prices enable row level security;
-alter table public.flash_sales    enable row level security;
-alter table public.orders         enable row level security;
-alter table public.admins         enable row level security;
+alter table public.price_lists       enable row level security;
+alter table public.price_list_owners enable row level security;
+alter table public.clients           enable row level security;
+alter table public.vendedores        enable row level security;
+alter table public.products          enable row level security;
+alter table public.product_prices    enable row level security;
+alter table public.flash_sales       enable row level security;
+alter table public.orders            enable row level security;
+alter table public.admins            enable row level security;
+alter table public.admin_audit_log   enable row level security;
+
+-- admin_audit_log: solo lectura para admin. Sin policy de insert/update/
+-- delete para nadie — es inmutable para cualquier usuario autenticado, solo
+-- la escriben las funciones SECURITY DEFINER (reassign_client/delete_client/
+-- update_client_price_list/update_order_items/update_order_status/
+-- convert_quote_to_order). Va acá y no junto a la tabla porque la policy
+-- necesita que `is_admin()` ya exista.
+drop policy if exists admin_read_audit on public.admin_audit_log;
+create policy admin_read_audit on public.admin_audit_log
+  for select to authenticated
+  using (public.is_admin());
+
+-- order_failures (2026-08-05): mismo criterio que admin_audit_log — solo
+-- lectura, y solo la escribe create_order (SECURITY DEFINER). Una vendedora ve
+-- los fallos de sus propios clientes; los que no tienen cliente resuelto
+-- (token inválido) son solo para el admin. Sin policy de insert/update/delete
+-- para nadie, y ninguna para anon.
+drop policy if exists admin_read_failures on public.order_failures;
+create policy admin_read_failures on public.order_failures
+  for select to authenticated
+  using (public.is_admin());
+
+drop policy if exists vendedora_read_own_failures on public.order_failures;
+create policy vendedora_read_own_failures on public.order_failures
+  for select to authenticated
+  using (client_id in (select id from public.clients where vendedora_id = public.current_vendedora_id()));
+
+-- Explícito aunque los default privileges de Supabase ya cubran a
+-- authenticated sobre todo public: quién puede leer una tabla nueva no debería
+-- depender de un default que no está escrito en ningún lado. Las policies de
+-- arriba son el control real.
+grant select on public.order_failures to authenticated;
 
 -- Admin autenticado: acceso total a todo (via is_admin, que es security
 -- definer para evitar recursión de RLS sobre admins).
+-- `admins` y `price_list_owners` NO están en esta lista desde 2026-08-05
+-- (migration-2026-08-05-superadmin.sql): quién es admin y de quién es una
+-- lista de precio lo escribe solo el superadmin, ver las policies más abajo.
 do $$
 declare t text;
 begin
-  foreach t in array array['price_lists','clients','vendedores','products','product_prices','flash_sales','orders','admins']
+  foreach t in array array['price_lists','clients','vendedores','products','product_prices','flash_sales','orders']
   loop
     execute format('drop policy if exists admin_all on public.%I', t);
     execute format(
       'create policy admin_all on public.%I for all to authenticated using (public.is_admin()) with check (public.is_admin())',
+      t
+    );
+  end loop;
+end $$;
+
+-- Solo superadmin escribe; admin lee (2026-08-05). Antes las dos tablas
+-- estaban en el loop de arriba, o sea que cualquier admin podía nombrar
+-- admins o cambiar las dueñas de una lista con un request directo — nunca
+-- hubo UI, pero el permiso estaba. La lectura de admin sobre
+-- price_list_owners sí la usa el frontend (ClientsAdmin.jsx pide
+-- `price_lists(*, price_list_owners(...))` para saber qué listas tienen dueña).
+do $$
+declare t text;
+begin
+  foreach t in array array['admins','price_list_owners']
+  loop
+    execute format('drop policy if exists admin_all on public.%I', t);
+    execute format('drop policy if exists superadmin_all on public.%I', t);
+    execute format(
+      'create policy superadmin_all on public.%I for all to authenticated using (public.is_superadmin()) with check (public.is_superadmin())',
+      t
+    );
+    execute format('drop policy if exists admin_read_only on public.%I', t);
+    execute format(
+      'create policy admin_read_only on public.%I for select to authenticated using (public.is_admin())',
       t
     );
   end loop;
@@ -706,8 +1018,8 @@ create policy vendedora_update_own_orders on public.orders
 -- Catálogo/flash de solo lectura para cualquier vendedora (consulta, no
 -- edición) — igual acceso de lectura que ya tienen los admins.
 -- price_lists/product_prices NO van acá: tienen su propia policy más abajo
--- porque una lista "personal" (owner_vendedora_id, ej. 'luzmar') es de
--- lectura exclusiva de esa vendedora, no de cualquiera con el rol.
+-- porque una lista con dueñas (`price_list_owners`, ej. 'luzmar') es de
+-- lectura exclusiva de ellas, no de cualquiera con el rol.
 do $$
 declare t text;
 begin
@@ -722,17 +1034,30 @@ begin
 end $$;
 
 -- price_lists/product_prices: cualquier vendedora ve las listas "generales"
--- (owner_vendedora_id null), pero una lista "personal" (ej. 'luzmar') solo
--- la ve su dueña — el resto de vendedoras no debe ver esa columna en la
--- matriz de precios ni esa opción en los selectores de lista (2026-07-15,
--- a pedido del usuario: son precios negociados en privado con esa vendedora).
+-- (sin dueñas), pero una lista con dueñas (ej. 'luzmar') solo la ven ellas —
+-- el resto de vendedoras no debe ver esa columna en la matriz de precios ni
+-- esa opción en los selectores de lista (2026-07-15, a pedido del usuario:
+-- son precios negociados en privado; 2026-08-04 adaptado a listas
+-- compartidas entre varias vendedoras).
 drop policy if exists vendedora_select_readonly on public.price_lists;
 drop policy if exists vendedora_select_price_lists on public.price_lists;
 create policy vendedora_select_price_lists on public.price_lists
   for select to authenticated
   using (
     public.is_vendedora()
-    and (owner_vendedora_id is null or owner_vendedora_id = public.current_vendedora_id())
+    and public.can_vendedora_use_price_list(id)
+  );
+
+-- price_list_owners: una vendedora ve las filas de las listas que puede usar
+-- (así el panel sabe con quién comparte su lista). No puede escribir —
+-- agregar o quitar dueñas es acción de admin (hoy por SQL, ver
+-- migration-2026-08-04-shared-price-lists.sql).
+drop policy if exists vendedora_select_price_list_owners on public.price_list_owners;
+create policy vendedora_select_price_list_owners on public.price_list_owners
+  for select to authenticated
+  using (
+    public.is_vendedora()
+    and public.can_vendedora_use_price_list(price_list_id)
   );
 
 drop policy if exists vendedora_select_readonly on public.product_prices;
@@ -741,11 +1066,7 @@ create policy vendedora_select_product_prices on public.product_prices
   for select to authenticated
   using (
     public.is_vendedora()
-    and exists (
-      select 1 from public.price_lists pl
-      where pl.id = product_prices.price_list_id
-        and (pl.owner_vendedora_id is null or pl.owner_vendedora_id = public.current_vendedora_id())
-    )
+    and public.can_vendedora_use_price_list(price_list_id)
   );
 
 -- ---------- RPC: get_catalog ----------
@@ -984,11 +1305,21 @@ revoke execute on function public.compute_order_items(uuid, jsonb, text) from pu
 -- (y flash sales vigentes), así la tabla orders es fuente de verdad
 -- aunque alguien manipule el payload. p_total se ignora; se mantiene en
 -- la firma para no romper clientes ya desplegados.
+--
+-- 2026-08-05 (migration-2026-08-05-order-capture.sql), después de perderse un
+-- pedido de ~10k: el tope de líneas pasó de 200 a 1000, todo rechazo queda en
+-- order_failures en vez de desaparecer, y p_request_id hace idempotente el
+-- alta. El tope no se puede sacar del todo: compute_order_items cuesta
+-- ~48 ms con 200 líneas, 651 ms con 1000 y 2.4 s con 2000 (crece superlineal
+-- porque el acumulador `v_items || ...` copia el jsonb entero en cada vuelta),
+-- así que pasando las ~2000 se choca con el statement_timeout del rol anon y
+-- volvería el mismo fallo silencioso por otra puerta.
 create or replace function public.create_order(
-  p_token text,
-  p_items jsonb,
-  p_total numeric,
-  p_kind  text default 'order'
+  p_token      text,
+  p_items      jsonb,
+  p_total      numeric,
+  p_kind       text default 'order',
+  p_request_id uuid default null
 )
 returns uuid
 language plpgsql
@@ -996,22 +1327,48 @@ security definer
 set search_path = public
 as $$
 declare
-  v_client    public.clients%rowtype;
-  v_list_code text;
-  v_kind      text;
-  v_result    jsonb;
-  v_items     jsonb;
-  v_order_id  uuid;
+  v_client     public.clients%rowtype;
+  v_list_code  text;
+  v_kind       text;
+  v_result     jsonb;
+  v_items      jsonb;
+  v_order_id   uuid;
+  v_hint       text := left(coalesce(p_token, ''), 8);
+  v_lines      int  := case when jsonb_typeof(p_items) = 'array'
+                            then jsonb_array_length(p_items) end;
 begin
   select * into v_client from public.clients where token = p_token;
   if not found then
-    return null; -- token inválido: no registra ni explica
+    -- Token inválido: al cliente no se le explica nada, pero queda el rastro.
+    -- Sin items, ver el comentario de la tabla.
+    insert into public.order_failures (token_hint, reason, line_count, kind)
+    values (v_hint, 'token inválido', v_lines, p_kind);
+    return null;
   end if;
 
   if p_items is null or jsonb_typeof(p_items) <> 'array'
-     or jsonb_array_length(p_items) = 0
-     or jsonb_array_length(p_items) > 200 then
+     or jsonb_array_length(p_items) = 0 then
+    insert into public.order_failures (client_id, token_hint, reason, line_count, kind, items)
+    values (v_client.id, v_hint, 'payload vacío o mal formado', v_lines, p_kind, p_items);
     return null;
+  end if;
+
+  if jsonb_array_length(p_items) > 1000 then
+    insert into public.order_failures (client_id, token_hint, reason, line_count, kind, items)
+    values (v_client.id, v_hint,
+            format('demasiadas líneas: %s (el tope es 1000)', v_lines),
+            v_lines, p_kind, p_items);
+    return null;
+  end if;
+
+  -- Reintento del mismo carrito: devolver el pedido que ya se guardó, no otro.
+  -- Va después de las validaciones para que un payload inválido no se "cure"
+  -- solo por traer un request_id conocido.
+  if p_request_id is not null then
+    select id into v_order_id from public.orders where request_id = p_request_id;
+    if found then
+      return v_order_id;
+    end if;
   end if;
 
   select code into v_list_code from public.price_lists where id = v_client.price_list_id;
@@ -1027,19 +1384,34 @@ begin
   v_items  := v_result->'items';
 
   if jsonb_array_length(v_items) = 0 then
+    -- Todos los ítems se cayeron en compute_order_items: productos
+    -- desactivados o borrados entre que el cliente armó el carrito y lo envió.
+    insert into public.order_failures (client_id, token_hint, reason, line_count, kind, items)
+    values (v_client.id, v_hint, 'ningún ítem válido (productos inactivos o inexistentes)',
+            v_lines, v_kind, p_items);
     return null;
   end if;
 
-  insert into public.orders (client_id, items, total, kind)
-  values (v_client.id, v_items, (v_result->>'total')::numeric, v_kind)
-  returning id into v_order_id;
+  -- Carrera entre dos envíos del mismo carrito (el cliente toca dos veces y
+  -- los dos requests pasan las validaciones a la vez): el índice único deja
+  -- entrar solo al primero y acá se devuelve ese mismo pedido.
+  begin
+    insert into public.orders (client_id, items, total, kind, request_id)
+    values (v_client.id, v_items, (v_result->>'total')::numeric, v_kind, p_request_id)
+    returning id into v_order_id;
+  exception when unique_violation then
+    select id into v_order_id from public.orders where request_id = p_request_id;
+  end;
 
   return v_order_id;
 end;
 $$;
 
-revoke execute on function public.create_order(text, jsonb, numeric, text) from public;
-grant execute on function public.create_order(text, jsonb, numeric, text) to anon, authenticated;
+-- La firma vieja de 4 argumentos se dropea: si quedaran las dos, PostgREST no
+-- sabría cuál llamar (sobrecarga ambigua) y devolvería 300.
+drop function if exists public.create_order(text, jsonb, numeric, text);
+revoke execute on function public.create_order(text, jsonb, numeric, text, uuid) from public;
+grant execute on function public.create_order(text, jsonb, numeric, text, uuid) to anon, authenticated;
 
 -- ---------- RPC: update_order_items ----------
 -- Edición auditada de los ítems de un pedido (2026-07-17, a pedido del
@@ -1130,11 +1502,131 @@ $$;
 revoke execute on function public.update_order_items(uuid, jsonb) from public;
 grant execute on function public.update_order_items(uuid, jsonb) to authenticated;
 
+-- ---------- helper: apply_order_stock ----------
+-- Mueve el stock de los productos de un pedido (2026-08-04,
+-- migration-2026-08-04-order-stock.sql): p_direction = -1 descuenta (pedido
+-- marcado Atendido), +1 devuelve (reabierto o cancelado). Helper interno, sin
+-- grant a anon/authenticated — lo llaman solo update_order_status y
+-- convert_quote_to_order, ambas SECURITY DEFINER del mismo dueño (mismo
+-- patrón que compute_order_items).
+--
+-- La disponibilidad NO se calcula acá: la deriva el trigger
+-- products_availability_from_stock, así el resultado es idéntico venga el
+-- cambio de stock de donde venga.
+create or replace function public.apply_order_stock(
+  p_order_id  uuid,
+  p_direction int
+)
+returns jsonb
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_items   jsonb;
+  v_agg     jsonb;
+  v_moved   jsonb;
+  v_skipped jsonb;
+begin
+  if p_direction not in (-1, 1) then
+    raise exception 'p_direction debe ser -1 (descontar) o 1 (devolver)';
+  end if;
+
+  select items into v_items from public.orders where id = p_order_id;
+  if v_items is null or jsonb_typeof(v_items) <> 'array' then
+    return jsonb_build_object('direction', p_direction, 'moved', '[]'::jsonb, 'skipped', '[]'::jsonb);
+  end if;
+
+  -- Un pedido puede traer el mismo producto en dos líneas (la clave del
+  -- carrito es id+flash: una línea de oferta y otra a precio de lista), así
+  -- que se suman las cantidades por producto ANTES de tocar el stock — si no,
+  -- el segundo update pisaría al primero. El filtro de formato descarta ítems
+  -- malformados sin tumbar el cambio de estado del pedido.
+  select coalesce(jsonb_object_agg(product_id::text, qty), '{}'::jsonb)
+    into v_agg
+  from (
+    select (e ->> 'id')::uuid                      as product_id,
+           sum(floor((e ->> 'qty')::numeric)::int) as qty
+    from jsonb_array_elements(v_items) as e
+    where e ->> 'id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      and e ->> 'qty' ~ '^[0-9]+(\.[0-9]+)?$'
+    group by 1
+  ) s
+  where qty > 0;
+
+  if v_agg = '{}'::jsonb then
+    return jsonb_build_object('direction', p_direction, 'moved', '[]'::jsonb, 'skipped', '[]'::jsonb);
+  end if;
+
+  -- Lo que NO se puede ajustar: producto borrado, o stock null (nunca
+  -- sincronizado — no se puede restar de un dato que no existe). Se calcula
+  -- antes del update, mientras stock sigue en null.
+  select coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'product_id', a.key,
+               'sku',        p.sku,
+               'qty',        a.value::int,
+               'reason',     case when p.id is null then 'producto inexistente' else 'stock sin dato' end
+             )
+             order by p.sku nulls last
+           ),
+           '[]'::jsonb
+         )
+    into v_skipped
+  from jsonb_each_text(v_agg) as a
+  left join public.products p on p.id = a.key::uuid
+  where p.id is null or p.stock is null;
+
+  with agg as (
+    select a.key::uuid as product_id, a.value::int as qty
+    from jsonb_each_text(v_agg) as a
+  ),
+  upd as (
+    update public.products p
+    set stock = p.stock + (p_direction * a.qty)
+    from agg a
+    where p.id = a.product_id
+      and p.stock is not null
+    returning p.id, p.sku, a.qty, p.stock as stock_after, p.availability
+  )
+  select coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'product_id',   id,
+               'sku',          sku,
+               'qty',          qty,
+               'stock_before', stock_after - (p_direction * qty),
+               'stock_after',  stock_after,
+               'availability', availability
+             )
+             order by sku
+           ),
+           '[]'::jsonb
+         )
+    into v_moved
+  from upd;
+
+  return jsonb_build_object(
+    'direction', p_direction,
+    'moved',     v_moved,
+    'skipped',   v_skipped
+  );
+end;
+$$;
+
+revoke execute on function public.apply_order_stock(uuid, int) from public;
+
 -- ---------- RPC: update_order_status ----------
 -- Antes "Marcar atendido"/"Cancelar"/"Reabrir" hacían un update directo
 -- (`vendedora_update_own_orders` ya lo permitía) sin dejar rastro. A
 -- pedido del usuario (2026-07-17), ahora queda auditado igual que la
 -- edición de ítems.
+--
+-- 2026-08-04, a pedido del usuario: además mueve el stock. Solo pedidos
+-- reales (kind = 'order') — una cotización nunca descuenta, primero hay que
+-- pasarla a pedido con convert_quote_to_order. Marcar Atendido descuenta;
+-- salir de Atendido (reabrir/cancelar) devuelve. La bandera
+-- orders.stock_applied — no el estado — evita descontar dos veces.
 create or replace function public.update_order_status(
   p_order_id uuid,
   p_status   text
@@ -1145,9 +1637,11 @@ security definer
 set search_path = public
 as $$
 declare
-  v_order  public.orders%rowtype;
-  v_client public.clients%rowtype;
-  v_email  text;
+  v_order   public.orders%rowtype;
+  v_client  public.clients%rowtype;
+  v_email   text;
+  v_stock   jsonb   := null;
+  v_applied boolean;
 begin
   if not (public.is_admin() or public.is_vendedora()) then
     raise exception 'no autorizado';
@@ -1170,7 +1664,19 @@ begin
   end if;
 
   if v_order.status = p_status then
-    return jsonb_build_object('ok', true, 'status', p_status);
+    return jsonb_build_object('ok', true, 'status', p_status,
+                              'stock_applied', coalesce(v_order.stock_applied, false));
+  end if;
+
+  v_applied := coalesce(v_order.stock_applied, false);
+  if v_order.kind = 'order' then
+    if p_status = 'done' and not v_applied then
+      v_stock   := public.apply_order_stock(p_order_id, -1);
+      v_applied := true;
+    elsif p_status <> 'done' and v_applied then
+      v_stock   := public.apply_order_stock(p_order_id, 1);
+      v_applied := false;
+    end if;
   end if;
 
   select email into v_email from auth.users where id = auth.uid();
@@ -1179,12 +1685,20 @@ begin
     (action, performed_by, performed_by_email, client_id, client_name, order_id, detail)
   values
     ('update_order_status', auth.uid(), v_email, v_client.id, v_client.name, p_order_id,
-     jsonb_build_object('from_status', v_order.status, 'to_status', p_status));
+     jsonb_build_object('from_status', v_order.status, 'to_status', p_status)
+       || case when v_stock is null then '{}'::jsonb else jsonb_build_object('stock', v_stock) end);
 
   perform set_config('app.allow_order_edit', 'on', true);
-  update public.orders set status = p_status where id = p_order_id;
+  update public.orders
+  set status = p_status, stock_applied = v_applied
+  where id = p_order_id;
 
-  return jsonb_build_object('ok', true, 'status', p_status);
+  return jsonb_build_object(
+    'ok',            true,
+    'status',        p_status,
+    'stock_applied', v_applied,
+    'stock',         v_stock
+  );
 end;
 $$;
 
@@ -1196,6 +1710,12 @@ grant execute on function public.update_order_status(uuid, text) to authenticate
 -- en pedido real. A diferencia de una cotización (que nunca congela
 -- precio, ver get_quotes_live_pricing), un pedido SÍ lo congela — desde
 -- acá en adelante ya no se sigue ajustando a cambios de precio futuros.
+--
+-- 2026-08-04: borde de stock. Una cotización nunca descuenta stock, así que
+-- si la que se está convirtiendo YA estaba marcada Atendida, el descuento
+-- tiene que pasar acá mismo (si no, ese pedido quedaría done sin haber
+-- descontado nunca). El camino normal — cotización nueva → pedido nuevo →
+-- Atendido — sigue descontando en update_order_status.
 create or replace function public.convert_quote_to_order(p_order_id uuid)
 returns jsonb
 language plpgsql
@@ -1208,6 +1728,8 @@ declare
   v_list_code text;
   v_result    jsonb;
   v_email     text;
+  v_stock     jsonb   := null;
+  v_applied   boolean;
 begin
   if not (public.is_admin() or public.is_vendedora()) then
     raise exception 'no autorizado';
@@ -1240,6 +1762,15 @@ begin
 
   v_result := public.compute_order_items(v_client.id, v_order.items, 'order');
 
+  -- La conversión recalcula precios, no productos ni cantidades, así que
+  -- apply_order_stock puede leer los ítems ya guardados (el update de abajo
+  -- deja los mismos id/qty) sin cambiar el resultado.
+  v_applied := coalesce(v_order.stock_applied, false);
+  if v_order.status = 'done' and not v_applied then
+    v_stock   := public.apply_order_stock(p_order_id, -1);
+    v_applied := true;
+  end if;
+
   select email into v_email from auth.users where id = auth.uid();
 
   insert into public.admin_audit_log
@@ -1249,19 +1780,116 @@ begin
      jsonb_build_object(
        'items', v_result->'items',
        'total', v_result->'total'
-     ));
+     )
+       || case when v_stock is null then '{}'::jsonb else jsonb_build_object('stock', v_stock) end);
 
   perform set_config('app.allow_order_edit', 'on', true);
   update public.orders
-  set kind = 'order', items = v_result->'items', total = (v_result->>'total')::numeric
+  set kind          = 'order',
+      items         = v_result->'items',
+      total         = (v_result->>'total')::numeric,
+      stock_applied = v_applied
   where id = p_order_id;
 
-  return v_result;
+  return v_result || jsonb_build_object('stock_applied', v_applied, 'stock', v_stock);
 end;
 $$;
 
 revoke execute on function public.convert_quote_to_order(uuid) from public;
 grant execute on function public.convert_quote_to_order(uuid) to authenticated;
+
+-- ---------- RPC: recover_order_failure ----------
+-- Rescata un pedido que el cliente envió y no entró (order_failures), sin
+-- pedirle que lo rearme: toma los ítems guardados y los mete como pedido de
+-- ese mismo cliente. Los precios se recalculan con la lista VIGENTE (via
+-- compute_order_items), no con los que veía cuando lo armó.
+--
+-- Mismos permisos y auditoría que el resto de las acciones del panel: admin
+-- cualquiera, vendedora solo los de sus clientes, y queda en admin_audit_log.
+create or replace function public.recover_order_failure(p_failure_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_fail    public.order_failures%rowtype;
+  v_client  public.clients%rowtype;
+  v_kind    text;
+  v_result  jsonb;
+  v_items   jsonb;
+  v_order   uuid;
+  v_email   text;
+begin
+  if not (public.is_admin() or public.is_vendedora()) then
+    raise exception 'no autorizado';
+  end if;
+
+  select * into v_fail from public.order_failures where id = p_failure_id;
+  if not found then
+    raise exception 'registro no encontrado';
+  end if;
+
+  if v_fail.recovered_order_id is not null then
+    raise exception 'este pedido ya fue recuperado';
+  end if;
+
+  if v_fail.client_id is null or v_fail.items is null then
+    raise exception 'no hay suficiente información para recuperarlo (token inválido)';
+  end if;
+
+  select * into v_client from public.clients where id = v_fail.client_id;
+  if not found then
+    raise exception 'el cliente ya no existe';
+  end if;
+
+  if not public.is_admin()
+     and v_client.vendedora_id is distinct from public.current_vendedora_id() then
+    raise exception 'no tenés permiso para recuperar este pedido';
+  end if;
+
+  -- Tope más alto que el de create_order (un admin decidiendo a mano no es un
+  -- payload sospechoso), pero no infinito: arriba de esto compute_order_items
+  -- tarda más que el statement_timeout y la recuperación fallaría a mitad.
+  if jsonb_array_length(v_fail.items) > 2000 then
+    raise exception 'el pedido tiene % líneas: hay que partirlo en dos', jsonb_array_length(v_fail.items);
+  end if;
+
+  v_kind   := case when v_fail.kind = 'quote' then 'quote' else 'order' end;
+  v_result := public.compute_order_items(v_client.id, v_fail.items, v_kind);
+  v_items  := v_result->'items';
+
+  if jsonb_array_length(v_items) = 0 then
+    raise exception 'ninguno de los productos sigue activo';
+  end if;
+
+  insert into public.orders (client_id, items, total, kind)
+  values (v_client.id, v_items, (v_result->>'total')::numeric, v_kind)
+  returning id into v_order;
+
+  update public.order_failures set recovered_order_id = v_order where id = p_failure_id;
+
+  select email into v_email from auth.users where id = auth.uid();
+
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, client_id, client_name, order_id, detail)
+  values
+    ('recover_order_failure', auth.uid(), v_email, v_client.id, v_client.name, v_order,
+     jsonb_build_object(
+       'failure_id', p_failure_id,
+       'reason',     v_fail.reason,
+       'kind',       v_kind,
+       'items',      v_items,
+       'total',      v_result->'total'
+     ));
+
+  return jsonb_build_object('ok', true, 'order_id', v_order, 'total', v_result->'total',
+                            'lines', jsonb_array_length(v_items));
+end;
+$$;
+
+revoke execute on function public.recover_order_failure(uuid) from public;
+grant execute on function public.recover_order_failure(uuid) to authenticated;
 
 -- ---------- RPC: get_quotes_live_pricing ----------
 -- Una cotización (kind = 'quote') nunca guarda precio congelado (ver
@@ -1347,11 +1975,713 @@ revoke execute on function public.link_vendedora_login(uuid, text) from public, 
 grant execute on function public.link_vendedora_login(uuid, text) to authenticated;
 
 -- ============================================================
+-- RPC del panel Superadmin (2026-08-05,
+-- migration-2026-08-05-superadmin.sql)
+--
+-- Todas exigen is_superadmin() adentro (no alcanza con ocultar la pestaña) y
+-- todas dejan rastro en admin_audit_log vía sa_log(). Lo que NO está acá es el
+-- cambio de contraseña y el alta del usuario de Auth: eso necesita la Admin
+-- API de GoTrue y vive en la Edge Function supabase/functions/superadmin-users,
+-- que se apoya en sa_register_new_admin/sa_log_password_change para no
+-- duplicar ni el candado ni la auditoría.
+-- ============================================================
+
+-- Auditoría de las acciones de superadmin. `client_name` se usa como
+-- "objetivo" (email del usuario o nombre de la lista): la columna ya es texto
+-- libre y así el Registro de movimientos muestra algo útil ahí — de ahí que la
+-- pestaña titule esa columna "Cliente / objetivo". Sin grant a authenticated:
+-- solo la llaman las funciones de abajo.
+create or replace function public.sa_log(p_action text, p_target text, p_detail jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text;
+begin
+  select email into v_email from auth.users where id = auth.uid();
+
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, client_name, detail)
+  values
+    (p_action, auth.uid(), v_email, p_target, p_detail);
+end;
+$$;
+
+revoke execute on function public.sa_log(text, text, jsonb) from public, anon, authenticated;
+
+-- auth.users no es legible desde el cliente: esta RPC es la única forma que
+-- tiene el panel de listar los accesos existentes con su rol.
+create or replace function public.sa_list_users()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+stable
+as $$
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede ver los usuarios';
+  end if;
+
+  return coalesce((
+    select jsonb_agg(
+             jsonb_build_object(
+               'user_id',        u.id,
+               'email',          u.email,
+               'created_at',     u.created_at,
+               'last_sign_in_at', u.last_sign_in_at,
+               'is_superadmin',  s.user_id is not null,
+               'is_admin',       a.user_id is not null,
+               'vendedora_id',   v.id,
+               'vendedora_name', v.name
+             ) order by lower(u.email))
+    from auth.users u
+    left join public.admins      a on a.user_id = u.id
+    left join public.superadmins s on s.user_id = u.id
+    left join public.vendedores  v on v.user_id = u.id
+    where u.deleted_at is null
+  ), '[]'::jsonb);
+end;
+$$;
+
+revoke execute on function public.sa_list_users() from public, anon;
+grant execute on function public.sa_list_users() to authenticated;
+
+create or replace function public.sa_set_admin(p_user_id uuid, p_is_admin boolean)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text;
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede dar o quitar el rol admin';
+  end if;
+
+  select email into v_email from auth.users where id = p_user_id and deleted_at is null;
+  if v_email is null then
+    raise exception 'usuario no encontrado';
+  end if;
+
+  -- Un superadmin es admin por definición (ver is_admin()): quitarle la fila
+  -- de `admins` no le sacaría nada y dejaría el panel mostrando un estado que
+  -- no es el real.
+  if not p_is_admin and exists (select 1 from public.superadmins where user_id = p_user_id) then
+    raise exception 'ese usuario es superadmin: su acceso de admin no se puede quitar';
+  end if;
+
+  if p_is_admin then
+    insert into public.admins (user_id) values (p_user_id) on conflict do nothing;
+  else
+    delete from public.admins where user_id = p_user_id;
+  end if;
+
+  perform public.sa_log(
+    'set_admin', v_email,
+    jsonb_build_object('target_user_id', p_user_id, 'target_email', v_email, 'granted', p_is_admin)
+  );
+
+  return jsonb_build_object('ok', true, 'email', v_email, 'is_admin', p_is_admin);
+end;
+$$;
+
+revoke execute on function public.sa_set_admin(uuid, boolean) from public, anon;
+grant execute on function public.sa_set_admin(uuid, boolean) to authenticated;
+
+-- La llama la Edge Function superadmin-users (acción create_admin) con el JWT
+-- del superadmin, justo después de crear el usuario de Auth.
+create or replace function public.sa_register_new_admin(p_user_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text;
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede crear admins';
+  end if;
+
+  select email into v_email from auth.users where id = p_user_id and deleted_at is null;
+  if v_email is null then
+    raise exception 'usuario no encontrado';
+  end if;
+
+  insert into public.admins (user_id) values (p_user_id) on conflict do nothing;
+
+  perform public.sa_log(
+    'create_admin_user', v_email,
+    jsonb_build_object('target_user_id', p_user_id, 'target_email', v_email)
+  );
+
+  return jsonb_build_object('ok', true, 'email', v_email);
+end;
+$$;
+
+revoke execute on function public.sa_register_new_admin(uuid) from public, anon;
+grant execute on function public.sa_register_new_admin(uuid) to authenticated;
+
+-- La contraseña la cambia la Edge Function (GoTrue), no Postgres: esta RPC
+-- solo deja el rastro. La contraseña nunca se manda ni se guarda acá.
+create or replace function public.sa_log_password_change(p_user_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text;
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede cambiar contraseñas';
+  end if;
+
+  select email into v_email from auth.users where id = p_user_id;
+  if v_email is null then
+    raise exception 'usuario no encontrado';
+  end if;
+
+  perform public.sa_log(
+    'set_user_password', v_email,
+    jsonb_build_object('target_user_id', p_user_id, 'target_email', v_email)
+  );
+
+  return jsonb_build_object('ok', true, 'email', v_email);
+end;
+$$;
+
+revoke execute on function public.sa_log_password_change(uuid) from public, anon;
+grant execute on function public.sa_log_password_change(uuid) to authenticated;
+
+-- Listas que siembra este archivo y que el código da por existentes
+-- (LIST_ALIASES/LIST_ORDER en PricesUpload.jsx, la detección de 'quote' y
+-- 'special' en get_catalog/create_order, los alias de inversión en
+-- ClientsAdmin.jsx): no se pueden borrar desde el panel.
+create or replace function public.sa_protected_price_list_codes()
+returns text[]
+language sql
+immutable
+as $$
+  select array['us_min', 'us_wholesale', 've_min', 've_wholesale', 'special', 'quote', 'luzmar'];
+$$;
+
+revoke execute on function public.sa_protected_price_list_codes() from public, anon, authenticated;
+
+-- Todo lo que el panel necesita de cada lista de un saque. Los conteos se
+-- hacen acá y no en el frontend porque product_prices pasa las 20,000 filas.
+-- `misassigned` = clientes de la lista que quedaron con una vendedora que NO
+-- es dueña (el caso que la migración de listas compartidas documentaba para
+-- revisar a mano).
+create or replace function public.sa_price_list_overview()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+stable
+as $$
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede ver esta información';
+  end if;
+
+  return coalesce((
+    select jsonb_agg(
+             jsonb_build_object(
+               'id',      pl.id,
+               'code',    pl.code,
+               'label',   pl.label,
+               'protected', pl.code = any (public.sa_protected_price_list_codes()),
+               'clients', (select count(*) from public.clients c where c.price_list_id = pl.id),
+               'prices',  (select count(*) from public.product_prices pp where pp.price_list_id = pl.id),
+               'owners',  (
+                 select coalesce(jsonb_agg(
+                          jsonb_build_object(
+                            'vendedora_id', v.id,
+                            'name',         v.name,
+                            'is_primary',   o.is_primary
+                          ) order by o.is_primary desc, v.name), '[]'::jsonb)
+                 from public.price_list_owners o
+                 join public.vendedores v on v.id = o.vendedora_id
+                 where o.price_list_id = pl.id
+               ),
+               'misassigned', (
+                 select count(*)
+                 from public.clients c
+                 where c.price_list_id = pl.id
+                   and public.price_list_has_owners(pl.id)
+                   and not public.is_price_list_owner(pl.id, c.vendedora_id)
+               )
+             ) order by pl.code)
+    from public.price_lists pl
+  ), '[]'::jsonb);
+end;
+$$;
+
+revoke execute on function public.sa_price_list_overview() from public, anon;
+grant execute on function public.sa_price_list_overview() to authenticated;
+
+-- Dueñas de una lista: reemplaza los INSERT/DELETE a mano que documentaba el
+-- final de migration-2026-08-04-shared-price-lists.sql.
+create or replace function public.sa_add_price_list_owner(
+  p_price_list_id uuid,
+  p_vendedora_id  uuid,
+  p_is_primary    boolean default false
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_list      public.price_lists%rowtype;
+  v_vendedora text;
+  v_first     boolean;
+  v_primary   boolean;
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede asignar listas de precio';
+  end if;
+
+  select * into v_list from public.price_lists where id = p_price_list_id;
+  if not found then
+    raise exception 'lista de precio no encontrada';
+  end if;
+
+  select name into v_vendedora from public.vendedores where id = p_vendedora_id;
+  if v_vendedora is null then
+    raise exception 'vendedora no encontrada';
+  end if;
+
+  -- La primera dueña es siempre la principal: una lista con dueñas y sin
+  -- principal funcionaría (price_list_primary_owner tiene fallback por
+  -- created_at) pero deja el estado ambiguo para quien mire la tabla.
+  v_first   := not public.price_list_has_owners(p_price_list_id);
+  v_primary := p_is_primary or v_first;
+
+  -- El índice único parcial deja una sola principal por lista: hay que bajar
+  -- la anterior antes de subir la nueva.
+  if v_primary then
+    update public.price_list_owners
+      set is_primary = false
+      where price_list_id = p_price_list_id and is_primary;
+  end if;
+
+  insert into public.price_list_owners (price_list_id, vendedora_id, is_primary)
+  values (p_price_list_id, p_vendedora_id, v_primary)
+  on conflict (price_list_id, vendedora_id) do update set is_primary = excluded.is_primary;
+
+  perform public.sa_log(
+    'add_price_list_owner', v_list.label,
+    jsonb_build_object(
+      'price_list_id', p_price_list_id,
+      'price_list',    v_list.label,
+      'code',          v_list.code,
+      'vendedora_id',  p_vendedora_id,
+      'vendedora',     v_vendedora,
+      'is_primary',    v_primary
+    )
+  );
+
+  -- Si la lista era general y ahora tiene dueña, sus clientes de otras
+  -- vendedoras quedan inconsistentes. NO se mueven acá a propósito (una
+  -- reasignación masiva silenciosa es justo lo que no se quiere): el panel
+  -- avisa con este contador y ofrece el botón que llama a
+  -- sa_sync_price_list_clients.
+  return jsonb_build_object(
+    'ok', true,
+    'vendedora', v_vendedora,
+    'is_primary', v_primary,
+    'misassigned', (
+      select count(*)
+      from public.clients c
+      where c.price_list_id = p_price_list_id
+        and not public.is_price_list_owner(p_price_list_id, c.vendedora_id)
+    )
+  );
+end;
+$$;
+
+revoke execute on function public.sa_add_price_list_owner(uuid, uuid, boolean) from public, anon;
+grant execute on function public.sa_add_price_list_owner(uuid, uuid, boolean) to authenticated;
+
+create or replace function public.sa_remove_price_list_owner(
+  p_price_list_id uuid,
+  p_vendedora_id  uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_list        public.price_lists%rowtype;
+  v_vendedora   text;
+  v_was_primary boolean;
+  v_next        uuid;
+  v_next_name   text;
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede desasignar listas de precio';
+  end if;
+
+  select * into v_list from public.price_lists where id = p_price_list_id;
+  if not found then
+    raise exception 'lista de precio no encontrada';
+  end if;
+
+  select o.is_primary, v.name into v_was_primary, v_vendedora
+  from public.price_list_owners o
+  join public.vendedores v on v.id = o.vendedora_id
+  where o.price_list_id = p_price_list_id and o.vendedora_id = p_vendedora_id;
+
+  if v_vendedora is null then
+    raise exception 'esa vendedora no es dueña de esta lista';
+  end if;
+
+  delete from public.price_list_owners
+  where price_list_id = p_price_list_id and vendedora_id = p_vendedora_id;
+
+  -- Si se fue la principal y quedan dueñas, la más antigua toma el lugar
+  -- (misma regla de orden que price_list_primary_owner, pero explícita en la
+  -- tabla para que el panel no muestre una lista sin principal).
+  if v_was_primary then
+    select vendedora_id into v_next
+    from public.price_list_owners
+    where price_list_id = p_price_list_id
+    order by created_at, vendedora_id
+    limit 1;
+
+    if v_next is not null then
+      update public.price_list_owners
+        set is_primary = true
+        where price_list_id = p_price_list_id and vendedora_id = v_next;
+      select name into v_next_name from public.vendedores where id = v_next;
+    end if;
+  end if;
+
+  perform public.sa_log(
+    'remove_price_list_owner', v_list.label,
+    jsonb_build_object(
+      'price_list_id', p_price_list_id,
+      'price_list',    v_list.label,
+      'code',          v_list.code,
+      'vendedora_id',  p_vendedora_id,
+      'vendedora',     v_vendedora,
+      'new_primary',   v_next_name
+    )
+  );
+
+  -- Los clientes que tenía asignados NO se mueven solos: si la lista quedó con
+  -- otras dueñas, el panel avisa cuántos quedaron colgados y ofrece pasarlos a
+  -- la principal. Si quedó sin dueñas, vuelve a ser general y no hay nada que
+  -- corregir.
+  return jsonb_build_object(
+    'ok', true,
+    'vendedora', v_vendedora,
+    'new_primary', v_next_name,
+    'misassigned', (
+      select count(*)
+      from public.clients c
+      where c.price_list_id = p_price_list_id
+        and public.price_list_has_owners(p_price_list_id)
+        and not public.is_price_list_owner(p_price_list_id, c.vendedora_id)
+    )
+  );
+end;
+$$;
+
+revoke execute on function public.sa_remove_price_list_owner(uuid, uuid) from public, anon;
+grant execute on function public.sa_remove_price_list_owner(uuid, uuid) to authenticated;
+
+create or replace function public.sa_set_primary_price_list_owner(
+  p_price_list_id uuid,
+  p_vendedora_id  uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_list      public.price_lists%rowtype;
+  v_vendedora text;
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede cambiar la dueña principal';
+  end if;
+
+  select * into v_list from public.price_lists where id = p_price_list_id;
+  if not found then
+    raise exception 'lista de precio no encontrada';
+  end if;
+
+  select v.name into v_vendedora
+  from public.price_list_owners o
+  join public.vendedores v on v.id = o.vendedora_id
+  where o.price_list_id = p_price_list_id and o.vendedora_id = p_vendedora_id;
+
+  if v_vendedora is null then
+    raise exception 'esa vendedora no es dueña de esta lista';
+  end if;
+
+  update public.price_list_owners
+    set is_primary = false
+    where price_list_id = p_price_list_id and is_primary;
+
+  update public.price_list_owners
+    set is_primary = true
+    where price_list_id = p_price_list_id and vendedora_id = p_vendedora_id;
+
+  perform public.sa_log(
+    'set_primary_price_list_owner', v_list.label,
+    jsonb_build_object(
+      'price_list_id', p_price_list_id,
+      'price_list',    v_list.label,
+      'code',          v_list.code,
+      'vendedora_id',  p_vendedora_id,
+      'vendedora',     v_vendedora
+    )
+  );
+
+  return jsonb_build_object('ok', true, 'vendedora', v_vendedora);
+end;
+$$;
+
+revoke execute on function public.sa_set_primary_price_list_owner(uuid, uuid) from public, anon;
+grant execute on function public.sa_set_primary_price_list_owner(uuid, uuid) to authenticated;
+
+-- Pasa a la dueña principal los clientes de la lista que quedaron con una
+-- vendedora que no es dueña. Es la versión auditada del UPDATE que la
+-- migración de listas compartidas dejaba comentado para correr a mano. El
+-- trigger clients_enforce_owner_vendedora hace lo mismo, pero solo cuando el
+-- cliente se toca por otra razón: esto lo resuelve de una para toda la lista.
+create or replace function public.sa_sync_price_list_clients(p_price_list_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_list  public.price_lists%rowtype;
+  v_moved int;
+  v_owner text;
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede reasignar los clientes de una lista';
+  end if;
+
+  select * into v_list from public.price_lists where id = p_price_list_id;
+  if not found then
+    raise exception 'lista de precio no encontrada';
+  end if;
+
+  if not public.price_list_has_owners(p_price_list_id) then
+    raise exception 'esa lista no tiene dueñas: es una lista general y sus clientes pueden estar con cualquier vendedora';
+  end if;
+
+  update public.clients c
+    set vendedora_id = public.price_list_primary_owner(p_price_list_id)
+    where c.price_list_id = p_price_list_id
+      and not public.is_price_list_owner(p_price_list_id, c.vendedora_id);
+
+  get diagnostics v_moved = row_count;
+
+  select name into v_owner
+  from public.vendedores
+  where id = public.price_list_primary_owner(p_price_list_id);
+
+  perform public.sa_log(
+    'sync_price_list_clients', v_list.label,
+    jsonb_build_object(
+      'price_list_id', p_price_list_id,
+      'price_list',    v_list.label,
+      'code',          v_list.code,
+      'to_vendedora',  v_owner,
+      'moved',         v_moved
+    )
+  );
+
+  return jsonb_build_object('ok', true, 'moved', v_moved, 'to_vendedora', v_owner);
+end;
+$$;
+
+revoke execute on function public.sa_sync_price_list_clients(uuid) from public, anon;
+grant execute on function public.sa_sync_price_list_clients(uuid) to authenticated;
+
+-- Crear una lista era hasta 2026-08-05 un INSERT a mano en el SQL Editor (así
+-- nacieron 'quote' y 'luzmar'). El code se valida porque es la llave que usan
+-- los alias de la carga de precios y la detección de quote/special.
+create or replace function public.sa_create_price_list(p_code text, p_label text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_code  text := lower(trim(coalesce(p_code, '')));
+  v_label text := trim(coalesce(p_label, ''));
+  v_id    uuid;
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede crear listas de precio';
+  end if;
+
+  if v_code !~ '^[a-z][a-z0-9_]{1,30}$' then
+    raise exception 'el código tiene que empezar con una letra y llevar solo minúsculas, números o _ (ej: mayoreo_ve)';
+  end if;
+  if v_label = '' then
+    raise exception 'falta el nombre visible de la lista';
+  end if;
+  if exists (select 1 from public.price_lists where code = v_code) then
+    raise exception 'ya existe una lista con el código %', v_code;
+  end if;
+
+  insert into public.price_lists (code, label) values (v_code, v_label) returning id into v_id;
+
+  perform public.sa_log(
+    'create_price_list', v_label,
+    jsonb_build_object('price_list_id', v_id, 'code', v_code, 'label', v_label)
+  );
+
+  return jsonb_build_object('ok', true, 'id', v_id, 'code', v_code, 'label', v_label);
+end;
+$$;
+
+revoke execute on function public.sa_create_price_list(text, text) from public, anon;
+grant execute on function public.sa_create_price_list(text, text) to authenticated;
+
+-- Solo el nombre visible. El code no se toca nunca: hay código que lo lee
+-- (get_catalog/create_order para 'quote', PricesUpload.jsx para los alias) y
+-- renombrarlo rompería esos caminos en silencio.
+create or replace function public.sa_update_price_list(p_price_list_id uuid, p_label text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_list  public.price_lists%rowtype;
+  v_label text := trim(coalesce(p_label, ''));
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede renombrar listas de precio';
+  end if;
+
+  select * into v_list from public.price_lists where id = p_price_list_id;
+  if not found then
+    raise exception 'lista de precio no encontrada';
+  end if;
+  if v_label = '' then
+    raise exception 'falta el nombre visible de la lista';
+  end if;
+  if v_label = v_list.label then
+    return jsonb_build_object('ok', true, 'label', v_label);
+  end if;
+
+  update public.price_lists set label = v_label where id = p_price_list_id;
+
+  -- 'update_price_list_label' y no 'update_price_list': esa acción ya existe en
+  -- admin_audit_log con otro significado (update_client_price_list, cuando se
+  -- le cambia la lista a un cliente).
+  perform public.sa_log(
+    'update_price_list_label', v_label,
+    jsonb_build_object(
+      'price_list_id', p_price_list_id,
+      'code',          v_list.code,
+      'from_label',    v_list.label,
+      'to_label',      v_label
+    )
+  );
+
+  return jsonb_build_object('ok', true, 'label', v_label);
+end;
+$$;
+
+revoke execute on function public.sa_update_price_list(uuid, text) from public, anon;
+grant execute on function public.sa_update_price_list(uuid, text) to authenticated;
+
+-- Borrar es para deshacer un alta con el código mal escrito, nada más: solo
+-- listas creadas desde el panel (no las que siembra este archivo) y solo si
+-- están completamente vacías. Sin borrado en cascada a propósito — si hay algo
+-- colgando, el mensaje dice qué y se decide a mano.
+create or replace function public.sa_delete_price_list(p_price_list_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_list    public.price_lists%rowtype;
+  v_clients int;
+  v_prices  int;
+  v_owners  int;
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede eliminar listas de precio';
+  end if;
+
+  select * into v_list from public.price_lists where id = p_price_list_id;
+  if not found then
+    raise exception 'lista de precio no encontrada';
+  end if;
+
+  if v_list.code = any (public.sa_protected_price_list_codes()) then
+    raise exception 'la lista % es una de las listas base del sistema y no se puede eliminar', v_list.code;
+  end if;
+
+  select count(*) into v_clients from public.clients where price_list_id = p_price_list_id;
+  if v_clients > 0 then
+    raise exception 'la lista tiene % cliente(s) asignado(s): pasalos a otra lista antes de eliminarla', v_clients;
+  end if;
+
+  select count(*) into v_prices from public.product_prices where price_list_id = p_price_list_id;
+  if v_prices > 0 then
+    raise exception 'la lista tiene % precio(s) cargado(s): vaciala antes de eliminarla', v_prices;
+  end if;
+
+  select count(*) into v_owners from public.price_list_owners where price_list_id = p_price_list_id;
+  if v_owners > 0 then
+    raise exception 'la lista tiene % dueña(s) asignada(s): quitalas antes de eliminarla', v_owners;
+  end if;
+
+  delete from public.price_lists where id = p_price_list_id;
+
+  perform public.sa_log(
+    'delete_price_list', v_list.label,
+    jsonb_build_object('price_list_id', p_price_list_id, 'code', v_list.code, 'label', v_list.label)
+  );
+
+  return jsonb_build_object('ok', true, 'code', v_list.code);
+end;
+$$;
+
+revoke execute on function public.sa_delete_price_list(uuid) from public, anon;
+grant execute on function public.sa_delete_price_list(uuid) to authenticated;
+
+-- ============================================================
 -- Primer usuario admin:
 -- 1. Crear el usuario en Authentication -> Users (email + password).
 -- 2. Ejecutar (reemplazando el email):
 --
 --    insert into public.admins (user_id)
 --    select id from auth.users where email = 'admin@zimaxx.com'
+--    on conflict do nothing;
+--
+-- Desde 2026-08-05 el superadmin (support5@firstchoiceonline.com, sembrado
+-- más arriba en este archivo) puede hacer esto mismo desde la pestaña
+-- 🔐 Superadmin del panel, sin SQL: "+ Crear admin" (usuario nuevo, vía la
+-- Edge Function superadmin-users) o "Hacer admin" sobre un usuario que ya
+-- existe. Este bloque queda para el arranque desde cero y para el caso de que
+-- se pierda el acceso del superadmin.
+--
+-- Sumar o quitar un superadmin sigue siendo solo por SQL, a propósito:
+--
+--    insert into public.superadmins (user_id)
+--    select id from auth.users where lower(email) = lower('OTRO@EMAIL.COM')
 --    on conflict do nothing;
 -- ============================================================

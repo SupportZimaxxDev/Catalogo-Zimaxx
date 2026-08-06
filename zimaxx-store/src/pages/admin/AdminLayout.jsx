@@ -70,6 +70,12 @@ export default function AdminLayout() {
   const location = useLocation()
   const [session, setSession] = useState(undefined) // undefined = cargando
   const [role, setRole] = useState(undefined) // undefined = cargando, null = sin acceso
+  // Superadmin (2026-08-05): rol aparte, no un valor más de get_my_role() —
+  // hay ~6 páginas que comparan `role === 'admin'` para mostrar sus controles
+  // de edición, y devolver 'superadmin' ahí las habría dejado en solo lectura.
+  // undefined = cargando (sin esto, el guard de ruta redirigiría al superadmin
+  // antes de que responda el RPC).
+  const [isSuper, setIsSuper] = useState(undefined)
   const [newOrders, setNewOrders] = useState(0)
 
   useEffect(() => {
@@ -81,12 +87,18 @@ export default function AdminLayout() {
   useEffect(() => {
     if (!session) {
       setRole(undefined)
+      setIsSuper(undefined)
       return
     }
-    supabase
-      .rpc('get_my_role')
-      .then(({ data }) => setRole(data ?? null))
-      .catch(() => setRole(null))
+    Promise.all([supabase.rpc('get_my_role'), supabase.rpc('is_superadmin')])
+      .then(([r, s]) => {
+        setRole(r.data ?? null)
+        setIsSuper(s.data === true)
+      })
+      .catch(() => {
+        setRole(null)
+        setIsSuper(false)
+      })
   }, [session])
 
   const isAdmin = role === 'admin'
@@ -107,7 +119,7 @@ export default function AdminLayout() {
     return <p className="py-16 text-center text-primary/60">{t('loading')}</p>
   }
   if (!session) return <Login />
-  if (role === undefined) {
+  if (role === undefined || isSuper === undefined) {
     return <p className="py-16 text-center text-primary/60">{t('loading')}</p>
   }
   if (!role) {
@@ -136,6 +148,13 @@ export default function AdminLayout() {
     return <Navigate to="/admin" replace />
   }
 
+  // La pestaña Superadmin es de un solo perfil: no alcanza con ocultarla, la
+  // ruta también se corta acá (y las RPC de la base rechazan a cualquier otro
+  // aunque las llame a mano — ver migration-2026-08-05-superadmin.sql).
+  if (!isSuper && location.pathname.startsWith('/admin/superadmin')) {
+    return <Navigate to="/admin" replace />
+  }
+
   const tabs = [
     { to: '/admin', label: t('products'), end: true },
     { to: '/admin/prices', label: t('prices') },
@@ -144,6 +163,7 @@ export default function AdminLayout() {
     ...(isAdmin ? [{ to: '/admin/vendedoras', label: t('vendedoras') }] : []),
     ...(isAdmin ? [{ to: '/admin/flash', label: t('flashSales') }] : []),
     { to: '/admin/orders', label: t('orders'), badge: newOrders },
+    ...(isSuper ? [{ to: '/admin/superadmin', label: `🔐 ${t('superadmin')}` }] : []),
   ]
 
   return (
@@ -194,7 +214,7 @@ export default function AdminLayout() {
         </nav>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6">
-        <Outlet context={{ role }} />
+        <Outlet context={{ role, isSuper }} />
       </main>
     </div>
   )

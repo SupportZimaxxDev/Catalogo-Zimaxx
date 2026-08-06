@@ -6,7 +6,7 @@ import { parseSheet, pick, detectImageColumn, looksLikeImageUrl, downloadMissing
 import { generateSku } from '../../utils/token'
 import { SearchIcon, UploadZone, inputCls, useInfiniteRows } from './ui'
 
-const EMPTY = { sku: '', upc: '', name: '', category: '', image_url: '', active: true, new_until: '' }
+const EMPTY = { sku: '', upc: '', name: '', category: '', image_url: '', active: true, new_until: '', stock: '' }
 
 // Etiqueta "Nuevo" (2026-07-09): los productos recién creados la llevan
 // automáticamente por ~10 días ("una semana, quizás un poco más") y el
@@ -419,6 +419,9 @@ export default function ProductsAdmin() {
       image_url: form.image_url.trim() || null,
       active: form.active,
       new_until: toIso(form.new_until),
+      // Vacío = "sin dato de stock" (null), distinto de 0 = "sin stock". La
+      // disponibilidad la deriva el trigger de la base, no se manda de acá.
+      stock: parseStock(form.stock),
     }
     const { error } = form.id
       ? await supabase.from('products').update(payload).eq('id', form.id)
@@ -639,6 +642,23 @@ export default function ProductsAdmin() {
             />
             <span className="mt-1 block text-xs text-primary/50">{t('newUntilHint')}</span>
           </label>
+          {/* Stock editable a mano (2026-08-04): hace falta para cerrar el
+              ciclo del descuento por pedido — cuando entra mercadería, el
+              admin repone acá y el producto vuelve solo a Disponible (lo
+              deriva el trigger products_availability_from_stock). Hasta ahora
+              el stock solo entraba por el Excel de productos o el sync. */}
+          <label className="text-sm">
+            📦 {t('stock')}
+            <input
+              type="number"
+              step={1}
+              placeholder="—"
+              value={form.stock ?? ''}
+              onChange={(e) => setForm({ ...form, stock: e.target.value })}
+              className={`${inputCls} mt-1 w-full`}
+            />
+            <span className="mt-1 block text-xs text-primary/50">{t('stockHint')}</span>
+          </label>
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -715,7 +735,7 @@ export default function ProductsAdmin() {
           <option value="">{t('allStatuses')}</option>
           <option value="active">{t('active')}</option>
           <option value="inactive">{t('inactive')}</option>
-          <option value="instock">{t('inStock')}</option>
+          <option value="instock">{t('withStock')}</option>
           <option value="nostock">{t('outOfStock')}</option>
           <option value="noimage">{t('noImage')}</option>
           <option value="preorder">{t('preorder')}</option>

@@ -48,6 +48,20 @@ export default function OrdersAdmin() {
   // a pedido del usuario) y feedback de error para "Convertir en pedido".
   const [confirmStatus, setConfirmStatus] = useState(null) // { id, status }
   const [convertError, setConvertError] = useState(null) // { id, message }
+  // Resultado del movimiento de stock del último cambio de estado
+  // (2026-08-04): { id, direction, moved[], skipped[] }. Antes los errores
+  // de update_order_status se descartaban en silencio.
+  const [stockInfo, setStockInfo] = useState(null)
+  const [statusError, setStatusError] = useState(null) // { id, message }
+
+  // Pedidos que el cliente envió y NO entraron (2026-08-05, order_failures).
+  // Antes de esta tanda un rechazo no dejaba rastro en ninguna parte: la
+  // vendedora recibía la lista por WhatsApp y el pedido no existía para el
+  // sistema, sin forma de saber por qué. RLS ya filtra esto a los clientes de
+  // cada vendedora.
+  const [failures, setFailures] = useState([])
+  const [recovering, setRecovering] = useState(null) // id del que se está rescatando
+  const [recoverError, setRecoverError] = useState(null) // { id, message }
 
   const loadLivePricing = async (list) => {
     const quoteIds = list.filter((o) => o.kind === 'quote').map((o) => o.id)
@@ -55,6 +69,15 @@ export default function OrdersAdmin() {
     const { data } = await supabase.rpc('get_quotes_live_pricing', { p_order_ids: quoteIds })
     if (data) setLivePricing((prev) => ({ ...prev, ...data }))
   }
+
+  const loadFailures = () =>
+    supabase
+      .from('order_failures')
+      .select('*, clients(name, phone)')
+      .is('recovered_order_id', null)
+      .order('created_at', { ascending: false })
+      .limit(50)
+      .then(({ data }) => setFailures(data ?? []))
 
   useEffect(() => {
     // A una vendedora, RLS ya le filtra esto a sus propios pedidos —
@@ -69,14 +92,55 @@ export default function OrdersAdmin() {
         setOrders(list)
         loadLivePricing(list)
       })
+    loadFailures()
   }, [])
+
+  // Rescata el pedido perdido: lo crea como pedido de ese cliente con los
+  // precios vigentes y marca el fallo como recuperado.
+  const recover = async (id) => {
+    setRecoverError(null)
+    setRecovering(id)
+    const { data, error } = await supabase.rpc('recover_order_failure', { p_failure_id: id })
+    setRecovering(null)
+    if (error || !data?.ok) {
+      setRecoverError({ id, message: error?.message ?? t('recoverFailed') })
+      return
+    }
+    // Recargar las dos listas: el pedido nuevo tiene que aparecer arriba y el
+    // aviso desaparecer.
+    const { data: fresh } = await supabase
+      .from('orders')
+      .select('*, clients(name, phone, vendedora_id, vendedores(name))')
+      .order('created_at', { ascending: false })
+      .limit(200)
+    if (fresh) {
+      setOrders(fresh)
+      loadLivePricing(fresh)
+    }
+    loadFailures()
+  }
 
   // Antes era un update directo; ahora pasa por la RPC auditada
   // (2026-07-17) — cada cambio de estado queda en admin_audit_log. La UI
   // pide confirmación antes de llamarla (ver confirmStatus más abajo).
+  // 2026-08-04: la misma RPC mueve el stock de los productos (descuenta al
+  // marcar atendido un pedido real, devuelve al reabrir/cancelar) y devuelve
+  // qué ajustó, para mostrarlo acá.
   const applyStatus = async (id, status) => {
-    const { error } = await supabase.rpc('update_order_status', { p_order_id: id, p_status: status })
-    if (!error) setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status } : o)))
+    setStatusError(null)
+    setStockInfo(null)
+    const { data, error } = await supabase.rpc('update_order_status', {
+      p_order_id: id,
+      p_status: status,
+    })
+    if (error) {
+      setStatusError({ id, message: error.message })
+      return
+    }
+    setOrders((prev) =>
+      prev.map((o) => (o.id === id ? { ...o, status, stock_applied: !!data?.stock_applied } : o)),
+    )
+    if (data?.stock) setStockInfo({ id, ...data.stock })
   }
 
   const statusLabel = (status) =>
@@ -93,8 +157,21 @@ export default function OrdersAdmin() {
       return
     }
     setOrders((prev) =>
-      prev.map((x) => (x.id === o.id ? { ...x, kind: 'order', items: data.items, total: data.total } : x)),
+      prev.map((x) =>
+        x.id === o.id
+          ? {
+              ...x,
+              kind: 'order',
+              items: data.items,
+              total: data.total,
+              stock_applied: !!data.stock_applied,
+            }
+          : x,
+      ),
     )
+    // Borde de stock: si la cotización ya estaba atendida, la conversión
+    // descuenta ahí mismo (ver convert_quote_to_order en la migración).
+    if (data.stock) setStockInfo({ id: o.id, ...data.stock })
   }
 
   // Ítems/total a mostrar: los de la cotización se pisan con el precio
@@ -199,14 +276,70 @@ export default function OrdersAdmin() {
     })
   }, [orders, query, statusFilter, typeFilter, repFilter])
 
+  // Va arriba de la bandeja y también cuando todavía no hay ningún pedido: un
+  // catálogo nuevo cuyo primer pedido rebotó mostraría "aún no hay pedidos"
+  // ocultando justo lo que hay que ver.
+  const failuresNotice = failures.length > 0 && (
+    <div className="rounded-xl border-2 border-red-500 bg-red-50 p-4 dark:bg-red-950/40">
+      <h3 className="text-sm font-bold text-red-700 dark:text-red-300">
+        ⚠️ {t('failedOrders')} ({failures.length})
+      </h3>
+      <p className="mt-1 text-xs leading-relaxed text-red-900/70 dark:text-red-200/70">
+        {t('failedOrdersBody')}
+      </p>
+      <ul className="mt-3 space-y-2">
+        {failures.map((f) => (
+          <li key={f.id} className="rounded-lg bg-surface p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">{f.clients?.name ?? t('unknownClient')}</p>
+                <p className="text-xs text-primary/60">
+                  {new Date(f.created_at).toLocaleString()} · {f.reason}
+                  {f.line_count != null && ` · ${f.line_count} ${t('failureLines')}`}
+                </p>
+              </div>
+              {f.client_id && f.items && (
+                <button
+                  onClick={() => recover(f.id)}
+                  disabled={recovering === f.id}
+                  className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {recovering === f.id ? t('recovering') : t('recoverOrder')}
+                </button>
+              )}
+            </div>
+            {recoverError?.id === f.id && (
+              <p className="mt-2 text-xs font-medium text-red-700 dark:text-red-300">
+                {recoverError.message}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+
   if (orders.length === 0) {
     return (
-      <div>
-        <h2 className="mb-4 text-xl font-bold">{t('orders')}</h2>
+      <div className="space-y-4">
+        <h2 className="text-xl font-bold">{t('orders')}</h2>
+        {failuresNotice}
         <p className="text-primary/60">{t('noOrders')}</p>
       </div>
     )
   }
+
+  // Aviso del efecto en stock dentro del modal de confirmación (2026-08-04):
+  // solo aplica a pedidos reales — una cotización nunca mueve inventario.
+  const pendingOrder = confirmStatus ? orders.find((o) => o.id === confirmStatus.id) : null
+  const stockNoticeKey =
+    pendingOrder?.kind !== 'order'
+      ? null
+      : confirmStatus.status === 'done' && !pendingOrder.stock_applied
+        ? 'stockWillDeduct'
+        : confirmStatus.status !== 'done' && pendingOrder.stock_applied
+          ? 'stockWillReturn'
+          : null
 
   return (
     <div className="space-y-4">
@@ -214,6 +347,8 @@ export default function OrdersAdmin() {
         {t('orders')} ({filtered.length}
         {filtered.length !== orders.length ? ` / ${orders.length}` : ''})
       </h2>
+
+      {failuresNotice}
 
       <div className="flex flex-col gap-2 md:flex-row">
         <div className="relative flex-1">
@@ -325,6 +460,11 @@ export default function OrdersAdmin() {
                     >
                       {statusLabel(o.status ?? 'new')}
                     </span>
+                    {o.stock_applied && (
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary/60">
+                        📦 {t('stockDeducted')}
+                      </span>
+                    )}
                     {(o.status ?? 'new') === 'new' ? (
                       <span className="inline-flex gap-1.5">
                         <button
@@ -356,6 +496,19 @@ export default function OrdersAdmin() {
                       >
                         {t('markNew')}
                       </button>
+                    )}
+                    {stockInfo?.id === o.id && (
+                      <p className="max-w-[13rem] whitespace-normal text-[11px] font-medium leading-snug text-primary/60">
+                        {stockInfo.direction === -1 ? t('stockMoved') : t('stockReturned')}:{' '}
+                        {stockInfo.moved?.length ?? 0} {t('products').toLowerCase()}
+                        {(stockInfo.skipped?.length ?? 0) > 0 &&
+                          ` · ${stockInfo.skipped.length} ${t('stockNoData')}`}
+                      </p>
+                    )}
+                    {statusError?.id === o.id && (
+                      <p className="max-w-[13rem] whitespace-normal text-[11px] font-medium leading-snug text-red-600 dark:text-red-400">
+                        {statusError.message}
+                      </p>
                     )}
                   </div>
                 </td>
@@ -564,6 +717,11 @@ export default function OrdersAdmin() {
             <p className="mt-1.5 text-sm leading-relaxed text-primary/60">
               {t('confirmOrderActionBody')} <span className="font-semibold">{statusLabel(confirmStatus.status)}</span>.
             </p>
+            {stockNoticeKey && (
+              <p className="mt-3 rounded-xl bg-gold-pale/50 p-3 text-xs leading-relaxed text-primary/70">
+                {t(stockNoticeKey)}
+              </p>
+            )}
             <div className="mt-5 flex gap-2">
               <button
                 onClick={() => setConfirmStatus(null)}

@@ -24,6 +24,7 @@ Dos regiones × dos niveles + una lista Special general (sin región):
 | `ve_wholesale` | VE Wholesale | Ídem, facturado en Venezuela |
 | `special` | Special Order | Invierte $15,000+ (**cualquier región**), precio propio |
 | `quote` | Cotización (sin precio) | Prospecto sin lista asignada todavía — ver sección siguiente |
+| `luzmar` | Luzmar - Precio Especial | Lista con dueña (ver "Listas con dueña" abajo) |
 
 - **Región**: `ve_*` es exclusivamente para clientes facturados en Venezuela;
   `us_*` abarca todo el resto del mundo (aunque envíen a Miami). **Special no
@@ -34,6 +35,40 @@ Dos regiones × dos niveles + una lista Special general (sin región):
   actualiza al instante lo que ve el mismo link.
 - **Pedido mínimo $800**: el checkout se bloquea por debajo (configurable
   con `VITE_MIN_ORDER` en `.env`). Aplica también a Special.
+
+### Listas con dueña (personales y compartidas)
+
+Una lista puede tener **dueñas** (tabla `price_list_owners`, 2026-08-04 —
+antes era la columna única `price_lists.owner_vendedora_id`, 2026-07-09).
+Sirve para precios negociados en privado por una vendedora, que no tienen que
+verse ni usarse desde la cuenta de otra. Tres estados:
+
+| Dueñas | Qué significa |
+|---|---|
+| ninguna | Lista **general** (`us_min`, `special`, `quote`…): la ve y la usa cualquier vendedora |
+| una | Lista **personal** (ej. `luzmar`): solo ella la ve, y todo cliente con esa lista queda asignado a ella |
+| varias | Lista **compartida**: solo esas vendedoras la ven, y cada cliente de la lista queda con **una** de ellas |
+
+- **Quién la ve**: RLS (`can_vendedora_use_price_list()`) — una vendedora que
+  no es dueña no recibe ni la fila de `price_lists` ni sus `product_prices`,
+  así que la lista no aparece en la matriz de Precios ni en ningún selector.
+  Los admins ven todo.
+- **A quién queda asignado el cliente**: lo garantiza el trigger
+  `clients_enforce_owner_vendedora` en la base, no la UI. Si la vendedora que
+  viene ya es dueña, se respeta (así se reparten los clientes de una lista
+  compartida); si no, se fuerza la **dueña principal** (`is_primary`, una sola
+  por lista). Cubre la carga por Excel, el sync de SellerCloud y cualquier
+  escritura directa.
+- **Repartir los clientes de una lista compartida**: el selector de vendedora
+  de la pestaña Clientes queda acotado a las dueñas de esa lista, y
+  `reassign_client` rechaza server-side cualquier destino que no sea una de
+  ellas.
+- **Agregar o quitar dueñas se hace desde la pestaña 🔐 Superadmin**
+  (2026-08-05; hasta entonces era solo por SQL, los queries siguen al final de
+  `supabase/migration-2026-08-04-shared-price-lists.sql` como referencia).
+  Ojo con quitar una dueña: sus clientes **no** se mueven solos (a dónde van
+  es decisión del admin) — el panel muestra cuántos quedaron con una vendedora
+  que ya no es dueña y ofrece un botón para pasarlos a la dueña principal.
 
 ### Catálogo de cotización (sin precios)
 
@@ -67,6 +102,22 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
   **no tiene relación con la tabla `flash_sales`** (ofertas con precio
   promo y countdown, pestaña Flash Sales): un producto puede tener esta
   etiqueta sin tener ninguna oferta activa, y viceversa.
+- **La disponibilidad la decide el stock, sola** (2026-08-04, trigger
+  `products_availability_from_stock` en la base): `products.stock >= 1` →
+  Disponible, `0` o negativo → Pre-Order, `null` ("todavía no se sabe el
+  stock") → no se toca. La etiqueta `flash` se conserva siempre: el stock solo
+  alterna Disponible↔Pre-Order. La regla vive en un trigger y no en cada
+  camino de escritura, así que vale para el sync de SellerCloud, el Excel de
+  productos, la carga masiva, el formulario del panel, el descuento de un
+  pedido atendido y cualquier request directo — un producto en 0 no puede
+  quedar marcado Disponible. Antes esto se podía romper: un Excel de precios
+  sin columna `Type` dejaba en Disponible a todos sus productos, con stock 0
+  incluido.
+- **`stock`** es dato interno (nunca lo devuelve `get_catalog`). Entra por el
+  sync (`InventoryAvailableQTY`), por el Excel de productos (columna
+  `Inventory`/`Stock`), a mano desde el formulario de la pestaña Productos
+  (2026-08-04) — y **baja solo** cuando un pedido se marca Atendido (ver
+  "Descuento de stock" en la sección 2).
 - Un producto **solo aparece** en el catálogo de un cliente si tiene precio
   cargado en su lista (las 5 listas, incluida Special, se tratan igual).
 - El tamaño va dentro del nombre (ej. "Khamrah 3.4 Oz Edp Unisex"); la
@@ -103,6 +154,10 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
   carrito abre un diálogo "¿Tu pedido está completo?" con el resumen
   (ítems + total) antes de registrar el pedido y abrir WhatsApp — evita
   envíos accidentales a mitad de armar el carrito.
+- **Aviso de disponibilidad y precio sujetos a cambio** (2026-08-04): arriba
+  de la lista de ítems del carrito, y repetido en el diálogo de confirmación
+  — el stock y los precios pueden moverse entre que el cliente arma el pedido
+  y la asesora lo cierra, así que hay que confirmarlos con ella.
 
 ### Flujo del pedido
 
@@ -115,18 +170,70 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
    registra un pedido `kind = 'quote'` en `orders` (antes solo generaba el
    archivo, sin tocar la base), así queda visible como cotización en
    `/admin/orders` sin bloquear la descarga si el guardado falla.
-4. Pendiente (planificado): push automático a SellerCloud como orden On Hold
+4. **El carrito se vacía** al enviar el pedido por WhatsApp o al generar la
+   cotización con el PDF (2026-08-04), **pero solo si el pedido quedó
+   realmente registrado** (2026-08-05, ver más abajo): en lugar de la lista de
+   ítems queda un acuse ("Pedido registrado" / "Cotización generada") con un
+   botón "Armar otro pedido". Además **no queda nada guardado en el
+   dispositivo**: `CartContext` borra la clave de `localStorage` cuando el
+   carrito queda vacío, en vez de dejar un `[]` guardado — importante porque el
+   link del catálogo se comparte por WhatsApp y se abre en teléfonos que a
+   veces no son del cliente. Vaciar a mano con "Vaciar carrito" hace lo mismo.
+5. Pendiente (planificado): push automático a SellerCloud como orden On Hold
    vía Supabase Edge Function — ver sección 7.
+
+#### Si el pedido no llega a registrarse (2026-08-05)
+
+El 2026-08-05 un pedido de ~10k se envió por WhatsApp y **no apareció en el
+sistema**, dos veces seguidas. Causa: `create_order` rechazaba todo pedido de
+más de **200 líneas distintas** con un `return null` mudo, y el frontend abría
+WhatsApp igual y mostraba el ✓ de enviado. Por eso pedidos más CAROS sí
+entraban (pocas referencias × mucha cantidad) y ese no (muchas referencias ×
+1–2 unidades, el cliente que recorre el catálogo entero): el tope nunca tuvo
+que ver con el monto. Lo que cambió, en tres capas:
+
+- **El tope pasó a 1000 líneas.** No se saca del todo porque
+  `compute_order_items` crece superlineal (~48 ms con 200 líneas, 651 ms con
+  1000, 2.4 s con 2000: el acumulador `v_items || ...` copia el jsonb entero en
+  cada vuelta), y pasando las ~2000 se choca con el `statement_timeout` del rol
+  `anon` — sería el mismo fallo silencioso por otra puerta.
+- **Todo rechazo queda en `order_failures`** (motivo, cantidad de líneas y el
+  payload). Antes el único registro era un `console.warn` en el teléfono del
+  cliente, así que no había forma de saber qué había pasado. La bandeja de
+  Pedidos muestra un aviso rojo con esos pedidos y un botón **Recuperar**
+  (`recover_order_failure`) que los carga como pedido con los precios vigentes,
+  sin pedirle al cliente que rearme nada.
+- **El carrito ya no se vacía si el registro falló.** En su lugar el drawer
+  muestra un aviso rojo con un botón "Reintentar registro" y el pedido sigue
+  ahí. Los fallos de red se reintentan solos; los rechazos del RPC no, porque
+  darían lo mismo siempre. WhatsApp se abre igual, así la asesora recibe la
+  lista aunque el registro haya fallado.
+- **Reintentar no duplica**: `CartContext` genera un `request_id` por carrito y
+  `create_order` es idempotente sobre él (`orders.request_id` con índice
+  único), así que un envío repetido — a mano, automático, o dos toques del
+  cliente a la vez — devuelve el pedido ya guardado en vez de crear otro.
 
 ---
 
 ## 2. Panel admin (`/admin`)
 
-Login con email/password (Supabase Auth). Dos roles, resueltos por el RPC
-`get_my_role()`:
+Login con email/password (Supabase Auth). Tres roles: `get_my_role()` resuelve
+admin/vendedora, y `is_superadmin()` (2026-08-05) el tercero — a propósito en
+un RPC aparte y no como un valor más de `get_my_role()`, porque el frontend
+compara `role === 'admin'` en varias páginas para mostrar los controles de
+edición y un valor nuevo ahí las habría dejado en solo lectura:
 
+- **Superadmin** (tabla `superadmins`, 2026-08-05 — hoy solo
+  `support5@firstchoiceonline.com`): todo lo de admin **más** la pestaña
+  🔐 Superadmin, la única desde donde se puede nombrar/quitar admins, cambiar
+  la contraseña de cualquier acceso y asignar/desasignar listas de precio a
+  vendedoras. Es admin por definición (`is_admin()` lo incluye), así que no
+  puede dejarse afuera del panel por error. Sumar o quitar un superadmin sigue
+  siendo solo por SQL, a propósito.
 - **Admin** (tabla `admins`): acceso total (lectura y escritura) a las 8
-  pestañas.
+  pestañas. Desde 2026-08-05 **no** puede escribir `admins` ni
+  `price_list_owners` (antes la policy `admin_all` se lo permitía vía API
+  directa, aunque no hubiera UI): esas dos las escribe solo el superadmin.
 - **Vendedora** (`vendedores.user_id` vinculado a un login): ve **solo
   sus propios clientes y pedidos** (RLS filtra por fila, no por UI —
   nunca ve cuántos clientes/pedidos tienen otras vendedoras), y Productos
@@ -144,13 +251,73 @@ Pestañas:
 
 | Pestaña | Qué hace |
 |---|---|
-| **Productos** | Tabla completa con buscador (nombre/SKU/UPC), filtros (categoría/marca, línea de perfume, activo/inactivo/con stock/sin stock/sin foto/pre-order/flash), columnas **UPC** y **Stock** (datos internos, no se muestran al cliente), contadores clickeables de "sin foto", "Pre-Order" y "🔥 Flash Sale", miniaturas, alta/edición manual, **selección por casillas para activar/desactivar en bloque** (solo admin), y dos cargas por Excel (productos y fotos). |
+| **Productos** | Tabla completa con buscador (nombre/SKU/UPC), filtros (categoría/marca, línea de perfume, activo/inactivo/con stock/sin stock/sin foto/pre-order/flash), columnas **UPC** y **Stock** (datos internos, no se muestran al cliente), contadores clickeables de "sin foto", "Pre-Order" y "🔥 Flash Sale", miniaturas, alta/edición manual **con campo Stock editable** (2026-08-04 — reponer stock a mano es lo que devuelve un producto de Pre-Order a Disponible sin esperar al sync; vacío = "sin dato", distinto de 0), **selección por casillas para activar/desactivar en bloque** (solo admin), y dos cargas por Excel (productos y fotos). |
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador y botones con contador "con precios" / "sin precios". |
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila con confirmación** (2026-07-15: elegir una opción no aplica el cambio de una — pide "¿Cambiar la lista a X?" con Confirmar/Cancelar; ahora lo puede hacer también una vendedora con sus propios clientes, no solo admin) y campo **"$ inversión → nivel"** (solo admin, asigna el nivel automáticamente sin confirmación — pensado para carga rápida), **reasignar vendedora** por fila y **eliminar cliente** (ambos solo admin, vía RPC con registro de auditoría), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
-| **🛡️ Registro de movimientos** (solo admin, pestaña propia desde 2026-07-15 — antes vivía colapsada dentro de Clientes) | Historial de quién reasignó/borró un cliente o le cambió la lista de precio (fecha, usuario, acción, cliente, detalle), leído directo de `admin_audit_log`. **Filtros** (2026-07-15): por usuario, por acción (Reasignación/Eliminación/Cambio de lista) y por rango de fechas (desde/hasta). Es de solo lectura: la tabla no tiene policy de insert/update/delete para nadie, solo la escriben las RPC `reassign_client`/`delete_client`/`update_client_price_list`. |
+| **🛡️ Registro de movimientos** (solo admin, pestaña propia desde 2026-07-15 — antes vivía colapsada dentro de Clientes) | Historial de quién reasignó/borró un cliente, le cambió la lista de precio, o tocó un pedido (editar ítems, cambiar estado, convertir cotización) — con el **movimiento de stock** de ese cambio de estado cuando hubo uno (2026-08-04: "Stock descontado: N · M sin dato de stock"; el `detail` guarda producto, SKU, cantidad y el antes/después de cada uno). Fecha, usuario, acción, cliente, detalle, leído directo de `admin_audit_log`. Desde 2026-08-05 también registra **todo lo que se hace en la pestaña Superadmin** (rol admin, cambios de contraseña, dueñas de listas, alta/renombre/borrado de listas) — en esas filas la columna "Cliente / objetivo" no es un cliente sino el email del usuario o el nombre de la lista. **Filtros** (2026-07-15): por usuario, por acción y por rango de fechas (desde/hasta). **"⬇️ Descargar Excel"** (2026-08-05): baja **todo** el historial, no los 200 que muestra la tabla (usa `fetchAll`, así pasa el corte de 1,000 filas de PostgREST), respetando los filtros activos — el botón aclara "(todo el historial)" o "(filtrado)". Columnas: Fecha (texto `YYYY-MM-DD HH:MM:SS` local, ordenable en cualquier Excel sin depender de la configuración regional), Usuario, Acción, Cliente / objetivo, Detalle, ID cliente, ID pedido y **Datos completos (JSON)** — el `detail` crudo, porque el resumen legible deja cosas afuera (el antes/después ítem por ítem de una edición de pedido, el stock producto por producto). Con filtros que no dejan ninguna fila no genera archivo vacío: avisa. Es de solo lectura: la tabla no tiene policy de insert/update/delete para nadie, solo la escriben las RPC (`reassign_client`/`delete_client`/`update_client_price_list`/las de pedidos/`sa_log` desde las `sa_*`). |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**, dos formas de dar acceso a una vendedora sin cuenta: **"Vincular acceso"** (email de un usuario que ya existe en Supabase Auth, RPC `link_vendedora_login`) o **"+ Crear acceso"** (2026-07-15: crea el usuario de una — el admin define email + contraseña inicial ahí mismo, sin pasar por el dashboard de Supabase — vía la Edge Function `admin-create-vendedora-user`, ver sección 6). "Desvincular" le quita el acceso sin borrar la vendedora ni el usuario de Auth. |
 | **Flash Sales** | Crear ofertas con precio promo y vencimiento (alta manual, un producto a la vez) o **carga masiva por Excel** (2026-07-08: mismo archivo semanal "Special Flash Sale" con formato letterhead — UPC/Sku/Brand/Title Product/Price/Type/Qty/Total —, matchea por SKU y precio propio de cada fila; la fecha de inicio/fin se elige una vez con el selector de arriba y se aplica a todos los productos del archivo). Visibles para todos con countdown; **se apagan solas por fecha, sin acción manual** (`get_flash_sales()` ya filtra por `expires_at`). La tabla del admin distingue 4 estados (`LIVE` / Programada / Expiró / Desactivada, 2026-07-08) — el botón "Desactivar" es solo para cortar una oferta *antes* de su fecha de fin, no hace falta para que termine normalmente. |
-| **Pedidos** | Últimos 200; click en una fila expande un detalle de ancho completo (tabla Producto/Cantidad/Precio/Subtotal, 2026-07-17 — antes se abría angosto dentro de la columna Ítems). Cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado; 2026-07-17: las 3 acciones piden confirmación en un modal antes de aplicarse, y quedan auditadas vía RPC `update_order_status`, antes un `update` directo sin rastro) y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"**/**"Descargar Excel"** por fila (2026-07-17 el primero, mismo generador que el carrito del cliente; el Excel con las columnas exactas de `UploadTemplate.xls` para subirlo directo al bulk-order upload de SellerCloud); debajo, separados, **"Editar"** y **"Convertir en pedido"** — ambos **solo para cotizaciones** (`kind = 'quote'`), nunca para un pedido real, y "Editar" además solo mientras la cotización sigue `new` (ni atendida ni cancelada se edita). "Editar" (RPC auditada `update_order_items`) deja cambiar cantidad/quitar/agregar producto — cualquiera con acceso al pedido puede hacerlo (admin siempre, vendedora solo los de sus propios clientes). "Convertir en pedido" (RPC `convert_quote_to_order`) congela el precio de ese momento con la lista real del cliente (a diferencia de la cotización, que sigue mostrando el precio **vigente** vía `get_quotes_live_pricing` — ver sección 6) y deja de ajustarse a cambios de precio futuros. |
+| **Pedidos** | Últimos 200; click en una fila expande un detalle de ancho completo (tabla Producto/Cantidad/Precio/Subtotal, 2026-07-17 — antes se abría angosto dentro de la columna Ítems). Cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado; 2026-07-17: las 3 acciones piden confirmación en un modal antes de aplicarse, y quedan auditadas vía RPC `update_order_status`, antes un `update` directo sin rastro) y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"**/**"Descargar Excel"** por fila (2026-07-17 el primero, mismo generador que el carrito del cliente; el Excel con las columnas exactas de `UploadTemplate.xls` para subirlo directo al bulk-order upload de SellerCloud); debajo, separados, **"Editar"** y **"Convertir en pedido"** — ambos **solo para cotizaciones** (`kind = 'quote'`), nunca para un pedido real, y "Editar" además solo mientras la cotización sigue `new` (ni atendida ni cancelada se edita). "Editar" (RPC auditada `update_order_items`) deja cambiar cantidad/quitar/agregar producto — cualquiera con acceso al pedido puede hacerlo (admin siempre, vendedora solo los de sus propios clientes). "Convertir en pedido" (RPC `convert_quote_to_order`) congela el precio de ese momento con la lista real del cliente (a diferencia de la cotización, que sigue mostrando el precio **vigente** vía `get_quotes_live_pricing` — ver sección 6) y deja de ajustarse a cambios de precio futuros. Arriba de la lista, **aviso rojo de los pedidos que el cliente envió y no se registraron** (2026-08-05, `order_failures`): cliente, fecha, motivo y cantidad de líneas, con un botón **"Recuperar"** que lo carga como pedido con los precios vigentes de su lista (RPC `recover_order_failure`, auditada) — antes un pedido rechazado no dejaba rastro en ninguna parte. Aparece también cuando todavía no hay ningún pedido, para que "aún no hay pedidos" no tape justo lo que hay que ver. Una vendedora solo ve (y recupera) los de sus propios clientes. |
+| **🔐 Superadmin** (2026-08-05, solo superadmin) | Lo que antes obligaba a entrar al SQL Editor o al dashboard de Auth. **Usuarios y accesos**: todos los usuarios de Supabase Auth con su rol (Superadmin/Admin/Vendedora/Sin rol), la vendedora vinculada, fecha de alta y último acceso; por fila, "Hacer admin"/"Quitar admin" (con confirmación) y **"Cambiar contraseña"** (sirve para cualquier acceso: vendedora, admin o el propio superadmin); arriba, **"+ Crear admin"** (crea el usuario de Auth con su contraseña inicial y le da el rol, en un paso). **Listas de precio y dueñas**: por lista, cuántos clientes y cuántos precios tiene, sus dueñas con la principal marcada (★), agregar/quitar dueña y cambiar cuál es la principal; si al mover dueñas quedaron clientes con una vendedora que ya no es dueña, avisa cuántos y ofrece pasarlos a la principal de una vez. También **crear** una lista nueva (código + nombre visible; el código se valida y no se puede cambiar después), **renombrar** el nombre visible y **eliminar** una lista que no sea de las base y esté completamente vacía. Todo va por RPC `sa_*` con `is_superadmin()` adentro (o por la Edge Function `superadmin-users` cuando hace falta la Admin API de Auth) y **todo queda en el Registro de movimientos**. |
+
+### Descuento de stock al atender un pedido (2026-08-04)
+
+El catálogo arrastra inventario viejo de una de las primeras cargas, así que
+hay productos que se ven Disponibles cuando ya se agotaron. Para que dos
+clientes no pidan la misma mercadería, **marcar un pedido como Atendido
+descuenta sus cantidades de `products.stock`** (RPC `update_order_status` →
+helper `apply_order_stock`): stock 20 de Adidas Fresh, un cliente pide 10, la
+asesora lo marca Atendido → queda 10, y si llega a 0 el producto pasa a
+Pre-Order solo (trigger `products_availability_from_stock`).
+
+Reglas, todas confirmadas con el usuario:
+
+- **Solo pedidos reales** (`kind = 'order'`). Una cotización nunca toca el
+  stock — ni la que genera "Descargar PDF" del carrito ni la de un cliente con
+  lista `quote`. Para que descuente hay que pasarla a pedido con **"Convertir
+  en pedido"** y marcar ESE pedido Atendido. Si no fuera así, un cliente
+  bajando 5 PDF mientras mira el catálogo vaciaría el inventario solo.
+- **Reabrir o cancelar devuelve el stock** y el producto vuelve de Pre-Order a
+  Disponible si corresponde. Marcar Atendido por error se deshace.
+- **Nunca descuenta dos veces**: la bandera `orders.stock_applied` (no el
+  estado) es la que decide, así que `done → new → done` descuenta una sola vez
+  por ciclo. La bandera está blindada por el trigger
+  `orders_guard_items_edit`, igual que `items`/`total`/`status`/`kind`.
+- **Productos con `stock` null** ("todavía no se sabe", nunca sincronizados) se
+  saltan: no se puede restar de un dato que no existe. Se cuentan aparte y el
+  panel lo muestra ("N sin dato de stock").
+- Un pedido que **supera** el stock disponible deja el stock en negativo (ej.
+  −5), que también es Pre-Order — así queda registro de lo que se debe.
+- Un pedido con el mismo producto en dos líneas (una de oferta flash y otra a
+  precio de lista) suma las cantidades antes de tocar el stock.
+- El modal de confirmación avisa qué va a pasar con el stock antes de aplicar,
+  y después de aplicar la fila muestra el resultado. Un pedido con stock ya
+  descontado lleva el chip "📦 Stock descontado".
+
+**Cómo convive con el sync de SellerCloud** (decisión del usuario, 2026-08-04):
+el descuento es un **puente de vida corta**, no la fuente de verdad. El flujo
+acordado es:
+
+1. La asesora marca la orden **Atendida** → el sistema resta el stock al
+   instante y el catálogo queda protegido desde ese segundo.
+2. Acto seguido, la asesora **monta la orden de compra en SellerCloud** (para
+   eso está el botón "Descargar Excel" de la fila).
+3. La próxima corrida de n8n (resync completo, dos veces al día) trae el
+   `InventoryAvailableQTY` real y **reemplaza** el valor de la base — nunca
+   suma. Eso ya es el comportamiento de `sync_upsert_products`
+   (`stock = coalesce(v_stock, p.stock)`), no hizo falta cambiar nada. Con el
+   trigger `products_availability_from_stock`, la disponibilidad se recalcula
+   sola en ese mismo momento.
+
+Así el descuento cubre solo el hueco entre "orden cerrada en la app" y "orden
+cargada en SellerCloud", que es exactamente para lo que se pensó: evitar tener
+que sincronizar el inventario cada 5 minutos para que esté al día. **Depende de
+que el paso 2 se haga**: si una orden se marca Atendida y no se carga en
+SellerCloud, la próxima corrida del sync devuelve el stock viejo y la
+protección se pierde. Si eso llegara a ser un problema, la alternativa ya
+pensada es una columna `products.reserved` (el descuento suma ahí en vez de
+tocar `stock`, y la disponibilidad se calcula con `stock - reserved`, de modo
+que sobreviva al sync).
 
 Las tablas grandes usan **scroll infinito** (lotes de 100) y todas las
 consultas están **paginadas** para superar el límite de 1,000 filas por
@@ -378,10 +545,45 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
     cliente nunca puede leer/modificar `orders`. **Los precios y el total se
     recalculan en el servidor** con la lista del cliente y las flash sales
     vigentes: el payload del navegador solo aporta producto, cantidad y flag
-    flash (máx. 200 ítems, qty 1–9999). La tabla `orders` es fuente de
-    verdad aunque se manipule el request.
+    flash (**máx. 1000 líneas** desde 2026-08-05 — eran 200 y rechazaba pedidos
+    reales, ver sección 1 —, qty 1–9999). La tabla `orders` es fuente de
+    verdad aunque se manipule el request. Todo rechazo queda en
+    `order_failures` en lugar de devolver `null` sin dejar rastro, y
+    `p_request_id` lo hace idempotente para que un reintento no duplique.
+  - `recover_order_failure(p_failure_id)` — solo `authenticated`: exige
+    `is_admin()` o `is_vendedora()` adentro, y una vendedora solo puede
+    recuperar los pedidos de sus propios clientes. Audita en
+    `admin_audit_log`. `order_failures` es de **solo lectura** vía RLS (admin
+    todo, vendedora lo de sus clientes, `anon` nada) y no tiene policy de
+    insert/update/delete para nadie: solo la escribe `create_order`.
 - Escritura solo para usuarios autenticados presentes en `admins`
-  (`is_admin()`).
+  (`is_admin()`), **salvo `admins` y `price_list_owners`, que desde 2026-08-05
+  solo las escribe el superadmin** (ver abajo).
+- **Rol superadmin** (2026-08-05, `migration-2026-08-05-superadmin.sql`): tabla
+  `superadmins` + `is_superadmin()`, y `is_admin()` pasa a ser "está en `admins`
+  **o** es superadmin".
+  - La tabla `superadmins` tiene **RLS activo y cero policies**: desde la app
+    no existe para nadie, ni para el propio superadmin. Solo la leen las
+    funciones `SECURITY DEFINER` y el SQL Editor. Es a propósito: si la marca
+    viviera en una columna de `admins` — que hasta esta migración cualquier
+    admin podía escribir vía API — cualquiera se habría podido coronar.
+  - `admins` y `price_list_owners` perdieron el `admin_all`: ahora tienen
+    `superadmin_all` (escritura) + `admin_read_only` (lectura, que sí usa
+    `ClientsAdmin.jsx` para saber qué listas tienen dueña).
+  - Las RPC del panel (`sa_list_users`, `sa_set_admin`,
+    `sa_add_price_list_owner`, `sa_remove_price_list_owner`,
+    `sa_set_primary_price_list_owner`, `sa_sync_price_list_clients`,
+    `sa_price_list_overview`, `sa_create_price_list`, `sa_update_price_list`,
+    `sa_delete_price_list`, `sa_register_new_admin`, `sa_log_password_change`)
+    exigen `is_superadmin()` **adentro**: ocultar la pestaña no es la
+    protección, es solo la UI. Todas auditan vía `sa_log()`.
+  - Crear un usuario de Auth o cambiarle la contraseña necesita la Admin API de
+    GoTrue (service_role), imposible desde el navegador: eso vive en la Edge
+    Function `supabase/functions/superadmin-users`, que valida `is_superadmin()`
+    con el JWT de quien llama y después vuelve a Postgres **con ese mismo JWT**
+    para dejar la auditoría con su `auth.uid()` real. La contraseña no se
+    guarda ni se loguea en ninguna parte. Nota: cambiar la contraseña no cierra
+    las sesiones ya abiertas de ese usuario (GoTrue no lo hace).
 - **Rol vendedora** (2026-07-06): `vendedores.user_id` vincula un login a
   una fila de `vendedores`. Policies RLS adicionales (aditivas a
   `admin_all`, no la reemplazan) le dan a ese usuario `select` de sus
@@ -398,22 +600,27 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   `AdminLayout.jsx` arme las pestañas correctas (2026-07-15: a una
   vendedora ya no le arma pestaña Flash Sales, con redirect si entra por
   URL directa).
-- **`price_lists`/`product_prices` con dueña** (2026-07-15,
-  `migration-2026-07-15-restrict-vendedora-luzmar.sql`): la policy de
-  solo-lectura de una vendedora sobre estas dos tablas ya no es un
-  blanket `is_vendedora()` — ahora exige que la lista sea general
-  (`owner_vendedora_id is null`) o suya (`owner_vendedora_id =
-  current_vendedora_id()`). Antes cualquier vendedora podía ver la
-  columna/precios de una lista "personal" ajena (ej. `luzmar`) en la
-  matriz de Precios y en el selector de listas; ahora esas filas
-  directamente no vienen en la respuesta de Supabase para el resto.
+- **`price_lists`/`product_prices` con dueña** (2026-07-15; rehecho
+  2026-08-04 en `migration-2026-08-04-shared-price-lists.sql`, que
+  **reemplaza** a `migration-2026-07-15-restrict-vendedora-luzmar.sql`): la
+  policy de solo-lectura de una vendedora sobre estas dos tablas ya no es un
+  blanket `is_vendedora()` — ahora exige `can_vendedora_use_price_list()`,
+  o sea que la lista no tenga dueñas (general) o que ella sea una de
+  ellas. Antes cualquier vendedora podía ver la columna/precios de una
+  lista "personal" ajena (ej. `luzmar`) en la matriz de Precios y en el
+  selector de listas; ahora esas filas directamente no vienen en la
+  respuesta de Supabase para el resto. Ver "Listas compartidas" en la
+  sección 1.
 - **Reasignar/eliminar clientes con auditoría** (2026-07-14,
   `migration-2026-07-14-client-admin-actions.sql`): solo admin, vía RPC
   `SECURITY DEFINER` `reassign_client(p_client_id, p_vendedora_id)` y
   `delete_client(p_client_id)` — no con `update`/`delete` directos, para
   que cada acción quede registrada sí o sí en la tabla `admin_audit_log`
-  (quién/qué/cuándo, con snapshot del cliente). `reassign_client` rechaza
-  clientes con lista personal (los fuerza el trigger igual);
+  (quién/qué/cuándo, con snapshot del cliente). `reassign_client` acota el
+  destino a las dueñas de la lista del cliente si esa lista tiene dueñas
+  (2026-08-04; antes rechazaba de plano cualquier cliente con lista
+  personal — ahora, en una lista compartida, repartir sus clientes entre
+  las dueñas es justamente lo que hay que poder hacer);
   `delete_client` rechaza si el cliente tiene pedidos (no se pierde el
   historial de ventas). `admin_audit_log` es de solo lectura para admin
   (RLS), la escriben solo esas funciones.
@@ -580,10 +787,26 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   `items`/`total`/`status`/`kind` a mano, sin pasar por ninguna RPC ni
   quedar auditado. El trigger `orders_guard_items_edit` cierra ese hueco:
   bloquea cualquier `update` directo a `orders` que cambie alguna de esas
-  4 columnas salvo que la bandera de sesión transacción-local
-  `app.allow_order_edit` esté prendida, cosa que solo hacen
+  4 columnas — **5 desde 2026-08-04, con `stock_applied`** — salvo que la
+  bandera de sesión transacción-local `app.allow_order_edit` esté prendida,
+  cosa que solo hacen
   `update_order_items`/`update_order_status`/`convert_quote_to_order`
-  justo antes de escribir cada una.
+  justo antes de escribir cada una. Sin blindar `stock_applied`, una
+  vendedora podría prender/apagar la bandera a mano y saltearse o duplicar
+  el descuento de stock de un pedido sin dejar rastro.
+- **Movimiento de stock server-side** (2026-08-04,
+  `migration-2026-08-04-order-stock.sql`): el navegador nunca dice cuánto
+  descontar — `update_order_status`/`convert_quote_to_order` llaman al helper
+  `apply_order_stock(p_order_id, p_direction)`, que lee las cantidades de
+  `orders.items` (ya recalculadas en el servidor por `compute_order_items`) y
+  suma/resta sobre `products.stock`. El helper no tiene grant a
+  `anon`/`authenticated` (mismo criterio que `compute_order_items`) y el
+  movimiento queda en `admin_audit_log` dentro del `detail` de la acción,
+  con SKU, cantidad y el antes/después de cada producto. La disponibilidad
+  resultante no la calcula el helper: la deriva el trigger
+  `products_availability_from_stock` sobre `products`, así el resultado es el
+  mismo venga el cambio de stock de donde venga (sync, Excel, formulario o
+  este descuento) y un producto en 0 nunca puede quedar marcado Disponible.
 - **Cotizaciones con precio vigente, no congelado** (2026-07-17, mismo
   archivo): una cotización (`kind = 'quote'`) nunca guardó precio en
   `orders.items` (siempre `null`, ver `get_catalog`/`create_order`) — lo
@@ -637,18 +860,79 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   toca el sync (es manual). `migration-2026-07-14-product-upc.sql`
   (2026-07-14) agrega `products.upc` (código de barras, dato interno del
   admin) y hace que `sync_upsert_products` lo guarde (campo `upc` del
-  payload). **2026-07-15: todo indica que el workflow de n8n ya está
-  corriendo en producción** (se detectó por evidencia indirecta — una
-  tanda de ~45 clientes duplicados creados en el mismo segundo, todos sin
-  lista de precio y con `sellercloud_id`, la huella de `sync_upsert_clients`
-  — no porque alguien lo haya confirmado explícitamente; conviene
-  confirmarlo con el usuario). Ver el bug de teléfonos duplicados más
-  abajo (sección 6) que salió de esto.
-- **Pendiente: correr `migration-2026-07-15-restrict-vendedora-luzmar.sql`**
-  en producción (restringe la lectura de `price_lists`/`product_prices`
-  para que una vendedora no vea la lista/precios "personales" de otra,
-  ver sección 6). El código de Flash Sales oculto para vendedora ya se
-  puede desplegar sin esperar esta migración (es solo frontend).
+  payload). **El workflow de n8n está armado y corriendo en producción**
+  (confirmado por el usuario el 2026-08-04: mantiene el stock de los
+  productos actualizado constantemente, además del resync completo de
+  clientes dos veces al día). Se había detectado antes por evidencia
+  indirecta (2026-07-15, una tanda de ~45 clientes duplicados creados en el
+  mismo segundo, la huella de `sync_upsert_clients`) — ver el bug de
+  teléfonos duplicados en la sección 6, que salió de eso. Sigue pendiente
+  del lado de n8n el **nodo de cierre de `sync_runs`** (el `PATCH` final con
+  los contadores), sin el cual la tabla de auditoría de corridas queda
+  incompleta.
+- ~~`migration-2026-07-15-restrict-vendedora-luzmar.sql`~~ **ya no hace falta
+  correrla**: quedó reemplazada por
+  `migration-2026-08-04-shared-price-lists.sql`, que deja las mismas policies
+  ya adaptadas a listas con varias dueñas. Nunca se corrió en producción, así
+  que hasta que corra la del 08-04 sigue activa la policy blanket vieja (toda
+  vendedora ve la lista de Luzmar en la matriz de Precios).
+- `migration-2026-08-04-shared-price-lists.sql` **ya corrida en producción**
+  (2026-08-05: lo confirma el preflight de `migration-2026-08-05-superadmin.sql`,
+  que corta si esta falta y sí corrió — ver más abajo. Este ítem la listaba como
+  pendiente por error). Reemplaza `price_lists.owner_vendedora_id` (una dueña) por la
+  tabla `price_list_owners` (varias), para poder **compartir** una lista entre
+  dos vendedoras — ver "Listas con dueña" en la sección 1. Migra la dueña que
+  ya existía, dropea la columna vieja, reescribe el trigger
+  `clients_enforce_owner_vendedora`, `reassign_client` y
+  `update_client_price_list`, y deja las policies de
+  `price_lists`/`product_prices`/`price_list_owners`. Requiere
+  `migration-2026-07-09-luzmar-owner-link.sql` y
+  `migration-2026-07-14-client-admin-actions.sql` ya corridas. **Sola no
+  cambia nada funcional** (Luzmar sigue siendo la única dueña de su lista);
+  para compartirla hay que correr aparte el `insert` que está al final del
+  archivo.
+- `migration-2026-08-05-superadmin.sql` **corrida en producción** (2026-08-05,
+  confirmado por el usuario) y Edge Function `supabase/functions/superadmin-users`
+  **desplegada** el mismo día: el rol superadmin está activo (tabla
+  `superadmins` + `is_superadmin()`, `is_admin()` que lo incluye, las policies
+  nuevas de `admins`/`price_list_owners` y las 12 RPC `sa_*` — ver secciones 2 y
+  6). Como esa migración abre con un preflight que corta si faltan
+  `migration-2026-07-14-client-admin-actions.sql` o
+  `migration-2026-08-04-shared-price-lists.sql`, el hecho de que haya corrido
+  confirma que esas dos ya estaban aplicadas. Antes de correrla se probó contra
+  un PostgreSQL 18 desechable (18 bloques de assert: identidad de los 3 roles,
+  rechazo de las RPC a un admin común, RLS de
+  `admins`/`price_list_owners`/`superadmins` actuando como el rol
+  `authenticated`, ciclo completo de dueñas incluida la promoción de la
+  principal y la reasignación de clientes colgados, validación del código de
+  lista, guardas del borrado, y auditoría de cada acción).
+- **Pendiente y urgente: correr `migration-2026-08-05-order-capture.sql`** en
+  producción — es el arreglo del pedido de ~10k que se envió por WhatsApp y no
+  quedó registrado (ver "Si el pedido no llega a registrarse" en la sección 1).
+  Sube el tope de líneas de `create_order` de 200 a 1000, crea `order_failures`
+  (+ RLS + `grant select`), agrega `orders.request_id` con índice único
+  parcial, suma `request_id` al trigger `orders_guard_items_edit` y crea
+  `recover_order_failure`. **Hasta que corra, el bug sigue vivo**: cualquier
+  pedido de más de 200 líneas distintas se pierde en silencio.
+  - **Correr el SQL ANTES de desplegar el frontend.** El frontend nuevo manda
+    `p_request_id`, que la función vieja no acepta. Igual no se cae si el orden
+    se invierte: `CartDrawer.jsx` detecta ese error y reintenta sin el
+    parámetro (pierde solo la idempotencia hasta que corra el SQL).
+  - Abre con un **preflight** que corta sin tocar nada si falta
+    `compute_order_items` (o sea `migration-2026-07-17-orders-edit-live-quotes.sql`)
+    o las funciones del rol vendedora. Crea `orders.stock_applied` y
+    `admin_audit_log.order_id` con `if not exists` por si aquellas migraciones
+    no corrieron, porque el trigger que reescribe nombra `stock_applied` y sin
+    la columna reventaría en el primer `update` a `orders`.
+  - Probada contra un PostgreSQL 18 desechable: tope 199/200 entra y 201/250
+    entra después del cambio; 1001 líneas rechaza y deja la fila en
+    `order_failures`; el mismo `request_id` tres veces devuelve el mismo
+    `order_id` y deja **un** pedido; un frontend viejo (3 y 4 argumentos) sigue
+    funcionando; `recover_order_failure` rechaza a anon, a una vendedora ajena
+    y al segundo intento, y audita; RLS de `order_failures` verificada como rol
+    `authenticated` (admin ve todo, vendedora solo lo suyo, `anon` nada, y
+    ninguno puede escribirla). También se midió el costo del loop para elegir
+    el tope: 48 ms con 200 líneas, 651 ms con 1000, 2.4 s con 2000.
 - **Pendiente: deploy de la Edge Function
   `supabase/functions/admin-create-vendedora-user`** (2026-07-15, ver
   sección 6) — sin desplegarla, el botón "+ Crear acceso" de la pestaña
@@ -686,6 +970,20 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   cancelar/reabrir falla (ya no es un `update` directo), y las
   cotizaciones se ven sin precio en vez de mostrar el precio vigente. El
   frontend (OrdersAdmin, CartDrawer, AuditLogAdmin) ya está desplegable.
+- **Pendiente: correr `migration-2026-08-04-order-stock.sql`** en producción
+  (agrega `orders.stock_applied`, el trigger
+  `products_availability_from_stock`, el helper `apply_order_stock`, y
+  reescribe `update_order_status`/`convert_quote_to_order` para mover el
+  stock — ver "Descuento de stock al atender un pedido" en la sección 2).
+  Requiere que `migration-2026-07-17-orders-edit-live-quotes.sql` ya esté
+  corrida (esta reescribe funciones que aquella crea). Crea también
+  `products.stock` con `if not exists`, por si acaso, pero esa columna **ya
+  existe**: `migration-2026-07-14-inventory-stock.sql` está corrida y el sync
+  de n8n mantiene el inventario al día (confirmado por el usuario el
+  2026-08-04 — este README y el `ZIMAXX-STORE-INFO.md` la listaban como
+  pendiente por error). O sea que el descuento tiene de dónde restar desde el
+  momento en que se corra esta migración. Sin ella, el panel de Pedidos sigue
+  funcionando pero no descuenta nada; el frontend ya está desplegable.
 - `migration-2026-07-15-fix-duplicate-client-phones.sql` corrida en
   producción (2026-07-16): limpió 315 clientes duplicados que había
   creado el sync por el bug de formato de teléfono, corrigió
@@ -713,9 +1011,9 @@ src/
   index.css             Tokens de diseño + modo oscuro
   lib/supabase.js       Cliente + fetchAll (paginación >1,000 filas)
   hooks/useInfiniteRows.js  Scroll infinito por lotes
-  context/CartContext.jsx   Carrito (localStorage, clave por product id)
+  context/CartContext.jsx   Carrito (localStorage, clave por product id) + request_id por carrito (idempotencia del alta)
   utils/
-    excel.js            Parser Excel (detección de encabezados, columna de fotos) + export de pedido (UploadTemplate.xls)
+    excel.js            Parser Excel (detección de encabezados, columna de fotos) + exports: pedido (UploadTemplate.xls), productos sin foto, registro de movimientos
     token.js            Tokens de cliente + SKU autogenerado
     whatsapp.js         Mensaje de pedido + link wa.me
     pdf.js              PDF del pedido (jsPDF)
@@ -729,12 +1027,14 @@ src/
       ProductsAdmin.jsx Productos + carga Excel + fotos Excel
       PricesUpload.jsx  Precios Excel + matriz por lista
       ClientsAdmin.jsx  Clientes + niveles por inversión
-      AuditLogAdmin.jsx Registro de movimientos (reasignar/eliminar clientes)
+      AuditLogAdmin.jsx Registro de movimientos (clientes, pedidos, superadmin)
       VendedoresAdmin.jsx  Alta manual de vendedoras + teléfono + acceso
       FlashSalesAdmin.jsx
-      OrdersAdmin.jsx
+      OrdersAdmin.jsx   Bandeja de pedidos + aviso de los que no se registraron (order_failures) con "Recuperar"
+      SuperAdminPanel.jsx  Usuarios/roles/contraseñas + dueñas de listas (solo superadmin)
       ui.jsx            Piezas compartidas (UploadZone, SearchIcon, ...)
 supabase/schema.sql     Esquema completo + RLS + RPCs + migraciones
 supabase/migration-*.sql  Deltas idempotentes para producción (no re-correr el schema completo)
 supabase/functions/admin-create-vendedora-user/  Edge Function (Deno) — crea el usuario de Auth de una vendedora, requiere deploy manual
+supabase/functions/superadmin-users/  Edge Function (Deno) — cambia contraseñas y crea admins (Admin API de Auth), requiere deploy manual
 ```

@@ -1,0 +1,1025 @@
+| sellercloud_id | name                                                  | phone         | vendedora_name        | has_price_list | allow_shared_phone | created_at                    |
+| -------------- | ----------------------------------------------------- | ------------- | --------------------- | -------------- | ------------------ | ----------------------------- |
+| 1400351        | 1000 aromas                                           | 51930246269   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:14.114474+00 |
+| null           | Adrian Marca Olanda                                   | 1786546938    | Adriana Montilla      | true           | false              | 2026-07-02 17:58:51.161488+00 |
+| 1236500        | Adrian Marca Olanda                                   | 786546938     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1558782        | Akla Luxury Perfum                                    | 17373639654   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:49.947914+00 |
+| 1310862        | Alejandro Ernesto Oliver Arias                        | 51991954372   | Adriana Montilla      | true           | false              | 2026-07-02 17:58:50.317601+00 |
+| 1668498        | Aligma Logistics LLC                                  | 17866248357   | Adriana Montilla      | true           | false              | 2026-07-02 17:58:49.856784+00 |
+| 1696227        | Alissa Tifany Jara Buleje                             | 51975068086   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:17.911181+00 |
+| 1250708        | Alma Perfumeria                                       | 18295641466   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:31.558197+00 |
+| 1400238        | Ana Guido                                             | 588549448     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1467074        | Angel Joel Martinez Burgos                            | 3322353431    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:44.179645+00 |
+| 1461049        | Angel Raul NuÃ±ez Cordova                             | 51971820663   | Adriana Montilla      | true           | false              | 2026-07-02 17:58:54.248946+00 |
+| 1665009        | Angela Patricia Perez Alvarado                        | 284832799     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Angelita Boutique                                     | 50576350767   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:03.481784+00 |
+| null           | Angelita boutique perfumes                            | 5284832799    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:44.082746+00 |
+| 1710785        | Angello Miguel Vidal Chavez                           | 51929580876   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:02.6435+00   |
+| 1696253        | Angie Rosales                                         | 584142617874  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:46.926269+00 |
+| 1251993        | Annya Violeta Castillo Gutierrez                      | 5058728640    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1187483        | Anthony De La Cruz                                    | 8298700011    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1410733        | Antony Vilchez Palomino                               | 51943704547   | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1242150        | Ãptima Fragancia                                     | 18498580677   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:10.912879+00 |
+| 1651811        | Arf Professional Services LLC                         | 19547446005   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:57.565728+00 |
+| 460645         | Arianny Salas                                         | 584244734286  | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1353134        | Arias LYL Beauty Supplies                             | 18092475943   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:01.820404+00 |
+| 1731276        | Avi Alexis Soncco Hancco                              | 51984689344   | Adriana Montilla      | false          | false              | 2026-07-15 20:34:24.587394+00 |
+| 1594940        | Bolívar Stiven Solís Bermúdez                         | 587976598     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1290334        | Brailin Espinal                                       | 8493579735    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:40.302071+00 |
+| 1129822        | Breilin Rafael Dicent Valera                          | 8493825055    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | BRENI Jaime Lermo ChÃ¡vez                             | 51935230352   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:44.367405+00 |
+| 1594897        | Breni Jaime Lermo Chávez                              | 935230352     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | BSStore/BolÃ­var Stiven SolÃ­s BermÃºdez              | 50587976598   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:03.753302+00 |
+| 1421391        | Cano.Parfums                                          | 51946994631   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:15.308307+00 |
+| 1290587        | Carolina Gutierrez Argueta                            | 84325065      | Adriana Montilla      | true           | false              | 2026-07-02 17:59:30.590596+00 |
+| null           | Celulares el titi                                     | 50584000503   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:09.466053+00 |
+| null           | Cristhian Carranza DÃ­az                              | 51912222365   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:48.199121+00 |
+| 1646825        | Cristhian Carranza Díaz                               | 912222365     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1642647        | Cristhian Félix Alvarado Alfaro                       | 924689106     | Adriana Montilla      | true           | false              | 2026-07-02 17:59:41.604594+00 |
+| null           | Cristian Henry Huari Araujo                           | 51929051826   | Adriana Montilla      | true           | false              | 2026-07-02 17:58:54.707888+00 |
+| 1566946        | Cristian Henry Huari Araujo AMEX                      | 929051826     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1577649        | CRS LOGISTICS GROUP LLC                               | 17542458738   | Adriana Montilla      | true           | false              | 2026-07-02 17:58:56.347254+00 |
+| 1293669        | Daniel Cesin                                          | 7869445240    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:48.386767+00 |
+| 1205169        | Daniel Enrique Bastidas Bastidas                      | 51945424385   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:22.302763+00 |
+| 1502557        | Daniel Pizango GYS                                    | 7867169233    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:59.513932+00 |
+| null           | David Montenegro                                      | 50577992738   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:52.630158+00 |
+| 1654035        | David Montenegro                                      | 577992738     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 761661         | David Zavala                                          | 584127837715  | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | David Zavala                                          | 13059302660   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:48.846564+00 |
+| 1682735        | Deivy Elías Barturen Yoplac                           | 993393625     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1337238        | Dervin Ramírez                                        | 584000503     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1555774        | Deyton Rivera PeÃ±a                                   | 51913163542   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:39.022674+00 |
+| 1442016        | Diego Zambrano                                        | 04247712852   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:02.735441+00 |
+| 1553817        | Distribuidora Lemaire                                 | 5213121766986 | Adriana Montilla      | true           | false              | 2026-07-02 17:59:43.452809+00 |
+| null           | Distribuidora Micmar                                  | 584249174417  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:17.263025+00 |
+| 1483250        | Dolores Duran                                         | 8296544088    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:13.12166+00  |
+| 1645667        | Eduardo Perez Guevara                                 | 51920708800   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:26.421679+00 |
+| 1646820        | Eduardo Torrealba                                     | 584243019432  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:42.244429+00 |
+| null           | Elegance boutique                                     | 50557292921   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:11.18929+00  |
+| null           | Eli Yale                                              | 51992274269   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:53.293381+00 |
+| 1401977        | Eli Yale                                              | 992274269     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1541108        | Elias Zalem                                           | 584140864840  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:44.55125+00  |
+| 1532600        | Emilio Guillen                                        | 586533146     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1386520        | Enmanuel Josue Mendoza Obando                         | 588524764     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Enmanuel Josue Mendoza Obando                         | 50588524764   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:29.420707+00 |
+| 1544029        | Estefania Gerbasi                                     | 584127542520  | Adriana Montilla      | true           | false              | 2026-07-02 17:58:59.793834+00 |
+| 1528244        | Farah Gabriella Yousuff                               | 5926281378    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:30.039501+00 |
+| null           | Fashion corporation Fancy & co                        | 50231093191   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:23.424488+00 |
+| 1714459        | Felmarys Fuentes                                      | 13176644725   | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1400905        | Fernando Miyares                                      | 231093191     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Fernando Ramirez                                      | 50251140346   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:34.882485+00 |
+| 1338222        | Fernando Ramirez                                      | 251140346     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1273059        | Fernando Tipe Carrasco                                | 936795324     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1501431        | Freddy Antonio Alarcon lanza                          | 557292921     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1642652        | Gabriel Alexander Venegas Giraldo                     | 51925603617   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:47.37674+00  |
+| 1307541        | Gheinna Salazar                                       | 5841276010    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:33.592919+00 |
+| 1521037        | Gian Marco Quintana Arrieta                           | 5192898662    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Gian Marco Quintana Arrieta                           | 51928986623   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:53.925605+00 |
+| 1415293        | Global Elora LLC                                      | 1829780001    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1394642        | Global Elora LLC                                      | 18297800011   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:22.764377+00 |
+| 840536         | Gloria Leon                                           | 7863703109    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1269633        | Gw Rivas                                              | 8094563333    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:05.795482+00 |
+| 883627         | Gwendoline Galeno                                     | 584123499712  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:45.679872+00 |
+| 1277976        | Hector Ivan Selva Martinez                            | 5057635076    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1531130        | Hector Sanchez                                        | 6823174080    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:35.231858+00 |
+| null           | Henrry PÃ©rez AlarcÃ³n                                | 925064242     | Adriana Montilla      | true           | false              | 2026-07-02 17:59:53.015723+00 |
+| 1577741        | Henrry Pérez Alarcón                                  | 1933484961    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1710806        | Henry Olaya Escalante                                 | 51956219261   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:57.290011+00 |
+| 1567816        | HIGHLAND 0213 LLC                                     | 17868497385   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:07.688331+00 |
+| 1553818        | Hyscent Perfumes                                      | 522212860209  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:38.001365+00 |
+| 1571360        | ICOMEX                                                | 51980537113   | Adriana Montilla      | true           | false              | 2026-07-02 17:58:56.807449+00 |
+| 1346396        | IMPORT NEO                                            | 51960254921   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:22.486922+00 |
+| 1354560        | Infinite smells                                       | 18092498196   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:35.617279+00 |
+| 1596423        | INK Braulio Castillo                                  | 977510710     | Adriana Montilla      | true           | false              | 2026-07-02 17:59:22.39592+00  |
+| null           | INK Carlo Vargas                                      | 51980737877   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:54.568326+00 |
+| 1603362        | INK Carlo Vargas                                      | 980737877     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | INK Deivy Barturen Yoplac                             | 51993393625   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:47.467435+00 |
+| 1728816        | INK Jose Vasquez Lozano                               | 51993068147   | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1587139        | Ink Nick Ortiz                                        | 936889579     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1604743        | Itzayana Berrios                                      | 585777546     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 793850         | Jacobo Hailaneh                                       | 584122933435  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:42.716227+00 |
+| 1136982        | Janet Velazquez Correa                                | 7298553618    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:01.913757+00 |
+| 1515844        | Jeremy Quispe                                         | 51939156523   | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1529852        | Jesus Rosales                                         | 584247811461  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:44.457883+00 |
+| 460683         | Jesus Sifontes                                        | 4127600076    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1395534        | Jesus Vasquez                                         | 51923971635   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:14.020278+00 |
+| null           | JH IMPORT                                             | 17862051018   | Adriana Montilla      | true           | true               | 2026-07-02 17:59:56.662811+00 |
+| null           | Jhosep Fernando Tipe Carrasco                         | 51936795324   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:19.699615+00 |
+| 1622642        | Jonathan Silva Ponce                                  | 51912849045   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:42.059633+00 |
+| null           | Jonathan Vildosola                                    | 51934066355   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:22.113873+00 |
+| 1389306        | Jonathan Vildosola                                    | 934066355     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | JosÃ© Manuel Alvarado Beteta                          | 51926899714   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:52.924183+00 |
+| null           | JosÃ© Miguel Goffredo Camargo                         | 584147294656  | Adriana Montilla      | true           | false              | 2026-07-02 17:58:59.075847+00 |
+| 1293298        | Jose Adames                                           | 8492150901    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:52.443889+00 |
+| 1710769        | Jose Antonio Flores Paz                               | 51955526626   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:16.99402+00  |
+| 1644098        | Jose De la Cruz Sanchez                               | 584246394991  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:21.272072+00 |
+| 1588215        | José Manuel Alvarado Beteta                           | 926899714     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1426567        | Jose Saldivia                                         | 584124839886  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:11.834948+00 |
+| 1380492        | Joseph Jarquin                                        | 576619680     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Joseph Jarquin                                        | 50576619680   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:18.28048+00  |
+| 1708666        | Juan Alexander Rios Agurto                            | 928893071     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Juan Alexander Rios Agurto                            | 51928893071   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:42.336938+00 |
+| 1189036        | Juan Andres Morillo                                   | 18292822047   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:21.920606+00 |
+| 1394572        | Juan Carlos Diaz Ancajima                             | 51958989205   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:56.393768+00 |
+| null           | Justo Gomez                                           | 50588828388   | Adriana Montilla      | true           | false              | 2026-07-02 17:58:52.470504+00 |
+| 1394651        | Justo Gomez                                           | 588828388     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1571372        | Kaloha                                                | 17874366169   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:16.809018+00 |
+| 1545374        | Kimdo Perfumes                                        | 51904416393   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:35.912488+00 |
+| 1580147        | Laura Fernanda samboni Barragan                       | 13057184490   | Adriana Montilla      | true           | false              | 2026-07-02 17:58:55.875041+00 |
+| null           | Leonardo Franco Flores Quispe                         | 51958349602   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:49.401386+00 |
+| 1682700        | Leonardo Franco Flores Quispe                         | 958349602     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 460690         | Les Fragrances Les Fragrances                         | 584143431980  | Adriana Montilla      | true           | false              | 2026-07-02 17:58:58.187996+00 |
+| null           | Luis Herlinso SÃ¡nchez reyes                          | 51929906431   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:58.77467+00  |
+| 1651805        | Luis Herlinso Sánchez Reyes                           | 929906431     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1304309        | Luis Patety                                           | 7863270577    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:16.899643+00 |
+| 1236499        | Maibert Rangel                                        | 7866602605    | Adriana Montilla      | true           | false              | 2026-07-02 17:58:53.967903+00 |
+| null           | Maison de Parfum                                      | 50585777546   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:58.495088+00 |
+| 1473991        | Maissa Samara                                         | 5842491744    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1432191        | Manifesto Perfumes                                    | 51971490804   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:20.907922+00 |
+| null           | MarÃ­a auxiliadora Pantoja Romero                     | 50582915273   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:44.759361+00 |
+| 1120915        | Marcos Calderon                                       | 4121022614    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:06.520715+00 |
+| 1432044        | Maria Alejandra Perez                                 | 586103958     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1510123        | María auxiliadora Pantoja Romero                      | 582915273     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1450374        | Mario Marin                                           | 5213311768649 | Adriana Montilla      | true           | false              | 2026-07-02 17:59:04.036074+00 |
+| 1670290        | Martha Joanna ServÃ­n corral                          | 526675041167  | Adriana Montilla      | true           | false              | 2026-07-02 18:00:00.145028+00 |
+| 903598         | Mayra Alejandra Chacón                                | 50230332499   | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1331957        | Megmonexclusive,srl                                   | 18295040923   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:07.513585+00 |
+| 1545319        | Mickey Tuesta Sanchez                                 | 905974209     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Mickey Tuesta Sanchez                                 | 51905974209   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:38.739418+00 |
+| 460696         | Muaad Mehad                                           | 14164558676   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:27.346703+00 |
+| 906202         | Munyed Harb                                           | 584145080610  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:01.362144+00 |
+| 1243168        | NBA Perfume                                           | 18492726492   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:00.526574+00 |
+| null           | Nick Miljam Ortiz Olmedo                              | 51936889579   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:58.684+00    |
+| 1481272        | Ogando_perfume                                        | 18092165060   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:33.505369+00 |
+| 1528196        | Paul Andres Marroquin Rendon                          | 231215843     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Paul Andres Marroquin Rendon                          | 50231215843   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:36.890758+00 |
+| 1315147        | PerfumatoRD                                           | 18099147200   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:42.895153+00 |
+| 1442028        | Perfumes Juarez                                       | 14491984611   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:17.17296+00  |
+| 1242155        | Perfumes RYR                                          | 18296928159   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:26.135845+00 |
+| 1554753        | Perusa By lily                                        | 51992408353   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:15.113066+00 |
+| null           | Picara                                                | 50586103958   | Adriana Montilla      | true           | false              | 2026-07-02 17:58:51.637298+00 |
+| null           | Piccara                                               | 50586533146   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:46.841543+00 |
+| 1499288        | Public 961 C.A.                                       | 584145970141  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:38.929273+00 |
+| 1432870        | Rafael Guido                                          | 50588549448   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:10.642636+00 |
+| null           | Rafael Guido - Perfumes Bluemoon                      | 50583605530   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:10.554891+00 |
+| null           | Raul Flores GonzÃ¡lez                                 | 5214272271464 | Adriana Montilla      | true           | false              | 2026-07-02 17:59:29.952799+00 |
+| 1517525        | Raul Flores González                                  | 4272899542    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1425626        | Rigoberto Molina Zeledon                              | 586053954     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1422349        | roamp perfume                                         | 51950244086   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:04.870721+00 |
+| 1651793        | Rosse Marie Romero Moras                              | 519701179182  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:52.832676+00 |
+| 460698         | Sabrina Guevara                                       | 584243076909  | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 914794         | Saidy Valera                                          | 9546810952    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:40.486155+00 |
+| 868914         | Sam's Store LLC                                       | 5184954164    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1006082        | Scent & Fragrance Inc. Scent & Fragrance Inc.         | 3053199992    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1432853        | Shirley Cordova                                       | 254668220     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Space Shop                                            | 50587286401   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:15.856032+00 |
+| 1671868        | sublime Parfum                                        | 573184183361  | Adriana Montilla      | true           | false              | 2026-07-02 17:59:06.428903+00 |
+| 1685351        | TEST API PHONE NO USAR                                | 7864779121    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:10.191047+00 |
+| 1433938        | The Tee Station TT                                    | 18687014605   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:25.856256+00 |
+| null           | Trendy CHIC EstelÃ­                                   | 50586053954   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:25.766085+00 |
+| 1350730        | Urban State                                           | 51999016648   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:05.882568+00 |
+| null           | VCD IMPORT SAC                                        | 7867673506    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:17.082469+00 |
+| 1336232        | Victor Andres Condori Diaz                            | 5193696403    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1387177        | Wael Mustafa                                          | 4127242586    | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1376755        | Xigma Import Sac                                      | 51907200852   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:39.108357+00 |
+| 1233055        | Yazan Mohammed Yousef Hamam                           | 04120279921   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:19.424355+00 |
+| 1388744        | Yhon Pool Diaz Cuestas                                | 943522572     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Yhon Pool Diaz Cuestas                                | 51943522572   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:38.370756+00 |
+| null           | Yojan imanol huamani Cori                             | 51962204052   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:05.341763+00 |
+| 1576477        | Yojan imanol Huamani Cori                             | 962204052     | Adriana Montilla      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1357501        | York PerÃº Angello Aban Giraldo                       | 51938115856   | Adriana Montilla      | true           | false              | 2026-07-02 17:59:00.704099+00 |
+| 1289185        | Zaaq's Trading Co. Ltd                                | 18683160214   | Adriana Montilla      | true           | false              | 2026-07-02 17:58:53.303454+00 |
+| 1538396        | Zaid Abdool                                           | 8683103050    | Adriana Montilla      | true           | false              | 2026-07-02 17:59:55.520975+00 |
+| null           | Cristiano Ronaldo                                     | 55578912345   | Carlos Muñoz          | true           | false              | 2026-07-13 20:59:56.157273+00 |
+| null           | Guadalupe                                             | 55578945612   | Carlos Muñoz          | true           | false              | 2026-07-09 14:58:37.197821+00 |
+| null           | Lionel Messi                                          | 55545612378   | Carlos Muñoz          | true           | false              | 2026-07-13 20:58:19.428572+00 |
+| null           | Maria Carolina Martin                                 | 55514296874   | Carlos Muñoz          | true           | false              | 2026-07-07 19:10:31.182323+00 |
+| null           | Pedro Porro                                           | 0414556938    | Carlos Muñoz          | true           | false              | 2026-07-07 14:35:51.048987+00 |
+| null           | PruebaTest                                            | 04147778965   | Carlos Muñoz          | false          | false              | 2026-07-08 12:54:32.433287+00 |
+| null           | Radamel Falcao                                        | 55512345678   | Carlos Muñoz          | true           | false              | 2026-07-13 20:57:46.888157+00 |
+| 1305459        | Akemi Ramos                                           | 5266925401    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:29.130218+00 |
+| 1414325        | Aldair Oviedo                                         | 5192390570    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1617522        | Alenny Fabiana Rojas Arcila                           | 584124740360  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:31.741307+00 |
+| null           | Alfonso LeÃ³n VÃ¡squez                                | 51974732528   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:49.854136+00 |
+| 1678993        | Alfonso León Vásquez                                  | 974732528     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | AndrÃ©s Alfonso DÃ¡vila Morales EC                    | 51960849914   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:11.745943+00 |
+| 1407302        | Andrea lizbeth bravo reyes                            | 526641173861  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:35.054065+00 |
+| 1642522        | Andrés Alfonso Dávila Morales                         | 960849914     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1604748        | Ãngel Abraham Venegas MuÃ±iz                         | 523131433519  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:03.296297+00 |
+| 1518579        | Angel Berrueta                                        | 584120729843  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:35.432295+00 |
+| 1720713        | Angelo Alexander Bonilla Lopez                        | 51989894220   | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1452779        | Angie Echenagucua Obinu                               | 13474566645   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:23.036559+00 |
+| 1484291        | Anthony JesÃºs Guerrero Vanegas                       | 16502901659   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:50.681169+00 |
+| 1541054        | Aromatico Perfumeria Original                         | 522741099529  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:51.529021+00 |
+| 1446591        | Astrid Massiel Castro Corrales                        | 51970260334   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:50.860988+00 |
+| 1180001        | Beatriz Elena Perez Iriarte                           | 424498199     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1497406        | Bernardita Rojas Chaves                               | 671000845     | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:56.159956+00 |
+| 1452681        | Billy Adolfo Farfan Rojas                             | 51935204125   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:14.57966+00  |
+| 1414158        | Brayan Cristian Litano Juarez                         | 5197202247    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Carlos Alberto Escobar                                | 584146330638  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:21.827874+00 |
+| 1599217        | Carlos Alberto Escobar                                | 5841463306    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1523053        | Carlos Jacobo Espinoza Rosales                        | 4244087982    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1071924        | Carlos Mainardi                                       | 8099864905    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:34.151545+00 |
+| 1354562        | CD Diversa Home                                       | 4248891209    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 806640         | Clover jewelry llc                                    | 19195103311   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:52.657007+00 |
+| 859626         | Comercial Alox                                        | 6673980762    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:49.577557+00 |
+| 1654058        | CTerra Services Corp                                  | 17025876097   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:22.671799+00 |
+| 1407307        | Danny Manuel BriceÃ±o Cangana                         | 51947945971   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:22.855952+00 |
+| 1521913        | Danny Wilfredo Estrada Gomez                          | 578558117     | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:54.617173+00 |
+| 1587150        | Darrin Alexander                                      | 18683503809   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:49.673044+00 |
+| 1545322        | Dayana carrillo                                       | 584244588399  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:41.416473+00 |
+| 1529779        | Deidad Néstor Salinas Carpio                          | 51956340968   | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1664395        | Desiree Ibarra                                        | 584265804462  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:53.858148+00 |
+| 1278189        | Dhruv Ladkani                                         | 3057675922    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:30.956729+00 |
+| 702744         | Diana Torres                                          | 2018874940    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:00.250087+00 |
+| 1496697        | Diego Alfredo Quispe lizarbe                          | 1983194020    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1125024        | Diogo Cardenas                                        | 51933872172   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:27.664457+00 |
+| 1621199        | Dubai perfumes Cali                                   | 573202198784  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:08.054568+00 |
+| 1618969        | Dylan Trigoso Angulo                                  | 51915104557   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:54.74799+00  |
+| 1290701        | Edgar Alejandro Luna Garza                            | 528442460477  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:11.00575+00  |
+| 1339453        | Eduardo González de la Vega                           | 4191163398    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:40.025449+00 |
+| 1188877        | Edwar Jose Jimenez Peraza                             | 41495195      | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Edwar Perfumes                                        | 4149519518    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:04.77847+00  |
+| 1539704        | Edwing Enrique Huete Sequeira                         | 57606513      | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:49.763771+00 |
+| null           | EliChic                                               | 50583315019   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:52.537076+00 |
+| 1520873        | Elizabeth Cruz López                                  | 5058331501    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1343677        | Elvis Raul Guido Julcarima                            | 1924875606    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1554022        | Fabiana Delgado                                       | 3058502690    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:53.766172+00 |
+| 1498248        | Farel Perfumes                                        | 51940783270   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:42.151317+00 |
+| 1357502        | Fausto Ivan Nagua Cojitambo                           | 3989959136    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | FRAGNIFIQUE                                           | 51972022473   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:34.341361+00 |
+| 1423108        | Fraimy Magallanes                                     | 8095024117    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:13.934559+00 |
+| 1043579        | Francisco Ramirez                                     | 4129208900    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:52.196875+00 |
+| 1615351        | Frank Eduardo Yparraguirre Su                         | 51989798892   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:05.97526+00  |
+| 1374696        | Gabriel Eduardo Márquez                               | 125555054     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1575132        | Gabriel Leones                                        | 50587781469   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:39.845213+00 |
+| null           | Gabriel Marquez                                       | 17866080721   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:27.755572+00 |
+| 1147261        | Gabriel Marquez                                       | 584242515908  | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1350752        | Gian Pierre Izquierdo Santa Cruz                      | 1948219572    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1545388        | H & M Negocios Y Servicios Generales S.A.C.           | 51964179355   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:23.512039+00 |
+| 1214145        | Hicham Melzoor                                        | 584247589000  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:42.80864+00  |
+| 1409958        | Ian Carlo Velasquez                                   | 5214761604759 | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:52.008002+00 |
+| 1714465        | Ibrahim Aranki                                        | 50254720082   | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1632874        | INK ALVARO QUISPE                                     | 51997843408   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:42.43094+00  |
+| 1567812        | International Maritime Services IIMS LLC              | 14076866492   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:19.608505+00 |
+| 1484177        | Jadeneith Coromoto Vanegas                            | 4121389564    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Jafarc Perfumeria                                     | 50557196900   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:59.525343+00 |
+| 1500510        | Jafeth Arcia                                          | 557196900     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1139714        | Javier Useche                                         | 4123800368    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:04.132195+00 |
+| 1609250        | Jeison Brayan Grados Obregon                          | 953220313     | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:37.818607+00 |
+| 1476564        | Jennifer Castellon                                    | 578111437     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1621197        | JesÃºs VÃ¡squez Ramos                                 | 51924905960   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:19.974502+00 |
+| 1274055        | Jesus Becerra                                         | 4842783780    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1632718        | JHON PATANA MAMANi                                    | 51986296101   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:37.638867+00 |
+| 1491987        | Jimilton orozco                                       | 578874684     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1049966        | Johel CarreÃ±o                                        | 13526654664   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:37.179794+00 |
+| 1482323        | Jorge Alfredo Reyes Ccahuantico                       | 51971022339   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:50.951733+00 |
+| 1523255        | Jorge Enrique Estrada Mojica                          | 586845898     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Jorge Enrique Estrada Mojica                          | 50586845898   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:04.331772+00 |
+| null           | JosÃ© Alonso Sifuentes Vega                           | 7862051018    | Daniela Bohorquez     | true           | true               | 2026-07-02 17:58:49.400002+00 |
+| 1539820        | José Alonso Sifuentes Vega                            | 4386650409    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1088165        | Jose Francisco Figarella                              | 5842494647    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:04.976781+00 |
+| 1401987        | Jose Miguel Dominguez                                 | 584167229398  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:11.565569+00 |
+| null           | Juan Carlos Andres Ponce Ygna                         | 51907542825   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:55.79134+00  |
+| 1678992        | Juan Carlos Andres Ponce Ynga                         | 907542825     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1702621        | Juan Carlos Ponce Aguilar                             | 526682221299  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:52.746654+00 |
+| 1096913        | Juana Vianey Borges Romero                            | 229158841     | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:58.027473+00 |
+| 1255180        | Jussef Elsemaili  Taha                                | 4142004061    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:48.752768+00 |
+| 1255064        | Kevin Alejandro Mojica Obregon                        | 5058808226    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | La bellÃ© perfumerÃ­a                                 | 50578111437   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:59.436903+00 |
+| 1429357        | Lucely Pérez                                          | 6157559319    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:02.365551+00 |
+| null           | Lucero Retuerto Trinidad                              | 51991423231   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:40.861985+00 |
+| 1524614        | Lucero Retuerto Trinidad                              | 5199142323    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1668648        | Luis Orlando Leyva (ElCulichiStore)                   | 526671268765  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:51.069762+00 |
+| 1545770        | Luis Zacarias Valencia Sivirichi                      | 51933297273   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:39.93256+00  |
+| 1322609        | Marcio Aarom Rios Galarreta                           | 951994981     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Marcio Aarom Rios Galarreta                           | 51951994981   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:43.808673+00 |
+| 1728697        | Maria Lopez                                           | 5841432493    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1215749        | Mariangie Salazar                                     | 584141850864  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:52.17626+00  |
+| 1190366        | Mario Alcala                                          | 04149173394   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:48.937621+00 |
+| 1498250        | Mario Martin Cuellar Corona                           | 8211264343    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:48.021697+00 |
+| 1415954        | Marko Antonio Veneros Rojas                           | 5194019926    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Marko Antonio Veneros Rojas                           | 51940199260   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:01.998035+00 |
+| 1711081        | Marlin C Rodriguez                                    | 584241801406  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:54.93495+00  |
+| 1728817        | Mateo Roberto de la Cruz                              | 8296922257    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1063612        | Mayra Rivero                                          | 584249722820  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:52.085485+00 |
+| 1354471        | Miguel Ángel Chan                                     | 4144963743    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1621349        | MIRIAM NAJARRO                                        | 3052907033    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:56.624999+00 |
+| 1445091        | ML parfumerie                                         | 943870042     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | NÃ©stor Salinas Carpio                                | 7866288807    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:03.661827+00 |
+| 1452780        | Nandy Medina                                          | 8098199671    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:32.124734+00 |
+| 1285343        | NESTOR PARFUM C.A                                     | 584125822060  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:45.312934+00 |
+| 1596429        | Nicholas Hernandez                                    | 18687424772   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:50.968068+00 |
+| 1350757        | Noah Marca                                            | 1950865907    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1282081        | Norman Borda                                          | 5057801390    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Norman Borda                                          | 50578013905   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:13.842158+00 |
+| 1376754        | Nurth Hayaly                                          | 4145736375    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | NuvÃ© & Co                                            | 50585043187   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:04.22545+00  |
+| 1714759        | Oliver Vera                                           | 51970278223   | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1449638        | Omar Ivan Valencia Vicente                            | 5199960815    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Omar Valencia Vicente                                 | 51999608158   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:08.593803+00 |
+| 1728819        | Onam Fermin Sangay Sangay                             | 51923141687   | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1395622        | Opulent Aura by KRA                                   | 18687643870   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:05.066684+00 |
+| 1285341        | Oscar Rodriguez                                       | 50588500250   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:25.565893+00 |
+| null           | OVI Import                                            | 51923905704   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:24.809869+00 |
+| 460697         | Paola Procopio                                        | 584244903637  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:55.048324+00 |
+| 1435025        | Paris Mira                                            | 1809696803    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:59.348291+00 |
+| 1389412        | Pedro Orlando Jiménez Martínez                        | 585043187     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1517068        | Perfumeli                                             | 525548758144  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:26.22911+00  |
+| null           | Perfumes Nicaragua                                    | 50578874684   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:56.438352+00 |
+| 1552302        | Perfumes tijuana                                      | 16193999428   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:41.04658+00  |
+| 1587060        | Perfumes y accesorios                                 | 526642227972  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:56.253827+00 |
+| null           | Raquel santana                                        | 18296444279   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:20.083931+00 |
+| 1599371        | Raquel Santana                                        | 296444279     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1457911        | Ravi Narsingani                                       | 8762778302    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Ray & Rox perfumerÃ­a                                 | 50589797470   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:45.406771+00 |
+| 1487527        | Raymond Junior Dumas García                           | 589797470     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1520756        | Renzo Ismael Paredes Chavez                           | 5199803210    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Ressensia                                             | 51998032104   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:41.510434+00 |
+| 1319802        | Rey parfum                                            | 51959209359   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:16.528944+00 |
+| 894219         | Ricardo Javitt                                        | 584143537522  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:28.210058+00 |
+| 1236509        | Ricardo Molina                                        | 9174069609    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1497573        | Robert Perez Ramirez                                  | 51972124499   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:50.044019+00 |
+| 1501621        | Roberth Alonzo Mariano Obregon                        | 942220369     | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:05.518722+00 |
+| 1596206        | Roberto Jhair TarmeÃ±o Yacila                         | 517868458828  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:13.588481+00 |
+| 1587135        | Roberto taborda                                       | 17205567562   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:44.851381+00 |
+| 1698646        | Ronald Peguero                                        | 18499159026   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:57.264972+00 |
+| 1528141        | Sergio Antonucci/VEN3788                              | 04244917627   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:50.875269+00 |
+| 1243172        | Shirley Policarpo Puclla                              | 51916076844   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:54.799765+00 |
+| 1544324        | Sined MartÃ­nez                                       | 584146420715  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:59.61303+00  |
+| 1397582        | Sistemas automÃ¡ticos de identificaciÃ³n              | 524491264946  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:47.286867+00 |
+| null           | Solange Abigail Montenegro Fuentes                    | 50557634064   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:57.381135+00 |
+| 1520957        | Solange Abigail Montenegro Fuentes                    | 5055763406    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1642311        | Todo compras express LLC                              | 17865827015   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:58.301612+00 |
+| 1729845        | Valeria Reyes                                         | 584140468902  | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Variedades Pipirisnais                                | 50588082265   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:08.95741+00  |
+| 1367479        | Velkin Mendez                                         | 578402163     | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1312709        | Virgilio Enrique Loreto GonzÃ¡lez                     | 584124621141  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:50.228367+00 |
+| 1415219        | Walter Ulises Santana Lopez                           | 5193211776    | Daniela Bohorquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Walter Ulises Santana Lopez                           | 51932117765   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:10.006662+00 |
+| 1129630        | Wilker Montevideo                                     | 5843376860    | Daniela Bohorquez     | true           | false              | 2026-07-02 17:59:15.492407+00 |
+| null           | Witty Buy Electronic Ca                               | 04125555054   | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:49.489708+00 |
+| 1529620        | Zafir Fragances                                       | 593989910053  | Daniela Bohorquez     | true           | false              | 2026-07-02 17:58:56.53223+00  |
+| 1524474        | Adrian Elias Jimenez                                  | 4427474620    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:55.4295+00   |
+| 564761         | Adriana Fernandez                                     | 584249566472  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:00.802144+00 |
+| null           | Alan Romo                                             | 529612839588  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:37.724935+00 |
+| 1549204        | Alan Romo                                             | 2961283958    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1407511        | Alessandra Priscila Quintana Cavero                   | 51994335774   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:56.847647+00 |
+| 1589833        | ALEXIS ESTRADA                                        | 13059045137   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:20.633123+00 |
+| 1351620        | Allan Norberto Sampayo Delgado                        | 8120295503    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:20.998498+00 |
+| 1401793        | AM Perfumes/ cosmÃ©ticos y accesorios                 | 584247833007  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:31.834572+00 |
+| 1509969        | Ana Saavedra                                          | 584127257883  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:13.399562+00 |
+| 1710886        | Anahi Prieto Caldelas                                 | 529212380416  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:54.47799+00  |
+| 1549205        | Andy Perfume Arabe                                    | 51989659882   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:40.677424+00 |
+| 1634257        | Angela Scavino Cardenas                               | 51987791737   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:50.592129+00 |
+| 1289699        | Anibal Antonio Sandino Gomez                          | 84643756      | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1585655        | Anthony Esau Limon Venegas                            | 523334860078  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:07.599225+00 |
+| null           | Anthony Medina                                        | 50585818841   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:28.760379+00 |
+| 1603193        | Anthony Medina                                        | 585818841     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1044785        | Aparicio Herrera Corrales                             | 50588509550   | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1418939        | Arnol Joel Flores Palacios                            | 76466594      | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:00.061901+00 |
+| 1290458        | Arturo Bonilla                                        | 7862822830    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:45.915143+00 |
+| 1267765        | Astrid Carolina Paez Rodriguez                        | 19806772954   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:40.211267+00 |
+| null           | Axel Javier Castorena Ramirez                         | 523339902070  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:12.035842+00 |
+| 1604745        | Axel Javier Castorena Ramirez                         | 2333990207    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1307540        | Beirut Perfumes, LLC Beirut Perfumes, LLC             | 3058572616    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:12.403491+00 |
+| 1505638        | Bruce Cooper Rodriguez                                | 576773726     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1300868        | Bruno Maguiña Herrera                                 | 51944808945   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:19.148158+00 |
+| null           | BRYAN VALDEZ VILLAR                                   | 51947255091   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:53.025112+00 |
+| 1312810        | BRYAN VALDEZ VILLAR                                   | 947255091     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1298661        | Buy Box Usa Inc                                       | 17866149012   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:28.303737+00 |
+| 702745         | Cachirafi Corp                                        | 8773573725    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:49.221404+00 |
+| 1500408        | Camila Montserrat Sanchez Sevilla                     | 522411004067  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:28.388862+00 |
+| 1290702        | Carlos Alberto Alvarez Tellez                         | 78157916      | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1273959        | Carlos Duran                                          | 4144224356    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 460648         | Carlos Ferrer                                         | 17273580276   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:06.16077+00  |
+| null           | Carlos Gabriel Ccolcca                                | 51913138509   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:37.549994+00 |
+| 1310867        | Carlos Gabriel Ccolcca                                | 913138509     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1466935        | Carlos Gonzalez                                       | 5057844138    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1586885        | Carlos Humberto Perez Paez                            | 252978646     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1664389        | Carolaine SÃ¡nchez                                    | 584141285346  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:43.358356+00 |
+| 1558493        | Cecilia FernÃ¡ndez GuillÃ©n                           | 51953728650   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:43.615116+00 |
+| 1535745        | Christian Renato Zeballos Talavera                    | 51970999937   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:23.697711+00 |
+| 1429369        | Cosmeticos Santagracia SAS                            | 573176428634  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:02.461602+00 |
+| 1361394        | Cristian Ruiz                                         | 51940779408   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:03.206239+00 |
+| 1289698        | Daniel Colina                                         | 584243125495  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:59.417807+00 |
+| 1543970        | Daniel Theodore                                       | 18097170616   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:56.71626+00  |
+| 539891         | Daniela Ghiraldini                                    | 4148893840    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:30.498251+00 |
+| 1425697        | Daniela Zarai Carhuamaca Torres                       | 936328546     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1435230        | Dario Joel Ruiz Leyva                                 | 5190879258    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:23.222923+00 |
+| 1700674        | Darley Carrasco Peltroche                             | 51950652270   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:59.145069+00 |
+| 1333169        | Darwin Penaranda                                      | 7867805498    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:48.660648+00 |
+| 1323377        | Dayron Correa Rivera                                  | 51902191277   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:57.728405+00 |
+| null           | Deivy Stuart Perez Paez                               | 17034012435   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:55.613624+00 |
+| 1552111        | Diego Torres                                          | 3317582856    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:46.566716+00 |
+| null           | Dixon Ariel lagos Borge                               | 50581492557   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:16.433901+00 |
+| 1376571        | Dixon Ariel Lagos Borge                               | 581492557     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Don Perfume                                           | 50581396166   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:39.202041+00 |
+| 1599216        | Edgar Azael Torres Perez                              | 524921695537  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:34.247459+00 |
+| 1474103        | Eduardo Jossimar García Muñiz                         | 5283324545    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1576335        | Edwin Jose Ruiz Santacruz                             | 943690939     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Edwin Jose Ruiz Santacruz                             | 51943690939   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:07.061772+00 |
+| null           | Eladio Martinez                                       | 7865252944    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:09.734975+00 |
+| 1106996        | Eladio Martinez                                       | 8293208888    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 539900         | Eleazar Tirado                                        | 4264957560    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:09.279664+00 |
+| 1622640        | Elhogardelperfume                                     | 18497205830   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:39.482966+00 |
+| 1587439        | Elian Francisco Rivas Ibarra                          | 50586266444   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:43.990848+00 |
+| 1566755        | Erick Gutierrez Tipiani                               | 51923511700   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:55.321015+00 |
+| 1496515        | Erika Amador Romero                                   | 576478619     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Erika Amador Romero                                   | 50576478619   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:55.336799+00 |
+| null           | Esencia Imperial                                      | 50586670913   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:21.640129+00 |
+| 1393779        | Eugenio Martinez                                      | 587288682     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1402012        | Eunice Garcia                                         | 19783970525   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:26.699855+00 |
+| null           | Euperfumeria                                          | 50584643756   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:56.575701+00 |
+| 810639         | Evie Korsakas                                         | 3855958121    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:12.949745+00 |
+| 1452543        | Eysco Fragance Fashion                                | 18095103294   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:23.130443+00 |
+| 656158         | Fatima Paredes                                        | 4144861295    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:52.564974+00 |
+| null           | Francela Melgara                                      | 50583244175   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:41.227739+00 |
+| 1535527        | Francela Melgara                                      | 583244175     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1323641        | Francis Nicolas Inche Isuiza                          | 5195136795    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:07.328211+00 |
+| 1476562        | Frank Cebrian Leguia                                  | 51999909122   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:53.385823+00 |
+| 1283319        | Fritz Castillo                                        | 926746092     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1417403        | Gabriel Hernandez Aguilar                             | 51903241363   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:33.683083+00 |
+| 1195183        | Gabriel Mendoza                                       | 3179655753    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:37.457777+00 |
+| 1720704        | Geika Saa                                             | 584243072120  | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1451721        | Gerardo Alanis Castro                                 | 528114122910  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:24.904562+00 |
+| 1562597        | Guido Alberdi Castillo Phala                          | 51902581620   | Edilmar Sanchez       | true           | false              | 2026-07-02 18:00:00.52917+00  |
+| 460682         | Guido Rodriguez                                       | 7863021326    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:52.290659+00 |
+| 1306575        | Gustavo Alberto Rodríguez Vera                        | 1505308057    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:33.322483+00 |
+| 1370018        | Gustavo Alexis  Salinas Peralta                       | 930412790     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Gustavo Alexis Salinas Peralta                        | 51930412790   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:56.754412+00 |
+| 1418957        | Havana Boutique                                       | 3054976773    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:54.15672+00  |
+| 1544535        | Henry Hidalgo Calzadilla                              | 5978154066    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:59.324098+00 |
+| 1499674        | Importadora SILOGPORT                                 | 523326460897  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:41.322555+00 |
+| 1539686        | Interventas                                           | 527441761003  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:30.223031+00 |
+| null           | Iris Massiel Torrez                                   | 150584126875  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:57.354462+00 |
+| 1491087        | Iris Massiel Torrez                                   | 584126875     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1566956        | Jacqueline Sanchez Mendoza                            | 575438313     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1555527        | Jaider Camilo Marin                                   | 573147073511  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:57.747883+00 |
+| 1400823        | Janett Torres                                         | 7862382609    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:35.798576+00 |
+| 1167433        | Javier Rojas                                          | 17868183425   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:05.156655+00 |
+| 902379         | Jean Lourdine                                         | 4075499290    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:31.372154+00 |
+| 1552104        | Jenifer Yesely Carhuamaca Lavado                      | 981266171     | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:40.953399+00 |
+| 1553120        | Jesusa Ichpas Janampa                                 | 51969735748   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:53.107305+00 |
+| 1642500        | Jimmy Fernandez                                       | 51992442610   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:50.133101+00 |
+| null           | Joaquin Albino                                        | 51961738288   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:33.141181+00 |
+| 1329038        | Joaquin Albino                                        | 5196173828    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1282079        | Joaquin Alexey Oviedo Rojas                           | 5058380404    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Joaquin Alexey Oviedo Rojas                           | 50583804044   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:28.481504+00 |
+| 1604930        | Joel Ronaldo Saavedra Valverde                        | 17869530702   | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Joel Ronaldo Saavedra Valverde                        | 51991404127   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:54.430557+00 |
+| 1549976        | Jogie Widmietra                                       | 5978514200    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:44.941164+00 |
+| 1643896        | Johanna Ninet Gargate Malpartida                      | 51926812071   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:57.445962+00 |
+| 1660942        | Jorge Isaac Martinez Salinas                          | 5058424021    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:48.105368+00 |
+| 1416662        | José Antonio Trujillo Castillo                        | 5195570322    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1575166        | Jose Maria Valderrama Leon                            | 51960777475   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:09.828067+00 |
+| null           | Jpyc PerfumerÃ­a                                      | 50575438313   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:46.475488+00 |
+| 1561413        | JS Roger Javier Andre Bayona Guzman                   | 51936718616   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:56.48727+00  |
+| 1606498        | Juan Alberto Nuñez Mejia                              | 18297690395   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:29.327275+00 |
+| 638738         | Juan Faria                                            | 7866030113    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:18.730236+00 |
+| 1289067        | Juana Iris Ortiz                                      | 18094626375   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:59.167848+00 |
+| 1224926        | Juleisy Hidalgo Sanchez                               | 8096031233    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 460687         | Julia Mendez                                          | 7868864134    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:00.895409+00 |
+| 1622939        | Junior Sotelo Pacheco.                                | 51954541556   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:10.734756+00 |
+| 1545336        | Karen Cano                                            | 586324120     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Karen Cano                                            | 50586324120   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:47.931138+00 |
+| 1216569        | Ken Brooks                                            | 8327028135    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:15.5748+00   |
+| 1311582        | Kenrick Phillips                                      | 5926929662    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 523202         | Keyla Meauri Meauri                                   | 4072239911    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:58.206345+00 |
+| 1427349        | Keysi Gonzalez                                        | 529995870925  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:30.131824+00 |
+| null           | Kiara AÃ±azco Sanchez                                 | 51980442291   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:03.110699+00 |
+| 1510236        | Kiara Añazco Sanchez                                  | 980442291     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Kiara Parfum                                          | 50585611763   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:26.041752+00 |
+| 1528139        | Lenin Moreno Aragão                                   | 586670913     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1345588        | Linder Melchor Laurencio Florido                      | 51969275460   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:03.016981+00 |
+| 1484090        | LORENZO PERU                                          | 51946398631   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:34.061926+00 |
+| 1381427        | Lourdy Alcena Vernet                                  | 863282894     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Luis Carlos Diaz                                      | 50585107195   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:27.936413+00 |
+| 1568616        | Luis Carlos Diaz                                      | 585107195     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 619830         | Luis Delgado                                          | 19843107905   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:18.372528+00 |
+| 1327215        | Luis Freitez                                          | 584125519813  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:25.949259+00 |
+| 1290700        | Luis Pozo                                             | 923275213     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1645917        | Luxora Fragance                                       | 523346222254  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:57.841947+00 |
+| 1719505        | Maria Espinoza                                        | 584128207515  | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1665012        | Maria Graciela Sanchez Franco                         | 526611183820  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:38.831102+00 |
+| null           | Maritza Sandoval Davalos                              | 59995231019   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:08.3235+00   |
+| 1645662        | Maritza Sandoval Davalos                              | 995231019     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1571362        | Marjorie Johanna Lalangui Valarezo                    | 964136120     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Marjorie Johanna Lalangui Valarezo                    | 5930964136120 | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:59.884902+00 |
+| 1179984        | Marty Piscottano                                      | 8609926936    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1308453        | May Leen De La Cruz Meza                              | 963292369     | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:53.472686+00 |
+| null           | Meli Fragancias                                       | 51910730347   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:45.034911+00 |
+| 1276789        | Melissa Verdaguer                                     | 17865485176   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:59.965676+00 |
+| 460695         | Mercantil Dorado                                      | 524145697820  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:06.340272+00 |
+| 1358349        | Michael Roberto LÃ³pez Rojas                          | 51960563468   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:28.117969+00 |
+| 1515651        | Miguel Angel Ancco Segura                             | 51955747419   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:22.579911+00 |
+| 1249668        | Miguel Jiemenez                                       | 4142020545    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1259548        | Miguel Lucciano Martinez Abensur                      | 51906575439   | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Mike Onel Bellorin Lanuza                             | 50557255784   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:53.12102+00  |
+| 1335942        | Mike Onel Bellorin Lanuza                             | 557255784     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 913162         | Mohamed El Smaili Taha                                | 4147777177    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:18.639609+00 |
+| 1574911        | Nanyer Marian Godoy Bolivar                           | 584128542243  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:46.187955+00 |
+| 1243407        | Nidolca Torres                                        | 8297749489    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:17.445186+00 |
+| 1651790        | Niema                                                 | 573223447710  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:39.661343+00 |
+| null           | Ninfa Guadalupe Delagneau Garay                       | 50582831399   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:50.040571+00 |
+| 1498203        | Ninfa Guadalupe Delagneau Garay                       | 582831399     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1535739        | Nohelia Teresa Castillo Picado                        | 589222375     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Nohelia Teresa Castillo Picado                        | 50589222375   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:54.109146+00 |
+| 557102         | Odelkys Pedrozo                                       | 17076712171   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:45.587351+00 |
+| 1340413        | OLATOUN OMOARUKHE                                     | 4438666323    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1497405        | One WL Management LLC                                 | 17869560554   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:59.049683+00 |
+| 540111         | Oriana Alfonso                                        | 4140265723    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1513227        | Oscar Sands                                           | 584144016069  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:02.55228+00  |
+| 1284461        | Oswaldo Guerrero                                      | 4241640203    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1367398        | Patrick Rodríguez ilma                                | 989296342     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1421392        | Patrick Samaniego Pedraza                             | 989225148     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1711114        | Pedro Goubat                                          | 584148993765  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:41.140155+00 |
+| null           | Perfumarte                                            | 50576773726   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:49.301411+00 |
+| null           | PerfumerÃ­a Garagon                                   | 50578441388   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:32.955555+00 |
+| 1654781        | Rafael Alan Duno Yuncosa                              | 910730347     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1080918        | Raul Capuano                                          | 4123991221    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Raul Capuano                                          | 3054775878    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:49.121558+00 |
+| 1426399        | Ricardo Vera Yepes                                    | 3193941696    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:53.399662+00 |
+| 1484927        | Robert Edu Carlos Pacheco                             | 926383191     | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:42.521716+00 |
+| 1488133        | Robinson Capellan Sanchez                             | 18293046988   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:35.342237+00 |
+| 1622942        | Ronald pavon Madriz                                   | 585611763     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1484286        | Rutilio Alfonso Lopez Hernandez                       | 494725884     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1699232        | Sabals Huayta                                         | 51947141490   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:17.542104+00 |
+| 1154284        | Samuel Alfonseca                                      | 8496540072    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:01.453798+00 |
+| 1562596        | SAYMAMORO / RUC 10770648268                           | 51984399085   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:54.842653+00 |
+| 1528722        | Segundo Daniel Duay Ochavano Claudio (Berakhah Store) | 51959132551   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:07.872535+00 |
+| 1594907        | Silvio Alegria                                        | 581396166     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1490441        | Smell and Care Distribution                           | 19732806245   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:02.182982+00 |
+| null           | Sunmoon                                               | 50587288682   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:14.402634+00 |
+| 1544310        | TWO C Fragancias                                      | 526699944558  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:08.507875+00 |
+| 1574666        | Uzoma Godson Ihedioha                                 | 51922884528   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:27.073034+00 |
+| 1501428        | VANGO SHOP                                            | 525617540824  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:08.232263+00 |
+| 1382346        | Victor Saul Lopez Guzman                              | 51942699960   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:04.68576+00  |
+| 1313957        | Vidaura Morales Perez                                 | 9191187393    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1369367        | Viva Company LLC                                      | 584126732024  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:58:51.348158+00 |
+| 897303         | Xioly Diaz                                            | 424494889     | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:30.780309+00 |
+| 1617134        | Yaimet Diaz                                           | 17863687682   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:15.400918+00 |
+| 1289701        | Yamilet Beltran                                       | 904806243     | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Yamilet Beltran / ESV                                 | 51904806243   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:50.587805+00 |
+| 1667694        | Yamilka Rosario                                       | 1809669378    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Yamilka Rosario                                       | 18096693788   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:54.381783+00 |
+| 1234059        | Yarua Martinez Del Pino                               | 4145836678    | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:49.214401+00 |
+| 1680504        | Yoly Mar  Duarte                                      | 1786523539    | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Yoly Mar Duarte                                       | 17865235395   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:22.208752+00 |
+| 1499675        | Yorvis Oliveros                                       | 584123409758  | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:45.495007+00 |
+| 1723508        | Yunil Romero                                          | 584260399609  | Edilmar Sanchez       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1312914        | ZNVG OCEAN                                            | 13057223269   | Edilmar Sanchez       | true           | false              | 2026-07-02 17:59:10.277466+00 |
+| 1677506        | Absolute Luxury For Half Price LLC                    | 17034156996   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:41.697405+00 |
+| null           | Adora Accesorios                                      | 50587069010   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:34.618137+00 |
+| 1048894        | AimÃ©e Yaunis                                         | 04143501014   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:16.717725+00 |
+| 1715784        | Aldo Mauricio Zegarra Perez                           | 51994088607   | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1419964        | Alejandro Daniel Rojas Pon                            | 970401595     | Genesis Mercado       | true           | false              | 2026-07-02 17:59:35.703502+00 |
+| 1538151        | Allan Josué Eugarrios E.                              | 587170539     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1585743        | Alondra Clemente                                      | 19105340329   | Genesis Mercado       | true           | false              | 2026-07-02 17:58:54.06068+00  |
+| 1694334        | Ana Jessis Delgadillo Lopez                           | 50581138123   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:53.199788+00 |
+| 1275284        | Angel Ramon Santos Chalas                             | 18097052460   | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1255987        | Angelo Sulbaran                                       | 4079147705    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:01.268783+00 |
+| 1555655        | Antonia MarÃ­a LÃ³pez Moreno                          | 15014102356   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:06.969246+00 |
+| 1558780        | Anyelo Medina                                         | 8296051864    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:55.882572+00 |
+| 1568640        | Barakah beauty                                        | 18686848448   | Genesis Mercado       | true           | false              | 2026-07-02 17:58:49.764997+00 |
+| 1517067        | Bica Perfumes                                         | 5213310242259 | Genesis Mercado       | true           | false              | 2026-07-02 17:59:11.099739+00 |
+| 1216572        | Bladimir Felix                                        | 18293996703   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:03.941869+00 |
+| 1621008        | Blue Soul LLC                                         | 14075206495   | Genesis Mercado       | true           | false              | 2026-07-02 18:00:00.234005+00 |
+| 1711082        | Brando Josua Casas Esqueche                           | 902380334     | Genesis Mercado       | true           | false              | 2026-07-02 17:59:46.747928+00 |
+| 1500605        | Brandon Cebreros Iturrios                             | 5216693560060 | Genesis Mercado       | true           | false              | 2026-07-02 17:59:51.071768+00 |
+| 1710805        | Brey Mendez                                           | 584120657217  | Genesis Mercado       | true           | false              | 2026-07-02 18:00:00.052043+00 |
+| null           | Byron David Colom Cumes                               | 50259716337   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:36.611959+00 |
+| 1426566        | Byron David Colom Cumes                               | 259716337     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1535657        | Carlos Adrian Rodriguez Lopez                         | 586443213     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1499225        | Carlos Alberto Tellez Errington                       | 576465165     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1645812        | Carlos Daniel Reyes                                   | 12678262597   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:50.494967+00 |
+| 1425531        | Carlos Salgado                                        | 558828602     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1593096        | Cendy Carvajal                                        | 04265802492   | Genesis Mercado       | true           | false              | 2026-07-02 17:58:56.159251+00 |
+| 1425527        | Concepts IN Freight INC                               | 18683289261   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:10.370648+00 |
+| 460649         | Damaris Meneses                                       | 584129990751  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:23.885362+00 |
+| 1435280        | Daniel Arturo Montenegro Diaz                         | 992908242     | Genesis Mercado       | true           | false              | 2026-07-02 17:59:11.653099+00 |
+| 1276552        | Deni Beriguete                                        | 8092977248    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 460692         | Diana Trejo                                           | 582418587627  | Genesis Mercado       | true           | false              | 2026-07-02 17:58:52.379982+00 |
+| null           | Diego Condor                                          | 51924901682   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:19.238465+00 |
+| 1473997        | Diego Condor                                          | 5192490168    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1654842        | Dora Sandino                                          | 587069010     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1223333        | Ebtihaa Koussa                                        | 4120487852    | Genesis Mercado       | true           | false              | 2026-07-02 17:58:55.594175+00 |
+| 1623064        | Eddy Guillermo de Jesus                               | 8094864830    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:34.526876+00 |
+| 1466850        | Edelet  DERILUS                                       | 1857236100    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:23.788918+00 |
+| 1497577        | Edgar Salvador Gómez                                  | 230219916     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Eduardo Marcelo Caballero Miranda                     | 50587465440   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:27.572957+00 |
+| 1408696        | Eduardo Marcelo Caballero Miranda.                    | 587465440     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1588413        | Edyhomar Priedes                                      | 54646469      | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Edyhomar Priedes                                      | 13054646469   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:50.226659+00 |
+| 1006550        | Emmanuel Saintilme                                    | 19542429714   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:06.699986+00 |
+| null           | Engell Alexander Galo Marenco                         | 50587530457   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:10.827434+00 |
+| 1528723        | Engell Alexander Galo Marenco                         | 587530457     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | ErrMon Fragancias                                     | 50576465165   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:47.106839+00 |
+| 1515414        | ESTELA                                                | 584126886397  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:49.585319+00 |
+| 460679         | Eurofragancias                                        | 584122904277  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:09.551431+00 |
+| 1414252        | Evelyn Johana  Renteria Castillo                      | 5194923860    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1677502        | Fabian Cuicapuza                                      | 18628469399   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:38.460786+00 |
+| 1497575        | Fashion boutique Llc                                  | 14803342175   | Genesis Mercado       | true           | false              | 2026-07-02 17:58:55.969644+00 |
+| 1061621        | Fedor Piloto                                          | 7866980566    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Felipe Morales Ochoa                                  | 50247605290   | Genesis Mercado       | true           | false              | 2026-07-02 17:58:51.443847+00 |
+| 1489613        | Felipe Morales Ochoa                                  | 247605290     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1084809        | Fidelina Perez Rodriguez                              | 2975653593    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:18.548422+00 |
+| 1525864        | Gabriella Gabris                                      | 584165470423  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:58.595319+00 |
+| 1670279        | Gelen Pallares                                        | 573157021586  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:47.553367+00 |
+| 1603457        | Giovane ex-im international Ltd                       | 18768165922   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:51.437344+00 |
+| 1548151        | Giovanni Alfredo Fernandez Vidales                    | 51986929503   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:43.710807+00 |
+| 1552283        | Giselle Villarrea                                     | 5841477214    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:38.100859+00 |
+| 1408690        | Glaimar solorzano                                     | 4148932510    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1543569        | Graceful Deals LLC                                    | 19546736450   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:13.75122+00  |
+| 1050676        | Gustavo José Velasquez Cardenas                       | 4125355727    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1489614        | Haniel Omar conde Orejel                              | 526682422824  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:44.275499+00 |
+| 1258009        | Hans Hidalgo Alta                                     | 992155201     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Hans Hidalgo Alta ESS                                 | 51992155201   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:06.879814+00 |
+| 1569903        | Indira landaeta                                       | 584120165319  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:50.774186+00 |
+| 1688835        | INK/Leonardo Franco Chaupin Huamán                    | 51903372898   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:18.095227+00 |
+| 1553131        | Inversiones Matheus                                   | 584146414685  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:20.547325+00 |
+| 1483516        | Ivan Evangelista Vicente                              | 51993298634   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:11.381637+00 |
+| 672039         | Jaiker Aira                                           | 584123636900  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:37.367393+00 |
+| 1645951        | Javier Hurtado                                        | 51946292686   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:51.896895+00 |
+| 704848         | Jeremie Perez                                         | 7875396785    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1561501        | Jhon Mejia                                            | 1566605353    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Jhon Mejia                                            | 5215666053533 | Genesis Mercado       | true           | false              | 2026-07-02 17:59:51.808227+00 |
+| 1507053        | Jhon Miquilena                                        | 584120771079  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:18.913061+00 |
+| 1554755        | Jhonatan Adrian Villafuerte Palomino                  | 51993912654   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:00.986019+00 |
+| 1548153        | JosÃ© Luis Ravelo                                     | 584148531999  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:38.1929+00   |
+| 1388509        | Jose Armando Quispe Matute                            | 51955419596   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:15.213066+00 |
+| 1467740        | Jose Luis Camino Vilchez                              | 51902485619   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:26.980189+00 |
+| 1476413        | Joshuar Maxon                                         | 3056130458    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:08.685701+00 |
+| null           | JS LOGISTIC COURIER SAC                               | 51949238608   | Genesis Mercado       | true           | false              | 2026-07-02 17:58:49.663941+00 |
+| null           | Juan Pablo HernÃ¡ndez                                 | 573105635499  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:20.271651+00 |
+| 1645658        | Juan Pablo Hernández                                  | 7310563549    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1400343        | Julio Cesar Peralta Caminero                          | 8097130921    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1714437        | Juvenal Murillo                                       | 50588691577   | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1566748        | Karen Abella                                          | 3057966182    | Genesis Mercado       | true           | false              | 2026-07-02 17:58:49.309023+00 |
+| 1642521        | Karina Bonixe                                         | 584144536743  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:08.778182+00 |
+| 1544643        | Kenia Campos Alvarado                                 | 16509214022   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:47.645608+00 |
+| 1578669        | Kervin Francis Dominguez Ramos                        | 51902444369   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:50.314311+00 |
+| 1607648        | Keyner Fernandez                                      | 584245202825  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:00.618759+00 |
+| 1594912        | La RapidÃ­sima Corp                                   | 584146014583  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:41.789775+00 |
+| 1597965        | Le Parfum                                             | 04140353336   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:19.793369+00 |
+| 1631177        | Leonardo Colina Palumbo                               | 584248464159  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:55.980554+00 |
+| 1687629        | Lizeth Rojas Lezama                                   | 50588990682   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:36.091959+00 |
+| null           | Luis Alberto Reyes Aguirre                            | 14424615616   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:10.462423+00 |
+| 1585656        | Luis Alberto Reyes Aguirre                            | 424615616     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 959654         | Luis Sequera                                          | 7866032545    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Luis Sequera                                          | 7863321351    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:12.127801+00 |
+| 1630858        | Luxury Store                                          | 584129689426  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:12.59143+00  |
+| null           | Manuel Saavedra Vera                                  | 51923631051   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:25.471663+00 |
+| 1671894        | Manuel Saavedra Vera                                  | 923631051     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | MarÃ­a Concepcion Pulido                              | 50583834142   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:30.869924+00 |
+| 1605771        | Marco Anchante Gallegos                               | 51927831153   | Genesis Mercado       | true           | false              | 2026-07-02 17:58:51.252441+00 |
+| 1568538        | Maria Concepcion Pulido                               | 583834142     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 697430         | Mariana Tovar                                         | 584244647990  | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1505884        | Mark Rackal                                           | 8683893423    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:32.684614+00 |
+| 1645669        | Miguel A Rios                                         | 18568991919   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:20.361866+00 |
+| 1568641        | Miguel Carpio                                         | 584248892649  | Genesis Mercado       | true           | false              | 2026-07-02 17:58:55.686884+00 |
+| null           | Mohaya Askoul                                         | 584140454549  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:24.53494+00  |
+| 1416764        | Moises Lopez                                          | 5842432767    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Moises Lopez                                          | 584243276704  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:13.216393+00 |
+| null           | MonLieu E/ Allan E./MarÃ­timo.                        | 50587170539   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:32.010124+00 |
+| 1538152        | Nehomar Lopez                                         | 584248961438  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:29.239153+00 |
+| 1587057        | Nelly Katherine Moran                                 | 17863671617   | Genesis Mercado       | true           | false              | 2026-07-02 17:58:50.408656+00 |
+| 1714460        | Néstor Sthanly Delgado Ruiz                           | 970406085     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1286634        | Nikaurys Garcia Perez                                 | 1809361302    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1528250        | OMEGA IMPORT                                          | 51939882514   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:23.604184+00 |
+| 1657859        | Osman Calderon                                        | 584145268699  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:04.505737+00 |
+| 1544313        | Oswaldo Gustavo Guerrero                              | 584122349274  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:11.472249+00 |
+| 539902         | Otniel Contreras                                      | 4149396523    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1642344        | Pedro Jaramillo Ruiz                                  | 51999080739   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:29.039408+00 |
+| 645042         | Pedro Rangel                                          | 5218121581064 | Genesis Mercado       | true           | false              | 2026-07-02 17:59:11.943817+00 |
+| 1549196        | PERFUMADOS                                            | 584125144410  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:43.266372+00 |
+| null           | PerfumerÃ­a Bella Girasoles                           | 50587923052   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:06.791783+00 |
+| 1105556        | Ramon Feo                                             | 4241446702    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:45.220118+00 |
+| 539903         | Randall Villegas                                      | 4706419058    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1671289        | Rodolfo Rodriguez Sanchez                             | 930669806     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Rodolfo Wanderlay Rodriguez Sanchez                   | 51930669806   | Genesis Mercado       | true           | false              | 2026-07-02 18:00:00.445123+00 |
+| 1506012        | Rondell Toby                                          | 8683182492    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:05.612901+00 |
+| 1451926        | Rubi Lozada                                           | 3055251702    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:36.98615+00  |
+| 1549896        | SACHA GROUP                                           | 18298788801   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:58.869324+00 |
+| 1543030        | Saira Liliana Ayala Caal                              | 239984146     | Genesis Mercado       | true           | false              | 2026-07-02 17:59:36.801445+00 |
+| 1710777        | Sebastian Crespo                                      | 584142003890  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:05.42779+00  |
+| null           | SeducciÃ³n Perfumeria                                 | 50586443213   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:39.393874+00 |
+| 1645663        | Seven Parfum                                          | 18687784993   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:11.280985+00 |
+| 1678994        | Susana Cervin Gomez                                   | 1662451059    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Susana Cervin Gomez                                   | 5216624510590 | Genesis Mercado       | true           | false              | 2026-07-02 17:59:05.249124+00 |
+| 1495412        | Tienda Mexicana Gonzalez LLC                          | 18285454397   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:01.64662+00  |
+| 1408490        | Trendy Store.sc C.A                                   | 584141072238  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:02.833304+00 |
+| 1444855        | UKAPUY                                                | 04146037184   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:32.499731+00 |
+| null           | Ventas Varias Gt                                      | 50230219916   | Genesis Mercado       | true           | false              | 2026-07-02 17:58:58.877496+00 |
+| 1658015        | Verdi Commercial Solutions LLC                        | 17372106905   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:34.705675+00 |
+| 1617523        | Wilder Ricardo Morales Cornejo                        | 985471585     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Wilder Ricardo Morales Cornejo                        | 51985471585   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:51.343388+00 |
+| 1397483        | Yaneisi Cutino                                        | 7867154942    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:50.404924+00 |
+| 1724780        | Yarieldis Zayas                                       | 17862234783   | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Yasjos Boutique                                       | 50558828602   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:25.67236+00  |
+| 1531105        | Yelani Carrero Mk                                     | 51926583894   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:08.413939+00 |
+| 1293598        | Yorlandy Pereyra                                      | 7755236721    | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1435092        | Youcef You                                            | 9294613865    | Genesis Mercado       | true           | false              | 2026-07-02 17:59:17.637243+00 |
+| 1177620        | Yuliet Elbe                                           | 414295217     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Yuliet Supply                                         | 04142952176   | Genesis Mercado       | true           | false              | 2026-07-02 17:59:21.09144+00  |
+| 1481357        | Zayda Selenia Marchena Ramirez                        | 587923052     | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1632719        | Zona Chic                                             | 584122254843  | Genesis Mercado       | true           | false              | 2026-07-02 17:59:40.578214+00 |
+| 685592         | Zoranny Pérez                                         | 584242230257  | Genesis Mercado       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1596426        | Dayana Vanessa Martínez Muñoz                         | 586006534     | Jesus Rodriguez       | true           | false              | 2026-07-15 16:09:03.365952+00 |
+| 1473999        | Denise Adriana Leyva                                  | 4322718046    | Jesus Rodriguez       | true           | false              | 2026-07-02 17:59:07.237901+00 |
+| 1643875        | Gevorg Petrosyan                                      | 3104010491    | Jesus Rodriguez       | true           | false              | 2026-07-02 17:58:54.526532+00 |
+| 1232967        | Adham Elkadri                                         | 584125559333  | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:18.003606+00 |
+| 585474         | Adriana Montilla                                      | 4244044252    | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:33.775055+00 |
+| 1502555        | Alejandro Dominguez                                   | 7865854982    | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:53.656144+00 |
+| 1427460        | Aromas Quality Perfumes Corp                          | 13057138175   | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:35.52606+00  |
+| 566179         | B Futurist B.V. B Futurist B.V.                       | 31645636379   | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:42.985549+00 |
+| 1462150        | Carlos Lizcano                                        | 7862125798    | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:13.305084+00 |
+| 1536842        | J&A Technomarine Corp.                                | 17875506733   | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:24.720265+00 |
+| 1337241        | Jesus Sulvaran                                        | 584122192976  | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:24.34881+00  |
+| 1578931        | Jonathan Bravo                                        | 7863038680    | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:58.963504+00 |
+| null           | jose                                                  | 4567891234    | Luzmar Quintero       | true           | false              | 2026-07-09 20:44:41.328108+00 |
+| 507706         | Jose Gallardo                                         | 4245808777    | Luzmar Quintero       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 816727         | Juan Rivera                                           | 9397177316    | Luzmar Quintero       | true           | false              | 2026-07-02 17:58:55.78276+00  |
+| null           | Luis Trompiz                                          | 7862231255    | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:01.553699+00 |
+| 460693         | Macedon C.A. Macedon C.A.                             | 584126734091  | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:06.067582+00 |
+| 1425914        | Marcela Melgarejo                                     | 3057990591    | Luzmar Quintero       | true           | false              | 2026-07-02 17:58:57.819933+00 |
+| 1128137        | Modesto Antonio Doñe Tavera                           | 3465353932    | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:24.173933+00 |
+| null           | Mundo Elite                                           | 4245800777    | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:14.75759+00  |
+| 1359424        | New York Wholesale Distribution Corp                  | 17864617653   | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:46.005548+00 |
+| null           | One Place                                             | 3053246744    | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:03.392073+00 |
+| 920913         | Rek Business LLc                                      | 7863282840    | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:34.435591+00 |
+| null           | Top Fragrances                                        | 58424411      | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:09.191421+00 |
+| 1539821        | Top Fragrances LLC                                    | 17866317892   | Luzmar Quintero       | true           | false              | 2026-07-02 17:59:37.082339+00 |
+| 1370300        | Topperfumesmiami Corp                                 | 7863957622    | Luzmar Quintero       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1342719        | Cristophel Matos                                      | 8098903191    | Luzmila Ernandez      | true           | false              | 2026-07-02 17:58:52.844765+00 |
+| 1375594        | Julio Ríos PB                                         | 558122116     | Luzmila Ernandez      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1528197        | Marco Antonio Granda Ochoa                            | 8672302794    | Luzmila Ernandez      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1476672        | Oscar Danilo Rosales                                  | 588271627     | Luzmila Ernandez      | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1536735        | AVI Edwin Tejeda Orosco                               | 51955205156   | Manuela Henriquez     | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1337212        | Cruz Fuentes                                          | 4129751412    | Manuela Henriquez     | true           | true               | 2026-07-02 17:59:33.050501+00 |
+| 1307595        | Jandir Lora                                           | 51940150462   | Manuela Henriquez     | true           | false              | 2026-07-02 17:59:59.873889+00 |
+| 1446437        | Adam Valerio                                          | 8099783344    | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:53.492156+00 |
+| 1404237        | Alex Broncano Romero                                  | 51959748277   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:21.363604+00 |
+| 1517070        | Angeles Butique aroma                                 | 13095923646   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:20.178999+00 |
+| 1609366        | Aromara Essenza                                       | 18298037373   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:33.960503+00 |
+| 1473992        | Blanca Gonzalez                                       | 5058888258    | Maria Fernanda Sardua | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1484292        | Byron Hernandez                                       | 17039873789   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:53.746904+00 |
+| null           | CÃ©sar Jeovany Urbina MaliaÃ±os                       | 50587255130   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:16.151459+00 |
+| 1449547        | Cesar Gutierrez                                       | 5194925272    | Maria Fernanda Sardua | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Cesar Gutierrez                                       | 51949252726   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:14.673831+00 |
+| 1523051        | César Jeovany Urbina Maliaños                         | 587255130     | Maria Fernanda Sardua | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1354478        | Cioli Uzcategui                                       | 584145170695  | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:32.314924+00 |
+| null           | CJEPERFUMES                                           | 584129751412  | Maria Fernanda Sardua | true           | true               | 2026-07-02 17:59:57.940638+00 |
+| null           | Cozy Authentic Bold                                   | 18682664715   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:29.716131+00 |
+| null           | Curvas / Notas Nicaragua                              | 50588882580   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:05.703223+00 |
+| 1529853        | Damaris MartÃ­nez                                     | 584125020695  | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:40.771275+00 |
+| 1273859        | David Espino                                          | 18099823222   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:31.920435+00 |
+| 1495667        | David Galindo                                         | 593982230633  | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:07.420718+00 |
+| 1511642        | Deivi Nova                                            | 18498865732   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:53.674094+00 |
+| 1145922        | Diego Centeno                                         | 4128701363    | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:15.026211+00 |
+| 1418937        | Doris Carpio Atuncar Avi                              | 962986509     | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:56.990097+00 |
+| 1427528        | Edinson ReaÃ±ez                                       | 584126336671  | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:04.420954+00 |
+| 1446308        | Edu Roberto Alejos GarcÃ­a                            | 51936086184   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:53.562164+00 |
+| 1441696        | Edwards Cortez                                        | 15025538917   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:31.18902+00  |
+| 1632558        | Edwin Genta Lobos                                     | 51958728907   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:46.277497+00 |
+| 1615349        | Envios Cotillo                                        | 51928019787   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:17.726979+00 |
+| 1305461        | Fabian Pizarro                                        | 51947157428   | Maria Fernanda Sardua | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1555832        | Flavio Espinoza                                       | 51936544665   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:54.660079+00 |
+| null           | GaÃ«lle Rosier                                        | 50948478454   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:27.161124+00 |
+| 1394492        | Gaëlle Rosier                                         | 948478454     | Maria Fernanda Sardua | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1539687        | Gian Pierre Castro Silva                              | 983507613     | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:36.183081+00 |
+| 1282279        | Gonzalo Jorge Pont                                    | 9116720594    | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:17.354742+00 |
+| 810631         | Iliana Peña                                           | 7862138023    | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:58.699639+00 |
+| 1481358        | Jhoel Naun Rivera Rodriguez                           | 51940505289   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:09.641954+00 |
+| 1388739        | Jhordy Lagares                                        | 18295703734   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:16.623246+00 |
+| 1484915        | Jnvwireless inc                                       | 17876928617   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:53.578946+00 |
+| 1358352        | Joel Ogando                                           | 18099793416   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:52.268014+00 |
+| 1491194        | Joemily Coronado                                      | 584243662295  | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:50.781883+00 |
+| 1311769        | Jorge Espina                                          | 4149702884    | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:48.567378+00 |
+| null           | Julio RÃ­os PB                                        | 50558122116   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:12.216663+00 |
+| 1109005        | Karol Parra                                           | 4246090594    | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:52.359915+00 |
+| 1149301        | Kelly Martinez Kouefati                               | 4434328011    | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:30.314265+00 |
+| null           | Kevin Wilfredo Cabrera LÃ³pez                         | 50258664640   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:58.006273+00 |
+| 1372883        | Kevin Wilfredo Cabrera López                          | 258664640     | Maria Fernanda Sardua | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1312787        | Lemaxbox LLC                                          | 5493413572987 | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:36.420527+00 |
+| 1484089        | Lifestyle Frangrances                                 | 14734493933   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:27.84868+00  |
+| 1555658        | Lincoln Fernandez / AMEX                              | 51988190563   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:51.618045+00 |
+| 1528818        | Ludwing Espinoza                                      | 589429246     | Maria Fernanda Sardua | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1561499        | Luis AndrÃ© Alvarez AlarcÃ³n                          | 51934348104   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:57.656171+00 |
+| 1497572        | Luismar Reyes adames                                  | 8294616331    | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:52.935676+00 |
+| 1358576        | Mansion Parfum                                        | 51983240220   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:51.16412+00  |
+| 1507330        | Marcos Joshua Cano Condori                            | 51939954292   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:59.698604+00 |
+| 1363424        | Margarita's F.P                                       | 584122279014  | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:57.084626+00 |
+| 1491088        | Mariel Rosario                                        | 18294501733   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:00.342071+00 |
+| 1451115        | Martha Patricia Duarte                                | 7868933081    | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:50.696159+00 |
+| 1354557        | Norman Lumbi                                          | 50582208897   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:29.624622+00 |
+| null           | Oscar Fajardo Rodriguez                               | 51966229956   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:02.9265+00   |
+| 1282278        | Oscar Fajardo Rodriguez                               | 966229956     | Maria Fernanda Sardua | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1545768        | Oscar Oswaldo Corea Tercero                           | 12138377019   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:44.644079+00 |
+| 1483517        | PerfumerÃ­a Alexander                                 | 51980364126   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:26.513677+00 |
+| null           | PerfumerÃ­a Scentsacional                             | 50589429246   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:32.594571+00 |
+| 1408485        | Roberto Carlos Mamani NuÃ±ez                          | 051964686623  | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:16.041802+00 |
+| 1337209        | Roger Troncoso                                        | 588524765     | Maria Fernanda Sardua | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Roger Troncoso                                        | 50588524765   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:06.613256+00 |
+| 1426558        | RubÃ©n Alexis DÃ¡vila Santos                          | 51992215533   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:20.81549+00  |
+| 1644222        | Runa Urban SAC                                        | 51951508936   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:59.702453+00 |
+| null           | Tienda De CachÃ©                                      | 50586006534   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:31.466057+00 |
+| 1435023        | Valentín Salvador Quispealaya Campos                  | 51904295593   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:52.102802+00 |
+| null           | Variedades Lilliam                                    | 50581914778   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:02.274666+00 |
+| 1580146        | Viancris Julieth LÃ³pez                               | 584247458275  | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:14.491542+00 |
+| 1416901        | Victor Camacho                                        | 51918200645   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:41.968964+00 |
+| 1549260        | Walter Juan Pablo Cazal de la Cruz                    | 51924590921   | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:59:15.760876+00 |
+| 935384         | Winston Canozo                                        | 4242301718    | Maria Fernanda Sardua | true           | false              | 2026-07-02 17:58:58.609209+00 |
+| 1497571        | 4 Seasons Perfumes II LLC                             | 13134603433   | Mitsy Cordero         | true           | false              | 2026-07-02 17:58:58.790019+00 |
+| 1322610        | Adriana GÃ³mez                                        | 584149733913  | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:38.552165+00 |
+| 1319668        | Ajaydatt Boodhoo                                      | 18683714740   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:12.496807+00 |
+| 1214297        | Aleiny Soca GÃ³mez                                    | 17866916103   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:40.119268+00 |
+| 1373017        | Alejandro Alcántara                                   | 5560722980    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:30.408664+00 |
+| null           | Alvaro Simon Castro Sevillano                         | 51906156911   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:18.457214+00 |
+| 1411803        | Alvaro Simon Castro Sevillano                         | 5190615691    | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1695237        | Andrey Alcántara                                      | 979953084     | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:00.438403+00 |
+| 1518357        | Angel Trinidad                                        | 8095197291    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:30.687414+00 |
+| 1508685        | BenjamÃ­n SanromÃ¡n                                   | 522223487894  | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:26.790871+00 |
+| 1345429        | Berlendo Collot                                       | 5618167086    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:33.231271+00 |
+| 1358366        | Deivis Segundo Escobar Rosales                        | 51923849128   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:40.396324+00 |
+| 1523057        | Denia GutiÃ©rrez                                      | 17866142889   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:13.494154+00 |
+| 1382453        | Diane Reyes                                           | 18687122578   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:24.441907+00 |
+| 1358506        | Diego Moises Ostos Lezama                             | 951223399     | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:56.068462+00 |
+| 1338218        | DORALI ROSARIO                                        | 584141875667  | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:28.854128+00 |
+| 1499792        | Duliana Olivo                                         | 17866952765   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:39.571568+00 |
+| 1568428        | Duval De La Cruz Dominguez                            | 9221351660    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:24.078852+00 |
+| 1677501        | Edixon Escobar                                        | 584124309199  | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:14.845751+00 |
+| 1297782        | Eduardo Antonio Garcia Yarleque                       | 957808504     | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:21.455532+00 |
+| 1718918        | Erikbeth Gutiérrez                                    | 4247039516    | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1351880        | Eveling Pozo                                          | 77472696      | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:59.607671+00 |
+| 1354483        | Ezequiel Fernando Mariano Colon                       | 8094315545    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:29.532559+00 |
+| 1425694        | Farid Saravia                                         | 51926621043   | Mitsy Cordero         | true           | false              | 2026-07-02 17:58:52.756556+00 |
+| 1468735        | Fragrance  of Life                                    | 18682641664   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:26.321568+00 |
+| 1343604        | Francisco Alberto Tavarez Moreno                      | 8299248456    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:19.882289+00 |
+| 1415218        | Franky Ruiz                                           | 51998152077   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:07.153228+00 |
+| 1694068        | Freddy Chaupin Sosa                                   | 994538796     | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:12.774971+00 |
+| null           | Gean carlo Vanegas                                    | 734137877     | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:01.733812+00 |
+| 1657842        | Gean carlo Vanegas                                    | 9734137877    | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1520076        | Gerson Vásquez julca                                  | 915385286     | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:57.465878+00 |
+| 1506009        | Gilberto Sanchez Macías                               | 4531415070    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:21.732366+00 |
+| null           | GOLDEN                                                | 51946257367   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:33.866699+00 |
+| 1314946        | Golden Jose Ancieta                                   | 946257367     | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1637353        | Gregory Espina                                        | 9548573144    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:47.017018+00 |
+| 1665006        | Gregory Garrido                                       | 7866788560    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:53.839459+00 |
+| null           | Gustavo Alberto VidoÃ±a                               | 50588897346   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:31.281691+00 |
+| 1389314        | Gustavo Alberto Vidoña                                | 588897346     | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1729821        | Gustavo Márquez                                       | 04249531808   | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Habibis                                               | 50583359808   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:16.250262+00 |
+| 1599212        | Hilda Ysa Espinal Diaz                                | 18092405658   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:28.026571+00 |
+| 1397473        | Holman Martinez                                       | 50558010213   | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Holman Martinez                                       | 17866879611   | Mitsy Cordero         | true           | false              | 2026-07-02 17:58:49.125063+00 |
+| 1400723        | Inzamam Buksh                                         | 5926942943    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:32.406058+00 |
+| 1708653        | Isaias Alvarado Serrano                               | 6183642074    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:45.128785+00 |
+| 1329025        | Jarry Jagger Rojas García                             | 51987765291   | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1258004        | Jazmin Flores Mondragon                               | 966209308     | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:18.821197+00 |
+| 1696859        | Jennifer Granja                                       | 50576727089   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:46.65682+00  |
+| 1487866        | Joaquin Noguera                                       | 7543010245    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:56.933439+00 |
+| 1419573        | Joel Falcon Huaman                                    | 5199092834    | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Joel Falcon Huaman                                    | 1990928345    | Mitsy Cordero         | true           | false              | 2026-07-02 17:58:51.546236+00 |
+| 1644112        | Jorge FariÃ±as / Time                                 | 584244615219  | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:25.376463+00 |
+| 1529856        | Jorge Mario Ramos                                     | 2065102600    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:46.368475+00 |
+| 1363429        | Jorge RaÃºl Huallanca GÃ¡lvez                         | 51963746142   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:00.15475+00  |
+| 1687423        | JosÃ© Ãngel RodrÃ­guez                               | 584129605622  | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:02.090015+00 |
+| 1257993        | Juan Colmenares                                       | 913444239     | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:24.624489+00 |
+| 1687432        | Julio Cesar Amaya CortÃ©s                             | 573108831395  | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:16.336549+00 |
+| null           | Julirsa Elvira Huayas Camargo                         | 51992268397   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:22.027049+00 |
+| 1414159        | Julirsa Elvira Huayas Camargo                         | 5199226839    | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1380483        | Kahvell Powell                                        | 18767755043   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:24.258977+00 |
+| null           | Karina Arocha                                         | 17866007296   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:04.59365+00  |
+| 1408486        | Karina Arocha                                         | 4145551529    | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1528243        | Kissys Matos Matos                                    | 8092985996    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:32.777858+00 |
+| 1528248        | Leandro Blanco                                        | 9124410368    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:36.001102+00 |
+| 841860         | lizaPerfumes                                          | 584167366546  | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:47.196653+00 |
+| 1350870        | Luis Fabricio Luis Sanchez                            | 51993865356   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:34.96529+00  |
+| 1631176        | Lure Import                                           | 51955350004   | Mitsy Cordero         | true           | false              | 2026-07-02 17:58:54.342253+00 |
+| null           | Maos Parfum Comercial Rosales                         | 50588271627   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:06.254847+00 |
+| 1410738        | Marielena Parra                                       | 7867948749    | Mitsy Cordero         | true           | false              | 2026-07-02 17:58:55.413298+00 |
+| 1544639        | Matheus dos Anjos Sousa                               | 5978425717    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:41.877064+00 |
+| 1359309        | Michael Soncco Condori                                | 51993488652   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:17.819567+00 |
+| 1501634        | Misael Rodriguez Perez                                | 18299668994   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:14.312206+00 |
+| 1553127        | Natividad Walker                                      | 2013640399    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:26.607268+00 |
+| 1382335        | Nelson Alfredo Lazo Rivera                            | 583359808     | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1369259        | Oscar Ascencio                                        | 3911751796    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:32.865182+00 |
+| 1414323        | Oscar Scott  Mendoza Lovo                             | 5057789587    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:09.913978+00 |
+| 1421162        | Randy Christopher Landeo CalderÃ³n                    | 51967317655   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:01.171393+00 |
+| 1393717        | Rider Antonio Mayorga Raytt                           | 557146782     | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Rider Antonio Mayorga Raytt                           | 50557146782   | Mitsy Cordero         | true           | false              | 2026-07-02 17:58:57.53941+00  |
+| 1363286        | Rolph Rickly Pierre Ev                                | 18094332239   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:19.517244+00 |
+| 1353224        | Roussbel Wilder Mamani Mamani                         | 1962220091    | Mitsy Cordero         | true           | false              | 2026-07-02 17:58:49.003176+00 |
+| 1299582        | Starki Maribel Garcia                                 | 4147634853    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:15.667287+00 |
+| 1358475        | Tamara Imreish                                        | 9802878139    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:46.097936+00 |
+| 1647382        | U-Envios                                              | 51999508508   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:07.96327+00  |
+| 1637498        | Wim Cix (Wiston Jherardy Sanchez Roque                | 51970177330   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:28.946165+00 |
+| null           | Winston Javier Montenegro Montenegro                  | 50586785841   | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:08.140428+00 |
+| 1301585        | Winston Javier Montenegro Montenegro                  | 86785841      | Mitsy Cordero         | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1644108        | Yasenka Aleman                                        | 5618973798    | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:10.097939+00 |
+| 1340415        | YOHANA TASAYCO HUASASQUICHE                           | 949217701     | Mitsy Cordero         | true           | false              | 2026-07-02 17:59:14.934669+00 |
+| null           | Adriel Huaman Valladares                              | 51947526675   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:49.493561+00 |
+| 1517370        | Adriel Huaman Valladares                              | 947526675     | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 795624         | Alexandra Ramones                                     | 584244380038  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:58.374481+00 |
+| 1621191        | Argen Estredo                                         | 04241306796   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:22.944353+00 |
+| 1289702        | Arian Alegria Calle                                   | 923815248     | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Arian Alegria Calle                                   | 51923815248   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:23.986999+00 |
+| 1336240        | Arismendy Flores                                      | 18494049104   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:49.029883+00 |
+| 1468088        | Aromas Finos                                          | 523313533963  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:55.209851+00 |
+| 1321177        | Arturo Rodriguez                                      | 584244266882  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:59.231373+00 |
+| 1322628        | Bengi Estrada                                         | 577863969     | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Bengi Estrada                                         | 50577863969   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:57.022034+00 |
+| 1729910        | Brayan Antonio Tijerino Alavarado                     | 76784758      | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1594948        | BRIAN PEREIRA CANTILLO                                | 573006456591  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:12.682365+00 |
+| null           | Brooklyn Store                                        | 50588115344   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:20.724054+00 |
+| 1657509        | Carlos Jesus Flores Fuentes                           | 2614469973    | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Carlos Jesus Flores Fuentes/ KISR ELIXIR PARFUMS      | 526144699733  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:32.21874+00  |
+| 1657851        | Coco Mazaya Ve LLC                                    | 584145230278  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:15.945059+00 |
+| 1489210        | Dana Alexa Areas Torrez                               | 5887781860    | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Dana Alexa Areas Torrez                               | 50588778186   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:51.730539+00 |
+| 1725919        | Daniel  Lopez                                         | 5413049116    | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1172194        | Davide Lardieri                                       | 9547902554    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:55.11774+00  |
+| null           | Diego Zambrano                                        | 4147092434    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:55.501731+00 |
+| null           | Distribuidora Lookssca C.A                            | 3058460940    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:56.058623+00 |
+| 1614882        | Eduardo  Narvaez                                      | 9842386006    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:38.278561+00 |
+| null           | El Karamanchel                                        | 50581557078   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:51.831375+00 |
+| 1729811        | Elario Nesah                                          | 5978985832    | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Estilo 360                                            | 50588374807   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:59.784809+00 |
+| 1528726        | Eulay Magallanes                                      | 3056849153    | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 460680         | Evas Beauty Brands Beauty Brands                      | 7866785353    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:58.09296+00  |
+| 1198433        | Fabian Velasco                                        | 584145613804  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:03.573634+00 |
+| 1417585        | Fabrizio Alexander Semorile Orellana                  | 936515145     | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:03.853046+00 |
+| 1657985        | FELIX  CLUSMAN / AMEX Clusman Urcia                   | 51985275226   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:57.179413+00 |
+| 1659929        | FRAGANCY PERU S.A.C.RUC: 20606273674                  | 51978618854   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:23.314054+00 |
+| 539901         | Francismar Duque                                      | 4243127712    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:12.862536+00 |
+| 1323496        | Francys Puerta                                        | 584145235380  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:35.142948+00 |
+| 1643876        | Fulvio Davila                                         | 581557078     | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Gerardo DomÃ­nguez Jaramillo                          | 523334667366  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:28.572438+00 |
+| 1654814        | Gerardo Domínguez Jaramillo                           | 2333466736    | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 687708         | Giuseppe Morreales                                    | 3054272966    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:55.026414+00 |
+| 1432188        | Gustave Saint Fleur                                   | 17866856500   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:26.890473+00 |
+| 1632717        | Hector Gonzalez                                       | 7869046018    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:43.172178+00 |
+| 1289183        | Hector Jose Salazar Vento                             | 584127713230  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:59.258711+00 |
+| 1050679        | Heidi Diaz                                            | 9548807508    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:50.499101+00 |
+| 1488136        | Isai Obed Palacios                                    | 5126442104    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:20.455211+00 |
+| 1252926        | Israel Astudillo                                      | 526463419589  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:54.291394+00 |
+| 1484845        | Jacob de Jesús Giacoman Guillen                       | 588374807     | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1104104        | Jandy Encarnacion                                     | 1809358665    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:57.117808+00 |
+| 460700         | Jorge de Freitas                                      | 584241684522  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:21.178231+00 |
+| 460684         | Jorgelina Rodriguez                                   | 584126858290  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:55.234014+00 |
+| null           | Jose Antonio Ferreira                                 | 584144482906  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:58.281857+00 |
+| 839626         | José Manuel Escobar                                   | 584244426929  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:54.203372+00 |
+| 1642519        | Joseling Karina Ordoñez Varela                        | 588115344     | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1260732        | Josely Anselmi                                        | 7326244891    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:58.117384+00 |
+| null           | Karla Romero                                          | 584127877632  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:34.794481+00 |
+| 756289         | Kob Enterprise LLC Kob Enterprise LLC                 | 4693990603    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:19.330341+00 |
+| 1196395        | Leonardo Lelli                                        | 584127689227  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:53.212625+00 |
+| 1312564        | Lisbeth Medrano                                       | 8298563304    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:51.919879+00 |
+| 1660055        | LJ CONSULTORÃAS SAC                                  | 51947556789   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:36.704254+00 |
+| 841858         | Luis Trompiz                                          | 4243446644    | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1513950        | Lunara SF                                             | 14156961501   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:54.018274+00 |
+| 1593097        | Magdelys Bautista                                     | 4249408950    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:57.2074+00   |
+| 1671855        | MarÃ­a Auxiliadora Olivares                           | 13053999624   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:18.18774+00  |
+| 1245614        | Maria Esperanza Villamizar de Galvis                  | 584140750764  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:39.753172+00 |
+| 1199729        | Marlyn Ruiz Quezada                                   | 8095179753    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:57.630487+00 |
+| null           | Maryore Mora                                          | 584244594899  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:51.257383+00 |
+| 1197509        | Maryore Mora                                          | 5842445948    | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1607477        | Merkafur C,A.                                         | 04145262130   | Nathalie Ravelo       | true           | false              | 2026-07-02 18:00:00.618836+00 |
+| 1714439        | Miguel Angel Burrolaga Garcia                         | 5216621441300 | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1607481        | Myriam Mora De Contreras                              | 7866033311    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:51.990305+00 |
+| 1657987        | Nancy Delgado                                         | 584166140504  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:37.910867+00 |
+| 1388499        | Olorgrato Aromas  Perfumes y más SRL                  | 8095164712    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:01.076738+00 |
+| 1657986        | Olympo perfumeria                                     | 584242733526  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:28.663821+00 |
+| 948804         | Paula Goncalvez                                       | 4125744264    | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1496698        | Perfumes Divepin                                      | 584142496483  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:58.407859+00 |
+| 1350872        | Rafael Mendoza Castillo                               | 8297208334    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:43.901403+00 |
+| 1269629        | Riana MontebugÃ±ole                                   | 584121988070  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:13.037951+00 |
+| 1708652        | Ricardo Cardenas                                      | 13462980765   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:48.292265+00 |
+| 460647         | Ricardo Nuñez                                         | 04147854292   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:08.863503+00 |
+| 539910         | Samer Matar                                           | 9393010217    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:12.311196+00 |
+| 1084944        | Sandra Hernandez                                      | 5841444143    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:56.898764+00 |
+| 941337         | Suly Maribel Portillo Agustín                         | 5618595256    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:45.823276+00 |
+| 460685         | Tecni Mundo 21, C.A. Tecni Mundo 21, C.A.             | 584244632274  | Nathalie Ravelo       | true           | false              | 2026-07-02 17:58:57.912502+00 |
+| 1685108        | Top Perfumes LLC                                      | 14077317002   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:55.705811+00 |
+| 867486         | Víctor Andrés  Castellano Piña                        | 4126930331    | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1327626        | VITE OPERATIONS SAC VAT 20604044899                   | 51981095476   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:07.781173+00 |
+| 1605970        | Wixez Group LLC                                       | 4845850053    | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:43.078673+00 |
+| 1217657        | Yamileth moreno                                       | 04120831810   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:37.272589+00 |
+| 1668651        | Yelba de Socorro Montenegro Vásquez                   | 5055701860    | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| null           | Yelba Montenegro VÃ¡squez                             | 50557018603   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:51.710935+00 |
+| 1715756        | Yesica La Cruz Sequera                                | 584124879910  | Nathalie Ravelo       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1394494        | Ylmar Marcano                                         | 04142021108   | Nathalie Ravelo       | true           | false              | 2026-07-02 17:59:33.412954+00 |
+| 1708659        | Colaaaaaa                                             | 571111111111  | Ruben Justo           | true           | false              | 2026-07-02 17:59:48.480247+00 |
+| 1710803        | Colaaax Ordenadaax                                    | 523310113510  | Ruben Justo           | true           | false              | 2026-07-02 17:59:14.213776+00 |
+| 1687639        | Direccion Prueba                                      | 5842477112332 | Ruben Justo           | true           | false              | 2026-07-02 17:59:38.647462+00 |
+| 1708607        | Fanny Prueba                                          | 576687281222  | Ruben Justo           | true           | false              | 2026-07-02 17:58:58.972386+00 |
+| null           | pruebita testing                                      | 44987563217   | SystemsPruebas        | true           | false              | 2026-07-09 20:37:25.539199+00 |
+| 581125         | Luzmar Quintero                                       | 7868574485    | Vendedor Interno      | true           | false              | 2026-07-02 17:58:55.141559+00 |
+| 1187477        | Margarita Tapia                                       | 7862624830    | Vendedor Interno      | true           | false              | 2026-07-02 17:58:59.970551+00 |
+| 1338214        | Lisbeth MillÃ¡n                                       | 584147774241  | Vendedor Nuevo        | true           | false              | 2026-07-02 17:59:31.650641+00 |
+| 1419962        | Chevelle Britto                                       | 1868266471    | Yusleidy Romero       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1543574        | Frantzo Laguerre                                      | 1809406139    | Yusleidy Romero       | true           | false              | 2026-07-02 17:59:39.30185+00  |
+| 1319801        | Lilliam Del Carmen Davila Salgado                     | 581914778     | Yusleidy Romero       | false          | false              | 2026-07-15 16:09:03.365952+00 |
+| 1589834        | Malana Wickham                                        | 8684857853    | Yusleidy Romero       | true           | false              | 2026-07-02 18:00:00.327119+00 |
+| null           | empresa ma,e                                          | 7865364107    | null                  | true           | false              | 2026-07-02 17:59:27.255242+00 |

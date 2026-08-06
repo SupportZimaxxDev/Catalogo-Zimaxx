@@ -11,6 +11,7 @@ const AuditLogAdmin = lazy(() => import('./pages/admin/AuditLogAdmin'))
 const VendedorasAdmin = lazy(() => import('./pages/admin/VendedoresAdmin'))
 const FlashSalesAdmin = lazy(() => import('./pages/admin/FlashSalesAdmin'))
 const OrdersAdmin = lazy(() => import('./pages/admin/OrdersAdmin'))
+const SuperAdminPanel = lazy(() => import('./pages/admin/SuperAdminPanel'))
 
 // Fallback de Suspense: sin esto, /admin queda en blanco mientras baja el chunk.
 function PageLoader() {
@@ -34,6 +35,8 @@ export default function App() {
           <Route path="vendedoras" element={<VendedorasAdmin />} />
           <Route path="flash" element={<FlashSalesAdmin />} />
           <Route path="orders" element={<OrdersAdmin />} />
+          {/* Solo superadmin: AdminLayout corta la ruta para cualquier otro */}
+          <Route path="superadmin" element={<SuperAdminPanel />} />
         </Route>
       </Routes>
     </Suspense>
