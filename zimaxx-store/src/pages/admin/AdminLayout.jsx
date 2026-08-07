@@ -148,10 +148,15 @@ export default function AdminLayout() {
     return <Navigate to="/admin" replace />
   }
 
-  // La pestaña Superadmin es de un solo perfil: no alcanza con ocultarla, la
-  // ruta también se corta acá (y las RPC de la base rechazan a cualquier otro
-  // aunque las llame a mano — ver migration-2026-08-05-superadmin.sql).
-  if (!isSuper && location.pathname.startsWith('/admin/superadmin')) {
+  // Las pestañas Superadmin y Métricas son de un solo perfil: no alcanza con
+  // ocultarlas, la ruta también se corta acá (y las RPC de la base rechazan a
+  // cualquier otro aunque las llame a mano — ver
+  // migration-2026-08-05-superadmin.sql y migration-2026-08-06-sa-metrics.sql).
+  if (
+    !isSuper &&
+    (location.pathname.startsWith('/admin/superadmin') ||
+      location.pathname.startsWith('/admin/metrics'))
+  ) {
     return <Navigate to="/admin" replace />
   }
 
@@ -164,6 +169,7 @@ export default function AdminLayout() {
     ...(isAdmin ? [{ to: '/admin/flash', label: t('flashSales') }] : []),
     { to: '/admin/orders', label: t('orders'), badge: newOrders },
     ...(isSuper ? [{ to: '/admin/superadmin', label: `🔐 ${t('superadmin')}` }] : []),
+    ...(isSuper ? [{ to: '/admin/metrics', label: `📈 ${t('metrics')}` }] : []),
   ]
 
   return (

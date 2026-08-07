@@ -799,7 +799,16 @@ begin
   select
     d.sku,
     case
-      when d.price_raw ~ '^[0-9]+(\.[0-9]+)?$' then d.price_raw::numeric
+      -- 2026-08-06 (migration-2026-08-06-require-price.sql): se suma `> 0`. Un 0
+      -- (o "0.00", o una columna corrida que dejó ceros) no es un precio: la fila
+      -- pasa a contarse en `invalid_prices` en vez de publicar el producto en
+      -- $0.00. Todo lo de abajo ya filtraba por `price is not null`, así que
+      -- hereda la regla sin tocar una línea más. Efecto secundario buscado: un
+      -- producto que hoy tiene precio y se sube con 0 cae en tmp_deactivate igual
+      -- que si no viniera en el archivo — y eso sale en el conteo "a desactivar"
+      -- del preview, así que no es silencioso.
+      when d.price_raw ~ '^[0-9]+(\.[0-9]+)?$' and d.price_raw::numeric > 0
+        then d.price_raw::numeric
       else null
     end as price,
     case
@@ -1146,7 +1155,12 @@ begin
       on pp.product_id = p.id
      and pp.price_list_id = v_client.price_list_id
     where p.active
-      and pp.price is not null;
+      -- 2026-08-06 (migration-2026-08-06-require-price.sql): `> 0` y no
+      -- `is not null`. Un precio 0 no es un precio — era la puerta por la que un
+      -- producto entraba al catálogo en $0.00 y se podía pedir gratis
+      -- (product_prices.price es `not null check (price >= 0)`, así que 0 es un
+      -- valor válido para la tabla, y el Excel de precios lo aceptaba).
+      and pp.price > 0;
   end if;
 
   return jsonb_build_object(
@@ -1193,6 +1207,11 @@ as $$
   from public.flash_sales fs
   join public.products p on p.id = fs.product_id and p.active
   where fs.active
+    -- Mismo criterio que get_catalog (2026-08-06): una oferta en 0 no se
+    -- publica. flash_sales.price tiene el mismo `check (price >= 0)`, así que
+    -- una carga masiva con la columna de precio corrida podía llenar la sección
+    -- Flash Sale de $0.00.
+    and fs.price > 0
     and now() >= fs.starts_at
     and now() < fs.expires_at;
 $$;
@@ -1258,17 +1277,27 @@ begin
         from public.flash_sales fs
         where fs.product_id = v_id
           and fs.active
+          and fs.price > 0
           and now() >= fs.starts_at
           and now() < fs.expires_at
         order by fs.price
         limit 1;
       end if;
       -- Sin flash vigente (o expiró entre carrito y checkout): precio de lista.
+      -- `pp.price > 0` (2026-08-06): un 0 se comporta igual que "no hay fila",
+      -- o sea que v_price queda null y todo lo que ya sabía tratar "sin precio"
+      -- (el total que no suma, el '—' de la tabla de pedidos, el PDF sin
+      -- precios) sigue funcionando sin cambios. El ítem NO se descarta a
+      -- propósito: descartarlo lo haría desaparecer de la vista de cotizaciones
+      -- con precio vigente sin decir nada. Quien decide qué hacer con una línea
+      -- sin precio es el que crea el pedido — ver create_order y
+      -- convert_quote_to_order.
       if v_price is null then
         select pp.price into v_price
         from public.product_prices pp
         where pp.product_id = v_id
-          and pp.price_list_id = v_client.price_list_id;
+          and pp.price_list_id = v_client.price_list_id
+          and pp.price > 0;
       end if;
     end if;
 
@@ -1333,6 +1362,7 @@ declare
   v_result     jsonb;
   v_items      jsonb;
   v_order_id   uuid;
+  v_no_price   text;
   v_hint       text := left(coalesce(p_token, ''), 8);
   v_lines      int  := case when jsonb_typeof(p_items) = 'array'
                             then jsonb_array_length(p_items) end;
@@ -1390,6 +1420,30 @@ begin
     values (v_client.id, v_hint, 'ningún ítem válido (productos inactivos o inexistentes)',
             v_lines, v_kind, p_items);
     return null;
+  end if;
+
+  -- 2026-08-06 (migration-2026-08-06-require-price.sql): un pedido real con una
+  -- línea sin precio no se guarda. Con el filtro de get_catalog el cliente ya no
+  -- puede ver un producto sin precio, pero queda como red: la sección Flash Sale
+  -- se sirve sin token (no sabe la lista del cliente) y si una oferta expira
+  -- entre el carrito y el checkout el precio cae a la lista, que puede no tener
+  -- ese producto. Se rechaza el pedido ENTERO y queda en order_failures con los
+  -- SKU culpables, en vez de guardar una línea en cero: el admin lo ve en el
+  -- aviso rojo de Pedidos, carga el precio y le da "Recuperar". En una cotización
+  -- no aplica — no llevan precio por definición.
+  if v_kind = 'order' then
+    select string_agg(e->>'sku', ', ' order by e->>'sku')
+      into v_no_price
+    from jsonb_array_elements(v_items) e
+    where e->>'price' is null;
+
+    if v_no_price is not null then
+      insert into public.order_failures (client_id, token_hint, reason, line_count, kind, items)
+      values (v_client.id, v_hint,
+              format('productos sin precio en la lista del cliente: %s', v_no_price),
+              v_lines, v_kind, p_items);
+      return null;
+    end if;
   end if;
 
   -- Carrera entre dos envíos del mismo carrito (el cliente toca dos veces y
@@ -1728,6 +1782,7 @@ declare
   v_list_code text;
   v_result    jsonb;
   v_email     text;
+  v_no_price  text;
   v_stock     jsonb   := null;
   v_applied   boolean;
 begin
@@ -1761,6 +1816,27 @@ begin
   end if;
 
   v_result := public.compute_order_items(v_client.id, v_order.items, 'order');
+
+  -- Misma regla que create_order, por la puerta del admin (2026-08-06,
+  -- migration-2026-08-06-require-price.sql): sin esto, convertir una cotización
+  -- que tiene un producto sin precio en la lista del cliente creaba un pedido con
+  -- esa línea en null y un total que no la incluía — un pedido mal facturado, sin
+  -- ningún aviso. Acá no hace falta order_failures: es una acción del panel, así
+  -- que el mensaje se muestra tal cual y dice qué SKU arreglar.
+  select string_agg(e->>'sku', ', ' order by e->>'sku')
+    into v_no_price
+  from jsonb_array_elements(v_result->'items') e
+  where e->>'price' is null;
+
+  if v_no_price is not null then
+    raise exception 'estos productos no tienen precio en la lista del cliente: %. Cargá el precio en la pestaña Precios (o quitalos de la cotización con Editar) y volvé a convertirla.', v_no_price;
+  end if;
+
+  -- Mismo guard que update_order_items, que sí lo tenía: si todos los ítems se
+  -- cayeron (productos desactivados), convertir dejaría un pedido vacío.
+  if jsonb_array_length(v_result->'items') = 0 then
+    raise exception 'la cotización no tiene ningún producto válido';
+  end if;
 
   -- La conversión recalcula precios, no productos ni cantidades, así que
   -- apply_order_stock puede leer los ítems ya guardados (el update de abajo
@@ -2662,6 +2738,259 @@ $$;
 
 revoke execute on function public.sa_delete_price_list(uuid) from public, anon;
 grant execute on function public.sa_delete_price_list(uuid) to authenticated;
+
+-- ============================================================
+-- RPC de la pestaña Métricas (2026-08-06,
+-- migration-2026-08-06-sa-metrics.sql)
+--
+-- Los KPIs del sistema de un saque, para MetricsAdmin.jsx (que la llama cada
+-- 60s por polling). Solo superadmin, igual que las de arriba, pero es la única
+-- sa_* que NO llama a sa_log(): es de solo lectura, y auditar cada refresco
+-- llenaría admin_audit_log con una fila por minuto por pestaña abierta.
+--
+-- Los agregados cruzan TODAS las vendedoras, así que no pueden calcularse en
+-- el cliente: con RLS, una vendedora ve solo sus pedidos y el número saldría
+-- distinto según quién mira.
+-- ============================================================
+
+-- La ventana temporal de la RPC (`created_at >= now() - N days`) sin este
+-- índice es un seq scan de orders cada 60 segundos por pestaña abierta.
+create index if not exists orders_created_idx on public.orders (created_at desc);
+
+-- Las filas de 'update_order_status' son la mayoría de admin_audit_log y la
+-- subconsulta del tiempo de atención las busca por action + order_id.
+create index if not exists admin_audit_log_order_status_idx
+  on public.admin_audit_log (order_id, created_at)
+  where action = 'update_order_status';
+
+-- Cuentas de prueba excluidas de TODOS los agregados de métricas (no se borra
+-- ni se toca nada: solo quedan afuera del cálculo). EDITAR ACÁ para sumar o
+-- sacar una cuenta: es el único lugar donde vive la lista. La RPC devuelve
+-- además los nombres que matchearon (`excluidas`) y el panel los muestra al
+-- pie de la tabla, así que si alguna vendedora real cae en un patrón por
+-- casualidad se nota en vez de desaparecer del ranking en silencio.
+create or replace function public.sa_metrics_test_vendedora_patterns()
+returns text[]
+language sql
+immutable
+as $$
+  select array[
+    'systemspruebas%',  -- la cuenta de pruebas de sistemas (y sus variantes numeradas)
+    '%prueba%',         -- "Prueba", "Pruebas", "Cuenta de prueba"
+    '%demo%'
+  ];
+$$;
+
+revoke execute on function public.sa_metrics_test_vendedora_patterns() from public, anon, authenticated;
+
+create or replace function public.sa_is_test_vendedora(p_name text)
+returns boolean
+language sql
+immutable
+as $$
+  select coalesce(p_name, '') ilike any (public.sa_metrics_test_vendedora_patterns());
+$$;
+
+revoke execute on function public.sa_is_test_vendedora(text) from public, anon, authenticated;
+
+-- Un único jsonb con todo lo que dibuja la pestaña. Convenciones de los
+-- filtros, iguales en todas las secciones:
+--   * "pedido"     = kind = 'order' and status <> 'cancelled'
+--   * "cotización" = kind = 'quote'
+--   * "cancelado"  = kind = 'order' and status = 'cancelled'
+-- Un pedido cancelado no suma monto ni cuenta como pedido: se reporta aparte
+-- en `cancelados`.
+create or replace function public.sa_metrics_overview(p_days int default 14)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+stable
+as $$
+declare
+  v_days   int;
+  v_from   timestamptz;
+  v_to     timestamptz;
+  v_result jsonb;
+begin
+  if not public.is_superadmin() then
+    raise exception 'not authorized';
+  end if;
+
+  -- El panel manda 7/14/30; el clamp es para que un p_days a mano (0, -5,
+  -- 99999) no devuelva una ventana absurda ni un generate_series gigante.
+  v_days := greatest(1, least(coalesce(p_days, 14), 365));
+  v_to   := now();
+  v_from := v_to - (v_days || ' days')::interval;
+
+  with
+  test_v as (
+    select id, name
+    from public.vendedores
+    where public.sa_is_test_vendedora(name)
+  ),
+  -- Base común: los pedidos/cotizaciones del período con su vendedora, ya sin
+  -- cuentas de prueba. LEFT JOIN en los dos saltos porque orders.client_id y
+  -- clients.vendedora_id son nullable — un pedido sin vendedora es un pedido
+  -- real y tiene que sumar en los totales (sale en la tabla con "—"), a
+  -- diferencia de uno de prueba, que se descarta.
+  base as (
+    select o.id, o.kind, o.status, o.total, o.created_at, c.vendedora_id, v.name as vendedora
+    from public.orders o
+    left join public.clients    c on c.id = o.client_id
+    left join public.vendedores v on v.id = c.vendedora_id
+    where o.created_at >= v_from
+      and (v.name is null or not public.sa_is_test_vendedora(v.name))
+  ),
+  totals as (
+    select
+      count(*) filter (where kind = 'order' and status <> 'cancelled')          as pedidos,
+      count(*) filter (where kind = 'quote')                                    as cotizaciones,
+      -- distinct sobre vendedora_id (no sobre el nombre): count(distinct)
+      -- ignora los null, así que los pedidos sin vendedora no inflan el número.
+      count(distinct vendedora_id) filter (where kind = 'order' and status <> 'cancelled')
+                                                                                as vendedoras_activas,
+      coalesce(sum(total) filter (where kind = 'order' and status <> 'cancelled'), 0)
+                                                                                as monto_capturado,
+      avg(total) filter (where kind = 'order' and status <> 'cancelled')         as ticket_promedio,
+      count(*) filter (where kind = 'order' and status = 'cancelled')            as cancelados
+    from base
+  ),
+  -- Agrupa por NOMBRE y no por id: vendedores tiene un índice único sobre
+  -- lower(name), así que no hay dos vendedoras con el mismo nombre, y así el
+  -- grupo de "sin vendedora" (null) sale solo, sin un coalesce que se pueda
+  -- confundir con una vendedora que se llame "—".
+  por_vendedora as (
+    select
+      vendedora,
+      count(*) filter (where kind = 'order' and status <> 'cancelled')          as pedidos,
+      coalesce(sum(total) filter (where kind = 'order' and status <> 'cancelled'), 0)
+                                                                                as monto,
+      avg(total) filter (where kind = 'order' and status <> 'cancelled')         as ticket,
+      count(*) filter (where kind = 'quote')                                     as cotizaciones
+    from base
+    group by vendedora
+  ),
+  -- PRIMERA vez que cada pedido llegó a 'done'. min(created_at) y no el
+  -- último: un pedido puede ir done → new → done varias veces (se reabre para
+  -- corregirlo) y lo que se mide es cuánto tardó en atenderse la primera vez.
+  -- Sin filtro de fecha acá a propósito: el período se aplica sobre
+  -- orders.created_at, y el "done" de un pedido del borde de la ventana puede
+  -- ser posterior.
+  first_done as (
+    select a.order_id, min(a.created_at) as done_at
+    from public.admin_audit_log a
+    where a.action = 'update_order_status'
+      and a.detail->>'to_status' = 'done'
+      and a.order_id is not null
+    group by a.order_id
+  ),
+  -- Solo kind='order': una cotización no se "atiende", se convierte. Sin
+  -- filtro de status — un pedido que se atendió y después se canceló igual
+  -- tardó lo que tardó. Da null si ningún pedido del período llegó a 'done'
+  -- todavía: el panel muestra "—".
+  attend as (
+    select avg((extract(epoch from (fd.done_at - b.created_at)) / 3600.0)::numeric) as horas
+    from base b
+    join first_done fd on fd.order_id = b.id
+    where b.kind = 'order'
+  ),
+  -- Cotizaciones que se pasaron a pedido en el período. Se cuenta sobre
+  -- admin_audit_log y no sobre orders porque después de convertirla la fila de
+  -- orders ya dice kind='order' y no queda rastro de que fue cotización.
+  convertidas as (
+    select count(*) as n
+    from public.admin_audit_log a
+    left join public.clients    c on c.id = a.client_id
+    left join public.vendedores v on v.id = c.vendedora_id
+    where a.action = 'convert_quote_to_order'
+      and a.created_at >= v_from
+      and (v.name is null or not public.sa_is_test_vendedora(v.name))
+  ),
+  -- Pedidos que el cliente mandó y NO entraron, y cuántos se rescataron con
+  -- recover_order_failure. client_id es null cuando el token no era válido:
+  -- esos igual cuentan (son fallos reales), no hay vendedora que excluir.
+  fallos as (
+    select
+      count(*)                                                 as total,
+      count(*) filter (where f.recovered_order_id is not null)  as recuperados
+    from public.order_failures f
+    left join public.clients    c on c.id = f.client_id
+    left join public.vendedores v on v.id = c.vendedora_id
+    where f.created_at >= v_from
+      and (v.name is null or not public.sa_is_test_vendedora(v.name))
+  ),
+  -- Un bucket por día para que el mini-gráfico no tenga huecos: los días sin
+  -- ventas vienen en 0 y el front dibuja la barra vacía en vez de saltear la
+  -- fecha. Son v_days + 1 buckets: la ventana arranca a la hora actual de hace
+  -- N días, así que el primer día del gráfico es parcial (a propósito — el
+  -- total del período es exactamente la suma de la serie).
+  dias as (
+    select d as day_start
+    from generate_series(date_trunc('day', v_from), date_trunc('day', v_to), interval '1 day') d
+  ),
+  serie as (
+    select
+      d.day_start::date         as dia,
+      coalesce(sum(b.total), 0) as monto,
+      count(b.id)               as pedidos
+    from dias d
+    left join base b
+           on b.created_at >= d.day_start
+          and b.created_at <  d.day_start + interval '1 day'
+          and b.kind = 'order'
+          and b.status <> 'cancelled'
+    group by d.day_start
+  )
+  select jsonb_build_object(
+    'period', jsonb_build_object('days', v_days, 'from', v_from, 'to', v_to),
+    'totals', (
+      select jsonb_build_object(
+        'pedidos',            pedidos,
+        'cotizaciones',       cotizaciones,
+        'vendedoras_activas', vendedoras_activas,
+        'monto_capturado',    round(monto_capturado, 2),
+        'ticket_promedio',    round(ticket_promedio, 2),
+        'cancelados',         cancelados
+      )
+      from totals
+    ),
+    'por_vendedora', coalesce((
+      select jsonb_agg(
+               jsonb_build_object(
+                 'vendedora',    vendedora,
+                 'pedidos',      pedidos,
+                 'monto',        round(monto, 2),
+                 'ticket',       round(ticket, 2),
+                 'cotizaciones', cotizaciones
+               )
+               -- El desempate por nombre hace el orden estable entre refrescos:
+               -- sin él, dos vendedoras en 0 podían intercambiar de lugar cada
+               -- 60 segundos y la tabla "parpadeaba".
+               order by monto desc, coalesce(vendedora, '') )
+      from por_vendedora
+    ), '[]'::jsonb),
+    'tiempo_a_atender_horas',   (select round(horas, 2) from attend),
+    'cotizaciones_convertidas', (select n from convertidas),
+    'fallos', (
+      select jsonb_build_object('total', total, 'recuperados', recuperados) from fallos
+    ),
+    'serie_diaria', coalesce((
+      select jsonb_agg(
+               jsonb_build_object('dia', dia, 'monto', round(monto, 2), 'pedidos', pedidos)
+               order by dia)
+      from serie
+    ), '[]'::jsonb),
+    'excluidas', coalesce((select jsonb_agg(name order by name) from test_v), '[]'::jsonb)
+  )
+  into v_result;
+
+  return v_result;
+end;
+$$;
+
+revoke execute on function public.sa_metrics_overview(int) from public, anon;
+grant execute on function public.sa_metrics_overview(int) to authenticated;
 
 -- ============================================================
 -- Primer usuario admin:

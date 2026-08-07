@@ -333,6 +333,48 @@ const dict = {
     actionListOwner: 'Dueñas de lista',
     actionSyncListClients: 'Reasignación por lista',
     actionPriceList: 'Lista de precio',
+    // Métricas (2026-08-06) — pestaña solo superadmin
+    metrics: 'Métricas',
+    metricsIntro:
+      'KPIs de todo el sistema, en vivo. Se actualiza solo cada {secs} s. Las cuentas de prueba quedan afuera del cálculo.',
+    metricsRange: 'Rango',
+    metricsDays: 'días',
+    metricsRefresh: 'Actualizar',
+    metricsUpdatedAgo: 'Actualizado hace {age}',
+    metricsJustNow: 'Actualizado recién',
+    metricsCaptured: 'Monto capturado',
+    metricsAvgTicket: 'Ticket promedio',
+    metricsActiveVendedoras: 'Vendedoras activas',
+    metricsAvgAttend: 'Tiempo prom. a atender',
+    metricsNoAttendData: 'aún sin pedidos marcados atendidos',
+    metricsConverted: 'Cotizaciones convertidas',
+    metricsCancelled: 'Cancelados',
+    metricsQuotes: 'Cotizaciones',
+    metricsFailures: 'Fallos de envío',
+    metricsRecovered: 'recuperado(s)',
+    metricsAdoption: 'Adopción por vendedora',
+    metricsVendedora: 'Vendedora',
+    metricsTrend: 'Monto por día',
+    metricsNoData: 'Sin pedidos en el período',
+    metricsPeriodTotal: 'Total del período',
+    metricsPartialFirstDay:
+      'El primer día del gráfico es parcial: la ventana arranca a esta misma hora de hace {days} días.',
+    metricsExcluded: 'Fuera del cálculo (cuentas de prueba):',
+    metricsMigrationMissing:
+      'Falta correr migration-2026-08-06-sa-metrics.sql en la base de datos: la RPC sa_metrics_overview todavía no existe.',
+    // Flash Sales — prender/apagar y reprogramar grupos (2026-08-06)
+    reactivate: 'Reactivar',
+    reactivateGroup: 'Reactivar grupo',
+    flashStatusHint:
+      'En el catálogo se ven solo las ofertas EN VIVO. "Expiró" es por fecha y se arregla reprogramando el vencimiento; "Desactivada" es a mano y se arregla con Reactivar — reprogramar la fecha NO la vuelve a prender.',
+    flashGroupHiddenByFilter: '({n} no se muestran por el filtro)',
+    flashRescheduleWhat: 'Se reprograma el vencimiento de las {n} ofertas del grupo.',
+    flashRescheduleGoLive: '{n} van a verse en el catálogo desde ya.',
+    flashRescheduleStayOff: '{n} están desactivadas y siguen apagadas.',
+    flashRescheduleOnly: 'Solo reprogramar',
+    flashRescheduleAndOn: 'Reprogramar y reactivar todo',
+    invalidZeroPriceHint:
+      'Precio en 0: cuenta como sin precio, así que el producto NO sale en el catálogo. Volvé a cargarlo con el precio real.',
   },
   en: {
     search: 'Search by name or category...',
@@ -653,6 +695,48 @@ const dict = {
     actionListOwner: 'List owners',
     actionSyncListClients: 'List reassignment',
     actionPriceList: 'Price list',
+    // Metrics (2026-08-06) — superadmin-only tab
+    metrics: 'Metrics',
+    metricsIntro:
+      'System-wide KPIs, live. Auto-refreshes every {secs} s. Test accounts are left out of the numbers.',
+    metricsRange: 'Range',
+    metricsDays: 'days',
+    metricsRefresh: 'Refresh',
+    metricsUpdatedAgo: 'Updated {age} ago',
+    metricsJustNow: 'Updated just now',
+    metricsCaptured: 'Captured amount',
+    metricsAvgTicket: 'Average ticket',
+    metricsActiveVendedoras: 'Active sales reps',
+    metricsAvgAttend: 'Avg. time to fulfill',
+    metricsNoAttendData: 'no orders marked fulfilled yet',
+    metricsConverted: 'Quotes converted',
+    metricsCancelled: 'Cancelled',
+    metricsQuotes: 'Quotes',
+    metricsFailures: 'Failed submissions',
+    metricsRecovered: 'recovered',
+    metricsAdoption: 'Adoption by sales rep',
+    metricsVendedora: 'Sales rep',
+    metricsTrend: 'Amount per day',
+    metricsNoData: 'No orders in this period',
+    metricsPeriodTotal: 'Period total',
+    metricsPartialFirstDay:
+      'The first day in the chart is partial: the window starts at this same time {days} days ago.',
+    metricsExcluded: 'Left out of the numbers (test accounts):',
+    metricsMigrationMissing:
+      'migration-2026-08-06-sa-metrics.sql has not been run on the database yet: the sa_metrics_overview RPC does not exist.',
+    // Flash Sales — turning groups on/off and rescheduling (2026-08-06)
+    reactivate: 'Reactivate',
+    reactivateGroup: 'Reactivate group',
+    flashStatusHint:
+      'Only LIVE offers show in the catalog. "Expired" is by date and is fixed by rescheduling the expiry; "Deactivated" was done by hand and is fixed with Reactivate — changing the date does NOT turn it back on.',
+    flashGroupHiddenByFilter: '({n} hidden by the filter)',
+    flashRescheduleWhat: 'This reschedules the expiry of all {n} offers in the group.',
+    flashRescheduleGoLive: '{n} will show in the catalog right away.',
+    flashRescheduleStayOff: '{n} are deactivated and will stay off.',
+    flashRescheduleOnly: 'Reschedule only',
+    flashRescheduleAndOn: 'Reschedule and reactivate all',
+    invalidZeroPriceHint:
+      'Price is 0: that counts as no price, so the product does NOT show in the catalog. Upload it again with the real price.',
   },
 }
 
@@ -672,7 +756,20 @@ export function LanguageProvider({ children }) {
       localStorage.setItem('zimaxx_lang', l)
       setLangState(l)
     }
-    const t = (key) => dict[lang]?.[key] ?? dict.en[key] ?? key
+    // `vars` es opcional y reemplaza {placeholders} en el texto (2026-08-06,
+    // para la pestaña Métricas). Se agregó porque frases como
+    // "Actualizado hace 12 s" / "Updated 12 s ago" cambian el orden de las
+    // palabras entre idiomas: partirlas en dos keys ('Actualizado hace' +
+    // sufijo vacío en español) dejaba una mitad sin sentido en el diccionario.
+    // Las ~330 keys que no llevan variables siguen funcionando igual.
+    const t = (key, vars) => {
+      const raw = dict[lang]?.[key] ?? dict.en[key] ?? key
+      if (!vars) return raw
+      return Object.entries(vars).reduce(
+        (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
+        raw,
+      )
+    }
     return { lang, setLang, t }
   }, [lang])
 

@@ -94,6 +94,21 @@ export async function downloadAuditLogExcel({ rows, header, widths, sheetName, f
   XLSX.writeFile(wb, `zimaxx-registro-movimientos-${filenameStamp}.xlsx`)
 }
 
+// Exporta la tabla "Adopción por vendedora" de la pestaña Métricas
+// (2026-08-06). Mismo criterio que downloadAuditLogExcel: las filas llegan ya
+// armadas desde MetricsAdmin.jsx porque los encabezados dependen de t()
+// (idioma del panel) y los números ya vienen agregados desde
+// sa_metrics_overview. `periodStamp` va en el nombre del archivo para no
+// confundir un export de 7 días con uno de 30.
+export async function downloadMetricsExcel({ rows, header, widths, sheetName, periodStamp }) {
+  const XLSX = await import('xlsx')
+  const ws = XLSX.utils.json_to_sheet(rows, { header })
+  if (widths) ws['!cols'] = widths.map((wch) => ({ wch }))
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, sheetName)
+  XLSX.writeFile(wb, `zimaxx-metricas-${periodStamp}.xlsx`)
+}
+
 export function normalizeHeader(h) {
   return String(h)
     .toLowerCase()

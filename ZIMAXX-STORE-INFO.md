@@ -1,7 +1,16 @@
 # Zimaxx Store — Referencia completa del proyecto
 
 > Documento de referencia para retomar el trabajo en cualquier sesión.
-> Creado: 2026-07-02. Última actualización: 2026-08-05 (**perfil superadmin**:
+> Creado: 2026-07-02. Última actualización: 2026-08-06 (**pestaña 📈 Métricas**,
+> solo superadmin: KPIs de todo el sistema en vivo por polling de 60 s, rango
+> 7/14/30 días, adopción por vendedora y mini-gráfico de monto por día, todo
+> desde una sola RPC `sa_metrics_overview` — punto 50; **migración pendiente de
+> correr**. Segunda tanda: **arreglo del grupo de Flash Sales que reaparecía en
+> el catálogo** + reactivar ofertas y grupos, punto 51, sin migración. Tercera
+> tanda: **un producto sin precio —o con precio 0— no sale en el catálogo, no se
+> cotiza y no se puede pedir**, punto 52, `migration-2026-08-06-require-price.sql`
+> **pendiente de correr**).
+> Antes: 2026-08-05 (**perfil superadmin**:
 > pestaña 🔐 Superadmin para nombrar/quitar admins, cambiar contraseñas y
 > asignar/desasignar listas de precio a vendedoras sin entrar al SQL Editor,
 > restringida a `support5@firstchoiceonline.com` — punto 48; **migración
@@ -216,6 +225,146 @@
 > repetido en dos líneas, idempotencia del doble Atendido, devolución al
 > reabrir/cancelar, cotización que no toca stock, y el bloqueo del update
 > directo a `stock_applied`.
+>
+> 2026-08-06, **punto 50: pestaña 📈 Métricas** (`/admin/metrics`,
+> `MetricsAdmin.jsx` + `migration-2026-08-06-sa-metrics.sql`), a pedido del
+> usuario: los KPIs de todo el sistema en una pantalla, **en vivo**. Solo
+> superadmin — la pestaña se renderiza solo si `isSuper`, `AdminLayout.jsx` corta
+> la ruta `/admin/metrics` igual que la de 🔐 Superadmin, y la RPC exige
+> `is_superadmin()` adentro (`not authorized`). Ocho tarjetas (monto capturado,
+> pedidos, ticket promedio, cotizaciones, vendedoras activas, tiempo promedio a
+> atender, cotizaciones convertidas, cancelados), fallos de envío del período,
+> mini-gráfico de barras del monto por día y tabla "Adopción por vendedora" con
+> export a Excel. Selector de rango 7/14/30 días, default 14.
+> **Tres decisiones de diseño**: (1) **una sola RPC** `sa_metrics_overview` y
+> nada de consultas a las tablas desde el cliente — los agregados cruzan a todas
+> las vendedoras y con RLS el número saldría distinto según quién mira, además de
+> obligar a bajarse el detalle de cada pedido para calcular un promedio; son 7
+> consultas que en una RPC son un round-trip cada 60 s en vez de 7. (2) **polling
+> y no Realtime de Supabase**: un evento de Realtime avisa que cambió UN pedido,
+> y para saber el nuevo promedio hay que volver a pedir todo igual — el timer es
+> la misma llamada sin el websocket abierto. (3) es la **única `sa_*` que no
+> audita**: es de solo lectura, y una fila por refresco dejaría una por minuto
+> por pestaña abierta en `admin_audit_log`.
+> **Cuentas de prueba excluidas** de todos los agregados
+> (`sa_metrics_test_vendedora_patterns()`, array de patrones ILIKE editable en un
+> solo lugar), sin borrar ni tocar nada — y la RPC devuelve los nombres que
+> matchearon (`excluidas`) para que el panel los muestre al pie de la tabla: si
+> alguna vendedora real cae en un patrón, se ve, en vez de desaparecer del
+> ranking en silencio. El tiempo de atención sale de `admin_audit_log` con
+> `min(created_at)` por `order_id` sobre `update_order_status` +
+> `detail->>'to_status' = 'done'` — `min` y no el último, porque un pedido puede
+> ir done → new → done varias veces y lo que se mide es la primera atención; da
+> `null` (y la tarjeta muestra "—" con el motivo) si todavía no hay ninguno.
+> De paso, `t()` en `i18n.jsx` acepta un segundo argumento opcional con
+> `{placeholders}`: frases como "Actualizado hace 12 s" / "Updated 12 s ago"
+> cambian el orden de las palabras entre idiomas y partirlas en dos keys dejaba
+> una mitad sin sentido en el diccionario. Las ~330 keys sin variables no se
+> tocan. **Migración pendiente de correr en producción**, pero el frontend se
+> puede desplegar antes: sin la RPC la pestaña muestra "Falta correr
+> migration-2026-08-06-sa-metrics.sql…" (detecta el `PGRST202` de PostgREST) en
+> vez de romper. Verificado: build limpio, i18n 314/314 keys pareadas, y la
+> migración probada de verdad contra un PostgreSQL 18 desechable arrancando del
+> estado real (schema.sql de HEAD + la migración) y también con `schema.sql` solo
+> — ~35 asserts, incluidos el cuadre de `por_vendedora` contra
+> `totals.monto_capturado`, el `min()` con un pedido que fue done → new → done,
+> la serie diaria sin huecos que suma el total del período, el clamp de `p_days`,
+> y la exclusión de `SystemsPruebas` (sus pedidos de 88.888/77.777 no suman ni
+> aparecen, y su pedido atendido a las 1000 h no movió el promedio). Gating
+> verificado como rol `authenticated`: superadmin recibe el `jsonb`, **admin
+> común y vendedora reciben `not authorized`**, `anon` no tiene ni `execute`.
+>
+> 2026-08-06, **punto 52: un producto sin precio no sale en el catálogo**
+> (`migration-2026-08-06-require-price.sql`), a pedido del usuario. `get_catalog`
+> ya excluía los productos **sin fila** en `product_prices` para la lista del
+> cliente; el agujero era el **precio 0**. `product_prices.price` es
+> `numeric(10,2) not null check (price >= 0)` —o sea que 0 es válido para la
+> tabla— y la regex de parseo de `apply_price_list` (`^[0-9]+(\.[0-9]+)?$`)
+> matchea `"0"` y `"0.00"` igual que cualquier número: una celda en 0 en el Excel
+> de precios (o una columna corrida) alcanzaba para que el producto saliera en el
+> catálogo en **$0.00**, se pudiera agregar al carrito y se registrara **un pedido
+> con total $0.00**. `create_order` recalcula el precio del lado del servidor,
+> pero 0 era "un precio" para toda la cadena, así que lo tomaba como bueno.
+> **La regla nueva, en un enunciado: un precio de 0 es lo mismo que no tener
+> precio**, y un producto sin precio no se muestra, no se cotiza y no se puede
+> pedir. Se aplica en las cinco puertas que llevan a lo mismo: `get_catalog`
+> (`pp.price > 0`), `get_flash_sales` (`fs.price > 0` — `flash_sales.price` tiene
+> el mismo check, así que una carga masiva con la columna corrida podía llenar la
+> sección de $0.00), `compute_order_items` (los dos lookups piden `> 0`, así un 0
+> se comporta **igual que "no hay fila"** y todo lo que ya manejaba "sin precio"
+> —el total que no suma, el `—` de la tabla de pedidos, el PDF sin precios— sigue
+> andando sin tocarlo), `create_order` (un pedido real con una línea sin precio se
+> rechaza **entero** y queda en `order_failures` con los SKU culpables, para que el
+> admin cargue el precio y le dé "Recuperar"; una cotización sí se guarda sin
+> precios, es su función) y `convert_quote_to_order` (misma regla por la puerta del
+> admin, con `raise exception` que nombra los SKU). Además `apply_price_list` pasa
+> a contar un `0` como **precio inválido**: entra en `invalid_prices`, que el
+> preview ya muestra antes de confirmar, y no se upsertea ni activa el producto.
+> **Dos decisiones**: (1) la rama de la lista `quote` de `get_catalog` **no se
+> toca** — ahí devolver todo con `price = null` es el diseño (catálogo de
+> cotización), no un dato faltante; (2) `compute_order_items` **no descarta** la
+> línea sin precio, la deja con `price: null` — descartarla la haría desaparecer de
+> la vista de cotizaciones con precio vigente (`get_quotes_live_pricing`) sin decir
+> nada, y en este proyecto una línea que se cae en silencio ya costó un pedido de
+> ~10k. Quien decide qué hacer con una línea sin precio es el que crea el pedido.
+> En la pestaña Precios, una celda en 0 se muestra en **rojo con ⚠** y los
+> contadores "con precios / sin precios" cuentan el 0 como sin precio: si no, el
+> panel diría "con precio" de un producto que el catálogo esconde.
+> **No borra ni corrige ningún dato**: las filas con `price = 0` que ya existan
+> quedan donde están y simplemente dejan de publicar el producto (el final del
+> archivo trae las consultas para listarlas y el `delete` opcional).
+> Verificado contra un PostgreSQL 18 desechable: primero se **reprodujo el agujero
+> sobre el `schema.sql` de HEAD** (el producto en 0 sale en el catálogo en $0.00 y
+> se registra un pedido de 5 unidades con total $0.00), después se corrió la
+> migración sobre ese mismo estado y pasaron las 14 asserts de las 5 puertas —
+> incluidas la lista `quote` intacta, la cotización que sí se guarda sin precios, y
+> que el `type = Flash Sale` del Excel sigue mapeando a `availability = flash`.
+> También en instalación desde cero (`schema.sql` solo), re-corriendo la migración,
+> con el `schema.sql` completo encima, y confirmando que la migración de métricas
+> sigue corriendo sobre ese estado. Al copiar las 6 funciones al archivo de
+> migración se usó un diff automático contra `schema.sql` ignorando comentarios —
+> agarró que la primera copia a mano de `apply_price_list` había perdido el caso
+> `flash` del parseo de availability y había renombrado `list` a
+> `list_code`/`list_label`, lo que habría roto el preview de la carga de precios.
+>
+> 2026-08-06, **punto 51: el grupo de Flash Sales que volvía al catálogo
+> mientras el panel decía "Desactivada"**. Reportado por el usuario: le puso al
+> grupo una fecha de vencimiento nueva para el mes siguiente, el panel siguió
+> mostrando "Desactivada" y el catálogo empezó a mostrar la sección Flash Sale.
+> Las dos cosas eran ciertas **sobre filas distintas del mismo grupo**: el badge
+> rojo sale solo con `active = false`, mientras una oferta que apenas pasó su
+> fecha sigue con `active = true` y se pinta "Expiró" (gris) — y un "grupo" es un
+> armado del frontend (mismo `batch_id` o misma `expires_at`) que puede ser
+> **mixto**. "Aplicar al grupo" escribía **solo `expires_at`**, así que con la
+> fecha nueva todas las filas `active = true` volvían al catálogo en el acto
+> (`get_flash_sales()` solo exige `active` + estar dentro del rango) y las
+> `active = false` seguían apagadas. Encima, desactivar era un **camino de ida**:
+> no había ningún botón para volver a prender una oferta, y de ahí que
+> reprogramar la fecha se usara como workaround — que funcionó a medias y produjo
+> exactamente la contradicción reportada.
+> **No era un bug de la base**: `get_flash_sales()` filtra `active` bien y nunca
+> publicó una oferta apagada. Reproducido y verificado contra un PostgreSQL 18
+> desechable con el `schema.sql` real (8 aserciones): partiendo de un grupo mixto
+> vencido, escribir solo `expires_at` deja el catálogo mostrando 3 ofertas
+> mientras 2 filas siguen apagadas — y ninguna de esas 2 aparece nunca en
+> `get_flash_sales()`. Arreglado **enteramente en `FlashSalesAdmin.jsx`, sin
+> migración**: (1) el encabezado del grupo muestra su composición real en badges
+> ("2 LIVE · 3 Expiró · 1 Desactivada"), así un grupo mixto se ve de una;
+> (2) "Aplicar al grupo" pide confirmación diciendo cuántas van a volver al
+> catálogo en el acto y cuántas están desactivadas y seguirán apagadas, con dos
+> salidas — "Solo reprogramar" o "Reprogramar y reactivar todo"; (3) **"Reactivar"
+> por fila y "Reactivar grupo (N)"**, la pieza que faltaba; (4) los grupos se
+> arman sobre la lista **completa** y el filtro de estado se aplica después, solo
+> a qué filas se muestran — antes se agrupaba la lista ya filtrada, así que con
+> el filtro "Expiró" puesto un "Desactivar grupo" apagaba media promo sin
+> decirlo (ahora el encabezado avisa "(N no se muestran por el filtro)" y los
+> botones traen el total entre paréntesis); (5) los errores de update ya no se
+> descartan en silencio y (6) una leyenda explica que "Expiró" se arregla con la
+> fecha y "Desactivada" solo con Reactivar. La fecha nueva se escribe siempre a
+> **todo** el grupo aunque no se reactive: si fuera solo a las activas, las otras
+> se quedarían con la fecha vieja y el grupo se partiría en dos al recargar
+> (los que no tienen `batch_id` se agrupan justamente por `expires_at`).
+>
 > 2026-08-05: **perfil superadmin** (`migration-2026-08-05-superadmin.sql` +
 > `supabase/functions/superadmin-users` + pestaña 🔐 Superadmin), a pedido del
 > usuario: las acciones que obligaban a entrar al SQL Editor o al dashboard de
@@ -602,6 +751,48 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   por el usuario): `supabase functions deploy superadmin-users`. Es la que
   respalda los dos únicos botones que necesitan la Admin API de Auth
   ("Cambiar contraseña" y "+ Crear admin").
+- [ ] **Pendiente: correr `migration-2026-08-06-require-price.sql`** en producción
+  (2026-08-06) — un producto sin precio (o con precio 0) deja de salir en el
+  catálogo, de cotizarse y de poder pedirse. Reemplaza 6 funciones
+  (`get_catalog`, `get_flash_sales`, `compute_order_items`, `create_order`,
+  `convert_quote_to_order`, `apply_price_list`) y **no crea ni borra nada**.
+  - **Sin orden obligatorio respecto del frontend**: el efecto del catálogo es
+    inmediato al correr el SQL (`get_catalog` es server-side), y el frontend de
+    esta tanda solo cambia los contadores de la pestaña Precios.
+  - Preflight que corta sin tocar nada si falta `apply_price_list`,
+    `compute_order_items`, `order_failures` o la firma de `create_order` con
+    `p_request_id`: o sea que **necesita `migration-2026-08-05-order-capture.sql`
+    corrida antes**, igual que la de métricas.
+  - Antes de correrla conviene mirar qué va a esconder (las consultas están al
+    final del archivo):
+    `select pl.code, p.sku, p.name, pp.price from public.product_prices pp join public.products p on p.id = pp.product_id join public.price_lists pl on pl.id = pp.price_list_id where pp.price <= 0 order by pl.code, p.sku;`
+- [ ] **Pendiente: correr `migration-2026-08-06-sa-metrics.sql`** en producción
+  (2026-08-06) — habilita la pestaña 📈 Métricas. Crea
+  `sa_metrics_overview(p_days int default 14)`, los dos helpers de cuentas de
+  prueba (`sa_metrics_test_vendedora_patterns` / `sa_is_test_vendedora`, sin
+  grant a `authenticated`) y dos índices: `orders_created_idx` y
+  `admin_audit_log_order_status_idx` (parcial, `where action =
+  'update_order_status'`).
+  - **Sin orden obligatorio: el frontend se puede desplegar antes.** Sin la RPC,
+    la pestaña muestra el aviso "Falta correr
+    migration-2026-08-06-sa-metrics.sql en la base de datos…" en vez de romper
+    (detecta el código `PGRST202` de PostgREST), y ninguna otra pestaña se toca.
+  - Abre con un **preflight** que corta sin tocar nada si falta
+    `is_superadmin()` (`migration-2026-08-05-superadmin.sql`, ya corrida),
+    `admin_audit_log` u `order_failures`. Ese último es el de
+    `migration-2026-08-05-order-capture.sql`, que sigue pendiente: **hay que
+    correr order-capture primero** o el preflight de esta corta con el mensaje.
+  - Es re-corrible (`create or replace` + `create index if not exists`) y no
+    modifica ninguna función ni policy existente: solo agrega.
+  - Verificación en el SQL Editor (corre como `postgres`, así que `auth.uid()` es
+    null y la RPC tira `not authorized` — es lo esperado). Para verla igual,
+    suplantando al superadmin:
+    `set local role authenticated;`
+    `set local request.jwt.claims = '{"sub":"<uuid del superadmin>","role":"authenticated"}';`
+    `select jsonb_pretty(public.sa_metrics_overview(14));`
+    El uuid sale de `select user_id from public.superadmins;`. Qué cuentas queda
+    afuera del cálculo:
+    `select name from public.vendedores where public.sa_is_test_vendedora(name);`
 - [ ] **Pendiente y URGENTE: correr `migration-2026-08-05-order-capture.sql`**
   en producción (2026-08-05) — es el arreglo del pedido de ~10k que se envió por
   WhatsApp y no quedó registrado. **Hasta que corra, el bug sigue vivo**:
@@ -669,7 +860,7 @@ zimaxx-store/
     ├── main.jsx
     ├── App.jsx                 ← rutas: / y /admin (admin con lazy import)
     ├── index.css               ← variables CSS de marca + @theme Tailwind
-    ├── i18n.jsx                ← diccionario es/en + LanguageProvider + useI18n
+    ├── i18n.jsx                ← diccionario es/en + LanguageProvider + useI18n (t(key, vars) interpola {placeholders} desde 2026-08-06)
     ├── lib/
     │   └── supabase.js         ← cliente Supabase (vars de entorno)
     ├── context/
@@ -691,13 +882,16 @@ zimaxx-store/
     │       ├── ClientsAdmin.jsx
     │       ├── VendedoresAdmin.jsx
     │       ├── FlashSalesAdmin.jsx
-    │       └── OrdersAdmin.jsx
+    │       ├── AuditLogAdmin.jsx
+    │       ├── OrdersAdmin.jsx
+    │       ├── SuperAdminPanel.jsx  ← solo superadmin (usuarios/roles/contraseñas + dueñas de listas)
+    │       └── MetricsAdmin.jsx     ← solo superadmin (KPIs en vivo por polling + gráfico SVG + adopción por vendedora)
     └── utils/
         ├── format.js           ← money(), cleanPhone()
         ├── whatsapp.js         ← buildOrderMessage(), whatsappUrl()
         ├── pdf.js              ← downloadOrderPdf() (async, jsPDF lazy)
         ├── token.js            ← generateToken() con crypto.getRandomValues
-        └── excel.js            ← parseSheet(), normalizeHeader(), pick(), downloadOrderExcel() (XLSX lazy)
+        └── excel.js            ← parseSheet(), normalizeHeader(), pick(), downloadOrderExcel(), downloadAuditLogExcel(), downloadMetricsExcel() (XLSX lazy)
 ```
 
 ---
@@ -1064,6 +1258,55 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
   es null, `is_superadmin()` da false y todas tiran la excepción. Es lo
   esperado: se prueban desde el panel, logueado.
 
+### `sa_metrics_overview(p_days int default 14) → jsonb` (2026-08-06)
+- Acceso: `authenticated`, con `is_superadmin()` como **primera línea**
+  (`raise exception 'not authorized'`). Es la RPC de la pestaña 📈 Métricas y la
+  **única `sa_*` que no llama a `sa_log()`**: es de solo lectura y el panel la
+  llama cada 60 s — auditarla dejaría una fila por minuto por pestaña abierta.
+- Devuelve **todo lo que dibuja la pestaña en un solo `jsonb`**, porque son 7
+  consultas distintas y desde el frontend serían 7 round-trips por refresco:
+  - `period` → `{ days, from, to }`. `p_days` se clampea a `[1, 365]`
+    (`coalesce(p_days, 14)`), así un valor a mano no genera un
+    `generate_series` gigante.
+  - `totals` → `pedidos`, `cotizaciones`, `vendedoras_activas`,
+    `monto_capturado`, `ticket_promedio`, `cancelados`. Convenciones usadas en
+    todas las secciones: **pedido** = `kind = 'order' and status <> 'cancelled'`,
+    **cotización** = `kind = 'quote'`, **cancelado** = `kind = 'order' and
+    status = 'cancelled'`. Un cancelado no suma monto ni cuenta como pedido.
+  - `por_vendedora` → `[{ vendedora, pedidos, monto, ticket, cotizaciones }]`
+    ordenado por monto desc (desempate por nombre, para que la tabla no
+    "parpadee" entre refrescos). Agrupa por **nombre** (hay un único índice sobre
+    `lower(name)`), así el grupo de los pedidos **sin vendedora** sale con
+    `vendedora: null` y la suma de la columna monto cuadra exactamente con
+    `totals.monto_capturado`.
+  - `tiempo_a_atender_horas` → promedio de horas desde `orders.created_at` hasta
+    la **primera** vez que el pedido llegó a `done`: `min(created_at)` por
+    `order_id` sobre `admin_audit_log` con `action = 'update_order_status'` y
+    `detail->>'to_status' = 'done'`. `min` y no el último porque un pedido puede
+    ir done → new → done varias veces. `null` si ninguno del período llegó a
+    `done` (la tarjeta muestra "—" con el motivo).
+  - `cotizaciones_convertidas` → count de `convert_quote_to_order` en
+    `admin_audit_log`. Se cuenta ahí y no en `orders` porque después de
+    convertirla la fila ya dice `kind = 'order'` y no queda rastro.
+  - `fallos` → `{ total, recuperados }` sobre `order_failures` (de ahí que el
+    preflight de la migración exija esa tabla).
+  - `serie_diaria` → `[{ dia, monto, pedidos }]` con **un bucket por día, sin
+    huecos** (`generate_series` + left join, los días sin ventas vienen en 0).
+    Son `p_days + 1` buckets: la ventana arranca a la hora actual de hace N días,
+    así que el primer día es parcial — a cambio, la serie suma exactamente el
+    total del período.
+  - `excluidas` → los nombres de las cuentas de prueba que quedaron afuera.
+- **Cuentas de prueba**: `sa_metrics_test_vendedora_patterns()` (array de
+  patrones ILIKE contra `vendedores.name`: `systemspruebas%`, `%prueba%`,
+  `%demo%`) + `sa_is_test_vendedora(name)`. Editar ese array es el **único**
+  lugar donde vive la lista. No borra ni toca nada: solo deja esas filas afuera
+  del cálculo. Los dos helpers **no** tienen `execute` para `authenticated` (ni
+  para el superadmin): los llama solo la RPC, que corre como el dueño.
+- Índices que agrega la migración: `orders_created_idx` (sin él la ventana
+  `created_at >= now() - N days` era un seq scan cada 60 s por pestaña abierta) y
+  `admin_audit_log_order_status_idx` (parcial, `where action =
+  'update_order_status'`).
+
 ### `is_vendedora() → boolean` / `current_vendedora_id() → uuid` / `get_my_role() → text`
 - Acceso: solo `authenticated`. (2026-07-06, rol vendedora.)
 - `is_vendedora()`: existe una fila en `vendedores` con `user_id = auth.uid()`.
@@ -1422,6 +1665,58 @@ efectos cruzados (quitar una dueña puede promover a otra, agregar una deja
 clientes inconsistentes) y reconstruir eso en el frontend sería duplicar las
 reglas del SQL. Los mensajes de error que se muestran son los `raise exception`
 de las RPC, escritos en español para mostrarse tal cual.
+
+### 📈 Métricas (`/admin/metrics`, `MetricsAdmin.jsx`, 2026-08-06)
+
+Pestaña visible **solo** para el superadmin (`is_superadmin()`), al lado de
+🔐 Superadmin. Triple candado, igual que aquélla: la entrada del menú se
+renderiza solo si `isSuper`, `AdminLayout.jsx` redirige `/admin/metrics` a
+Productos para cualquier otro, y la RPC exige `is_superadmin()` adentro — un
+admin común que la llame a mano con la anon key recibe `not authorized`.
+
+Arriba, selector de rango **7 / 14 / 30 días** (default 14), botón
+**"↻ Actualizar"** y el cartel **"Actualizado hace X"**. Se refresca solo cada
+**60 s** (`REFRESH_MS`, una const clara arriba del archivo) con `setInterval`
+limpiado en unmount; el contador de la antigüedad late aparte cada 5 s
+(`AGE_TICK_MS`) para no re-renderizar la pantalla entera una vez por segundo.
+
+Contenido, de arriba abajo:
+
+- **Ocho tarjetas de KPI**: monto capturado, pedidos, ticket promedio,
+  cotizaciones, vendedoras activas, **tiempo promedio a atender**, cotizaciones
+  convertidas y cancelados. El tiempo a atender muestra **"—" en gris con el
+  motivo** ("aún sin pedidos marcados atendidos") cuando la RPC devuelve `null`
+  — el motivo va en el `title` y también visible, porque en el teléfono no hay
+  hover. El ticket promedio hace lo mismo: `money(null)` daría "$0.00", y "sin
+  pedidos en el período" no es "el ticket fue cero".
+- **Una línea con los fallos de envío** del período (`order_failures`) y cuántos
+  se recuperaron, más el "actualizado hace X".
+- **Mini-gráfico de barras del monto por día**, SVG propio sin librería de charts
+  (recharts arrastra d3, ~200 kB para una serie de 15 puntos). Es responsive sin
+  medir nada en JS: `viewBox` de 10 unidades por día + `preserveAspectRatio="none"`,
+  así el SVG se estira al ancho del contenedor — y por eso adentro solo hay
+  `<rect>` (que toleran bien el estirón) y las fechas van en HTML abajo, donde no
+  se deforman. Los días sin ventas dibujan una astilla en el color de las
+  hairlines: se ve que el día existe y no vendió, en vez de un hueco que se
+  confunde con "falta el dato". Cada barra tiene `<title>` con día, monto y
+  cantidad de pedidos.
+- **Tabla "Adopción por vendedora"** (vendedora, pedidos, monto, ticket,
+  cotizaciones) ordenada por monto, con **fila de total del período** que cuadra
+  con las tarjetas, y **"⬇️ Descargar Excel"** (`downloadMetricsExcel` en
+  `utils/excel.js`, XLSX lazy como el resto; los números van crudos, no
+  formateados, para poder sumarlos en Excel). Los pedidos sin vendedora salen
+  agrupados en una fila **"—"**.
+- **Al pie**, los nombres de las cuentas de prueba excluidas del cálculo.
+
+Notas de implementación: un contador de pedidos en vuelo (`reqRef`) descarta la
+respuesta de un rango viejo que llegue después de la del nuevo, y también
+invalida lo que quede en vuelo al desmontar. Si falla un refresco automático
+(wifi caído, migración sin correr) **no se borra la última foto buena**: se
+muestra con el aviso arriba, en vez de vaciar la pantalla. El error se guarda
+crudo y se traduce en el render, así cambiar de idioma no dispara una recarga con
+spinner. Si la RPC todavía no existe (frontend desplegado antes que la
+migración), el `PGRST202` de PostgREST se detecta y el aviso dice exactamente qué
+archivo falta correr.
 
 ---
 

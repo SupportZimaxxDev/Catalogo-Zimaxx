@@ -44,6 +44,10 @@ export default function FlashSalesAdmin() {
   const [products, setProducts] = useState([])
   const [form, setForm] = useState(null)
   const [error, setError] = useState('')
+  // Bloquea los botones de prender/apagar/reprogramar mientras hay un update
+  // en vuelo: son acciones de un click sobre grupos enteros y sin esto se
+  // pueden disparar dos veces antes de que vuelva el `load()`.
+  const [busy, setBusy] = useState(false)
 
   // Carga masiva por Excel (2026-07-08): mismo archivo semanal "Special
   // Flash Sale" que ya usan para armar la promo, con precio por SKU. La
@@ -162,27 +166,56 @@ export default function FlashSalesAdmin() {
     setBulkBusy(false)
   }
 
-  const deactivate = async (id) => {
-    await supabase.from('flash_sales').update({ active: false }).eq('id', id)
-    await load()
-  }
-
-  // Los grupos se arman client-side (por batch_id O por misma fecha de
-  // expiración), así que desactivar/reprogramar un grupo opera sobre la
-  // lista de ids concreta en vez de un WHERE por batch — funciona igual
-  // para lotes de Excel y para ofertas sueltas que comparten vencimiento.
-  const deactivateGroup = async (items) => {
-    const ids = items.filter((i) => i.active).map((i) => i.id)
+  // Prender/apagar a mano, por fila o por grupo. Los grupos se arman
+  // client-side (por batch_id O por misma fecha de expiración), así que se
+  // opera sobre la lista de ids concreta en vez de un WHERE por batch —
+  // funciona igual para lotes de Excel y para ofertas sueltas que comparten
+  // vencimiento.
+  //
+  // `active = false` es lo único que apaga una oferta ANTES de su fecha, y
+  // hasta 2026-08-06 era un camino de ida: no había botón para volver a
+  // prenderla. Eso fue justo lo que produjo el bug que reportó el usuario —
+  // ver el comentario de updateExpiry.
+  const setActive = async (ids, value) => {
     if (ids.length === 0) return
-    await supabase.from('flash_sales').update({ active: false }).in('id', ids)
+    setBusy(true)
+    setError('')
+    const { error: upError } = await supabase
+      .from('flash_sales')
+      .update({ active: value })
+      .in('id', ids)
+    // Antes estos errores se descartaban en silencio y la fila volvía a
+    // dibujarse igual que estaba, como si el click no hubiera pasado.
+    if (upError) setError(upError.message)
     await load()
+    setBusy(false)
   }
 
-  const updateExpiry = async (ids, localDate) => {
+  // Reprograma el vencimiento y NADA más: no toca `active`.
+  //
+  // El bug de 2026-08-06: un grupo puede ser MIXTO — filas apagadas a mano
+  // (`active = false`, badge rojo "Desactivada") junto a filas que solo
+  // vencieron (`active = true`, badge gris "Expiró"). Al reprogramar el grupo
+  // se reescribía `expires_at` de todas, y las `active = true` volvían al
+  // catálogo en el acto (get_flash_sales solo exige `active` + estar dentro del
+  // rango), mientras las otras seguían apagadas mostrando el badge rojo. El
+  // panel decía "Desactivada" y el catálogo mostraba la sección Flash Sale al
+  // mismo tiempo, las dos cosas ciertas sobre filas distintas del mismo grupo.
+  //
+  // El arreglo no es cambiar qué escribe esta función (reprogramar tiene que
+  // reprogramar) sino que el grupo diga en pantalla de qué está hecho y que
+  // reprogramarlo avise qué va a quedar visible — ver FlashGroup. `p_reactivate`
+  // es para el caso normal: "quiero que este grupo vuelva a correr".
+  const updateExpiry = async (ids, localDate, reactivate = false) => {
     const iso = toIso(localDate)
-    if (!iso) return
-    await supabase.from('flash_sales').update({ expires_at: iso }).in('id', ids)
+    if (!iso || ids.length === 0) return
+    setBusy(true)
+    setError('')
+    const patch = reactivate ? { expires_at: iso, active: true } : { expires_at: iso }
+    const { error: upError } = await supabase.from('flash_sales').update(patch).in('id', ids)
+    if (upError) setError(upError.message)
     await load()
+    setBusy(false)
   }
 
   // El apagado por fecha es automático (get_flash_sales() ya filtra por
@@ -198,30 +231,40 @@ export default function FlashSalesAdmin() {
     return 'live'
   }
 
-  const filteredSales = statusFilter ? sales.filter((s) => saleStatus(s) === statusFilter) : sales
-
   // Agrupa por lote de carga masiva (batch_id) y, para las que no tienen
   // lote (alta manual o cargadas antes de que existiera batch_id), por
   // misma fecha de expiración — lo típico es que la promo de la semana
   // comparta vencimiento aunque se haya cargado producto por producto.
   // Grupos de 1 se muestran como fila suelta.
+  //
+  // Los grupos se arman SIEMPRE sobre la lista completa y el filtro de estado
+  // se aplica después, sobre qué filas se muestran (2026-08-06). Antes se
+  // agrupaba la lista ya filtrada, así que con el filtro "Expiró" puesto un
+  // "Desactivar grupo" apagaba media promo — la mitad que el filtro dejaba ver —
+  // y el botón decía lo mismo en los dos casos.
+  const groups = []
   const byKey = new Map()
-  for (const s of filteredSales) {
+  for (const s of sales) {
     const key = s.batch_id ?? `exp:${s.expires_at}`
-    if (!byKey.has(key)) byKey.set(key, [])
-    byKey.get(key).push(s)
+    let g = byKey.get(key)
+    if (!g) {
+      g = { key, isBatch: !!s.batch_id, items: [] }
+      byKey.set(key, g)
+      groups.push(g)
+    }
+    g.items.push(s)
   }
+
   const rows = []
-  const seenKeys = new Set()
-  for (const s of filteredSales) {
-    const key = s.batch_id ?? `exp:${s.expires_at}`
-    if (seenKeys.has(key)) continue
-    seenKeys.add(key)
-    const items = byKey.get(key)
-    if (items.length > 1) {
-      rows.push({ type: 'group', key, isBatch: !!s.batch_id, items })
+  for (const g of groups) {
+    const visible = statusFilter ? g.items.filter((s) => saleStatus(s) === statusFilter) : g.items
+    if (visible.length === 0) continue
+    if (g.items.length === 1) {
+      rows.push({ type: 'single', item: g.items[0] })
     } else {
-      rows.push({ type: 'single', item: s })
+      // `items` es el grupo COMPLETO (lo que tocan los botones del
+      // encabezado); `visible` es lo que el filtro deja ver.
+      rows.push({ type: 'group', key: g.key, isBatch: g.isBatch, items: g.items, visible })
     }
   }
 
@@ -391,6 +434,14 @@ export default function FlashSalesAdmin() {
         </div>
       )}
 
+      {/* El error de un update (RLS, red) se mostraba solo en el alta manual:
+          ahora también acá, que es donde están las acciones de un click. */}
+      {error && !form && (
+        <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+          {error}
+        </p>
+      )}
+
       <div className="flex items-center gap-2">
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={inputCls}>
           <option value="">{t('allStatuses')}</option>
@@ -400,6 +451,11 @@ export default function FlashSalesAdmin() {
           <option value="deactivated">{t('flashStatus_deactivated')}</option>
         </select>
       </div>
+
+      {/* La frase que hubiera evitado el enredo del 2026-08-06: "Expiró" y
+          "Desactivada" las dos esconden la oferta del catálogo, pero se
+          arreglan distinto. */}
+      <p className="text-xs leading-relaxed text-primary/50">{t('flashStatusHint')}</p>
 
       <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-sm">
         <table className="w-full text-sm">
@@ -421,8 +477,9 @@ export default function FlashSalesAdmin() {
                     s={row.item}
                     t={t}
                     isAdmin={isAdmin}
+                    busy={busy}
                     saleStatus={saleStatus}
-                    deactivate={deactivate}
+                    setActive={setActive}
                     updateExpiry={updateExpiry}
                   />
                 </tr>
@@ -431,11 +488,12 @@ export default function FlashSalesAdmin() {
                   key={row.key}
                   isBatch={row.isBatch}
                   items={row.items}
+                  visible={row.visible}
                   t={t}
                   isAdmin={isAdmin}
+                  busy={busy}
                   saleStatus={saleStatus}
-                  deactivate={deactivate}
-                  deactivateGroup={deactivateGroup}
+                  setActive={setActive}
                   updateExpiry={updateExpiry}
                 />
               ),
@@ -492,7 +550,7 @@ function ExpiryCell({ s, isAdmin, updateExpiry }) {
   )
 }
 
-function SaleRow({ s, t, isAdmin, saleStatus, deactivate, updateExpiry }) {
+function SaleRow({ s, t, isAdmin, busy, saleStatus, setActive, updateExpiry }) {
   return (
     <>
       <td className="p-3">
@@ -509,32 +567,104 @@ function SaleRow({ s, t, isAdmin, saleStatus, deactivate, updateExpiry }) {
         </span>
       </td>
       <td className="p-3 text-right">
-        {isAdmin && s.active && (
-          <button onClick={() => deactivate(s.id)} className="text-xs font-semibold text-red-600 hover:underline">
-            {t('deactivate')}
-          </button>
-        )}
+        {/* "Reactivar" (2026-08-06): desactivar era un camino de ida — para
+            volver a publicar una oferta apagada había que borrarla y volver a
+            cargar el Excel, o empujarle la fecha (que no la prende). */}
+        {isAdmin &&
+          (s.active ? (
+            <button
+              disabled={busy}
+              onClick={() => setActive([s.id], false)}
+              className="text-xs font-semibold text-red-600 hover:underline disabled:opacity-40"
+            >
+              {t('deactivate')}
+            </button>
+          ) : (
+            <button
+              disabled={busy}
+              onClick={() => setActive([s.id], true)}
+              className="text-xs font-semibold text-green-700 hover:underline disabled:opacity-40 dark:text-green-400"
+            >
+              {t('reactivate')}
+            </button>
+          ))}
       </td>
     </>
   )
 }
 
 // Grupo de ofertas: un lote de carga masiva (batch_id) o varias ofertas
-// sueltas con la misma fecha de vencimiento. Encabezado con contador,
-// botón para desactivar el grupo entero y un datetime-local para
-// reprogramar el vencimiento de todas juntas; debajo, sus filas con un
+// sueltas con la misma fecha de vencimiento. Encabezado con la composición
+// real del grupo, botones para apagarlo/prenderlo entero y un datetime-local
+// para reprogramar el vencimiento de todas juntas; debajo, sus filas con un
 // borde izquierdo dorado que marca que son un grupo.
-function FlashGroup({ isBatch, items, t, isAdmin, saleStatus, deactivate, deactivateGroup, updateExpiry }) {
+//
+// `items` es el grupo COMPLETO y es sobre lo que actúan los botones del
+// encabezado; `visible` es lo que el filtro de estado deja ver. Los dos números
+// se muestran para que nunca se apague "el grupo" creyendo que son 3 filas
+// cuando en realidad son 12.
+function FlashGroup({ isBatch, items, visible, t, isAdmin, busy, saleStatus, setActive, updateExpiry }) {
   const [groupDate, setGroupDate] = useState('')
-  const activeCount = items.filter((i) => i.active).length
-  const liveCount = items.filter((i) => saleStatus(i) === 'live').length
+  // Confirmación inline de la reprogramación (mismo patrón que SuperAdminPanel):
+  // reprogramar un grupo mixto vuelve a publicar las ofertas que solo habían
+  // vencido, y eso tiene que decirse ANTES, no descubrirse mirando el catálogo.
+  const [confirming, setConfirming] = useState(false)
+
+  const offIds = items.filter((i) => !i.active).map((i) => i.id)
+  const onIds = items.filter((i) => i.active).map((i) => i.id)
+  const allIds = items.map((i) => i.id)
+  const hidden = items.length - visible.length
+
+  // Cuántas quedarían visibles en el catálogo si se reprograma sin prender
+  // nada: las que ya están activas y cuyo starts_at pasó. Si la fecha elegida
+  // es pasada no se publica ninguna (get_flash_sales pide now() < expires_at).
+  const now = new Date()
+  const dateIsFuture = !!groupDate && new Date(groupDate) > now
+  const goLive = dateIsFuture
+    ? items.filter((i) => i.active && now >= new Date(i.starts_at)).length
+    : 0
+
+  // Composición por estado, para que un grupo mixto se vea de una.
+  const counts = items.reduce((acc, i) => {
+    const st = saleStatus(i)
+    acc[st] = (acc[st] ?? 0) + 1
+    return acc
+  }, {})
+
+  // La fecha nueva va SIEMPRE a todo el grupo (si no, las desactivadas se
+  // quedarían con la fecha vieja y el grupo se partiría en dos al recargar,
+  // porque los que no tienen batch_id se agrupan justamente por expires_at).
+  // `reactivate` solo decide si además se prenden las apagadas.
+  const apply = (reactivate) => {
+    updateExpiry(allIds, groupDate, reactivate)
+    setGroupDate('')
+    setConfirming(false)
+  }
 
   return (
     <>
       <tr className="border-b border-primary/5 bg-gold-pale/20">
         <td colSpan={3} className="p-3 text-xs font-semibold text-primary/70">
-          🗂️ {t(isBatch ? 'flashBatchGroup' : 'flashExpiryGroup')} · {items.length} {t('items')} ·{' '}
-          {liveCount} {t('flashStatus_live')}
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span>
+              🗂️ {t(isBatch ? 'flashBatchGroup' : 'flashExpiryGroup')} · {items.length} {t('items')}
+            </span>
+            {['live', 'scheduled', 'expired', 'deactivated'].map((st) =>
+              counts[st] ? (
+                <span
+                  key={st}
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${STATUS_STYLES[st]}`}
+                >
+                  {counts[st]} {t(`flashStatus_${st}`)}
+                </span>
+              ) : null,
+            )}
+            {hidden > 0 && (
+              <span className="font-normal italic text-primary/45">
+                {t('flashGroupHiddenByFilter', { n: hidden })}
+              </span>
+            )}
+          </span>
         </td>
         <td colSpan={2} className="p-3">
           {isAdmin && (
@@ -542,15 +672,15 @@ function FlashGroup({ isBatch, items, t, isAdmin, saleStatus, deactivate, deacti
               <input
                 type="datetime-local"
                 value={groupDate}
-                onChange={(e) => setGroupDate(e.target.value)}
+                onChange={(e) => {
+                  setGroupDate(e.target.value)
+                  setConfirming(false)
+                }}
                 className="rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none focus:border-secondary"
               />
               <button
-                disabled={!groupDate}
-                onClick={() => {
-                  updateExpiry(items.map((i) => i.id), groupDate)
-                  setGroupDate('')
-                }}
+                disabled={!groupDate || busy}
+                onClick={() => setConfirming(true)}
                 className="whitespace-nowrap text-xs font-semibold text-secondary-dark hover:underline disabled:opacity-40"
               >
                 {t('applyToGroup')}
@@ -559,24 +689,78 @@ function FlashGroup({ isBatch, items, t, isAdmin, saleStatus, deactivate, deacti
           )}
         </td>
         <td className="p-3 text-right">
-          {isAdmin && activeCount > 0 && (
-            <button
-              onClick={() => deactivateGroup(items)}
-              className="whitespace-nowrap text-xs font-semibold text-red-600 hover:underline"
-            >
-              {t('deactivateGroup')}
-            </button>
+          {isAdmin && (
+            <span className="flex flex-col items-end gap-1">
+              {onIds.length > 0 && (
+                <button
+                  disabled={busy}
+                  onClick={() => setActive(onIds, false)}
+                  className="whitespace-nowrap text-xs font-semibold text-red-600 hover:underline disabled:opacity-40"
+                >
+                  {t('deactivateGroup')} ({onIds.length})
+                </button>
+              )}
+              {offIds.length > 0 && (
+                <button
+                  disabled={busy}
+                  onClick={() => setActive(offIds, true)}
+                  className="whitespace-nowrap text-xs font-semibold text-green-700 hover:underline disabled:opacity-40 dark:text-green-400"
+                >
+                  {t('reactivateGroup')} ({offIds.length})
+                </button>
+              )}
+            </span>
           )}
         </td>
       </tr>
-      {items.map((s) => (
+
+      {isAdmin && confirming && (
+        <tr className="border-b border-primary/5 bg-gold-pale/40">
+          <td colSpan={6} className="p-3">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
+              <span className="leading-relaxed text-primary/75">
+                {t('flashRescheduleWhat', { n: items.length })}
+                {goLive > 0 && ` ${t('flashRescheduleGoLive', { n: goLive })}`}
+                {offIds.length > 0 && ` ${t('flashRescheduleStayOff', { n: offIds.length })}`}
+              </span>
+              <span className="flex flex-wrap items-center gap-1.5">
+                {offIds.length > 0 && (
+                  <button
+                    disabled={busy}
+                    onClick={() => apply(true)}
+                    className="rounded-lg bg-secondary px-2.5 py-1 font-bold text-ink transition-colors hover:bg-secondary-dark disabled:opacity-40"
+                  >
+                    {t('flashRescheduleAndOn')}
+                  </button>
+                )}
+                <button
+                  disabled={busy}
+                  onClick={() => apply(false)}
+                  className="rounded-lg border border-line px-2.5 py-1 transition-colors hover:border-secondary disabled:opacity-40"
+                >
+                  {offIds.length > 0 ? t('flashRescheduleOnly') : t('confirm')}
+                </button>
+                <button
+                  onClick={() => setConfirming(false)}
+                  className="rounded-lg border border-line px-2.5 py-1 transition-colors hover:border-primary/40"
+                >
+                  {t('cancel')}
+                </button>
+              </span>
+            </div>
+          </td>
+        </tr>
+      )}
+
+      {visible.map((s) => (
         <tr key={s.id} className="border-b border-primary/5 border-l-2 border-l-secondary/40">
           <SaleRow
             s={s}
             t={t}
             isAdmin={isAdmin}
+            busy={busy}
             saleStatus={saleStatus}
-            deactivate={deactivate}
+            setActive={setActive}
             updateExpiry={updateExpiry}
           />
         </tr>

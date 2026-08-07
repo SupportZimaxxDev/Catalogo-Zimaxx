@@ -95,11 +95,22 @@ export default function PricesUpload() {
     [orderedLists, listFilter],
   )
 
+  // "Tiene precio" es lo MISMO que decide get_catalog: un 0 no cuenta
+  // (2026-08-06, migration-2026-08-06-require-price.sql). Si acá se contara
+  // como precio, el panel diría "con precios" de un producto que el catálogo
+  // esconde — la misma clase de contradicción panel/catálogo que hubo con los
+  // grupos de Flash Sales.
+  const hasPrice = (productId, listId) => {
+    const value = priceMap.get(productId)?.[listId]
+    return value != null && Number(value) > 0
+  }
+
   // Contadores de los botones de filtro: sobre todos los productos (no
   // solo los que matchea el buscador), igual que los contadores de la
   // pestaña Productos — así el número no cambia al escribir en el buscador.
   const withPricesCount = useMemo(
-    () => products.filter((p) => visibleLists.some((l) => priceMap.get(p.id)?.[l.id] != null)).length,
+    () => products.filter((p) => visibleLists.some((l) => hasPrice(p.id, l.id))).length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [products, priceMap, visibleLists],
   )
   const missingPricesCount = products.length - withPricesCount
@@ -107,7 +118,7 @@ export default function PricesUpload() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return products.filter((p) => {
-      const hasVisiblePrice = visibleLists.some((l) => priceMap.get(p.id)?.[l.id] != null)
+      const hasVisiblePrice = visibleLists.some((l) => hasPrice(p.id, l.id))
       if (priceFilter === 'has' && !hasVisiblePrice) return false
       if (priceFilter === 'missing' && hasVisiblePrice) return false
       if (q && !p.name.toLowerCase().includes(q) && !String(p.sku).toLowerCase().includes(q))
@@ -392,8 +403,19 @@ export default function PricesUpload() {
                       const price = row?.[l.id]
                       return (
                         <td key={l.id} className="p-3 text-right font-brand">
-                          {price != null ? (
+                          {hasPrice(p.id, l.id) ? (
                             <span className="font-semibold">{money(price)}</span>
+                          ) : price != null ? (
+                            // Hay fila en product_prices pero con 0: no es
+                            // "sin precio cargado", es un precio inválido, y el
+                            // catálogo esconde el producto. Se marca distinto
+                            // para poder encontrarlo y corregirlo.
+                            <span
+                              title={t('invalidZeroPriceHint')}
+                              className="font-semibold text-red-600 dark:text-red-400"
+                            >
+                              {money(price)} ⚠
+                            </span>
                           ) : (
                             <span className="text-primary/25">—</span>
                           )}
