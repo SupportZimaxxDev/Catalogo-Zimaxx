@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { supabase, fetchAll } from '../../lib/supabase'
+import { supabase, fetchAll, updateByIds } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { parseSheet, pick, detectImageColumn, looksLikeImageUrl, downloadMissingPhotosExcel } from '../../utils/excel'
 import { generateSku } from '../../utils/token'
-import { SearchIcon, UploadZone, inputCls, useInfiniteRows } from './ui'
+import {
+  UploadZone,
+  ProductFilters,
+  isNewProduct as isNew,
+  productMatchesFilters,
+  inputCls,
+  useInfiniteRows,
+} from './ui'
 
 const EMPTY = { sku: '', upc: '', name: '', category: '', image_url: '', active: true, new_until: '', stock: '' }
 
@@ -21,14 +28,14 @@ const isoToLocal = (iso) => {
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
   return d.toISOString().slice(0, 16)
 }
-const defaultNewUntilLocal = () => {
+// ISO para la base; la variante local es la misma fecha en el formato que
+// entiende un <input type="datetime-local">.
+const newUntilIn = (days) => {
   const d = new Date()
-  d.setDate(d.getDate() + NEW_TAG_DAYS)
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
-  return d.toISOString().slice(0, 16)
+  d.setDate(d.getDate() + days)
+  return d.toISOString()
 }
-
-const isNew = (p) => p.new_until && new Date(p.new_until).getTime() > Date.now()
+const defaultNewUntilLocal = () => isoToLocal(newUntilIn(NEW_TAG_DAYS))
 
 // Alias aceptados en el Excel de productos. El SKU es opcional (se
 // autogenera si falta) y nunca se expone en el catálogo del cliente.
@@ -40,9 +47,11 @@ const COLS = {
   image: ['imagen', 'image', 'image_url', 'foto', 'url imagen', 'imagen url', 'url'],
   active: ['activo', 'active', 'estado', 'status'],
   // Disponibilidad (columna Type de las listas wholesale): Available /
-  // Pre Order / Flash Sale. Flash Sale acá es solo una etiqueta del
-  // producto (viene del inventario), distinta de la tabla `flash_sales`
-  // de ofertas con precio promo que se gestiona en su propia pestaña.
+  // Pre Order / Flash Sale. Flash Sale es una ETIQUETA del producto, sin
+  // precio promo ni vencimiento: marca lo que se quiere mover. Desde
+  // 2026-08-07 es la única Flash Sale del sistema (la pestaña de ofertas
+  // con cuenta regresiva se eliminó) y se pone por acá, por el Excel de
+  // Flash Sales, o a mano con la selección en bloque de la tabla.
   availability: ['type', 'tipo', 'disponibilidad', 'availability'],
   // PRODUCT_CATEGORY del export de SellerCloud (2026-07-08): distinto de
   // COLS.category (que acá guarda la MARCA/Brand) — esto es el tipo real
@@ -150,6 +159,41 @@ function resolveAvailability(typeAvail, stock, existingAvail) {
   return effective ?? 'available'
 }
 
+// Espejo del trigger products_availability_from_stock: con qué disponibilidad
+// va a quedar REALMENTE este producto si le escribimos `value`. Sirve para
+// saber de antemano si una acción en bloque cambia algo o no hace nada —
+// 'flash' siempre gana, el resto lo decide el stock cuando hay dato.
+function availabilityAfter(product, value) {
+  if (value === 'flash') return 'flash'
+  if (product.stock != null) return product.stock >= 1 ? 'available' : 'preorder'
+  return value
+}
+
+// Botón de la barra de selección. `blocked` es el motivo por el que la acción
+// no haría nada (null = habilitado). Un `<button disabled>` no dispara eventos
+// de mouse y su `title` no se ve en todos los navegadores, así que apagado va
+// envuelto en un span que sí lo muestra.
+function BulkButton({ blocked, busy, onClick, className, children }) {
+  const btn = (
+    <button
+      type="button"
+      disabled={busy || !!blocked}
+      onClick={onClick}
+      title={blocked ?? undefined}
+      className={className}
+    >
+      {children}
+    </button>
+  )
+  return blocked ? (
+    <span title={blocked} className="inline-flex cursor-not-allowed">
+      {btn}
+    </span>
+  ) : (
+    btn
+  )
+}
+
 export default function ProductsAdmin() {
   const { t } = useI18n()
   // Los dos valores que importan para filtrar se leen en español claro en
@@ -167,21 +211,40 @@ export default function ProductsAdmin() {
   const [uploadResult, setUploadResult] = useState(null)
   const [imgBusy, setImgBusy] = useState(false)
   const [imgResult, setImgResult] = useState(null)
+  // Carga de Flash Sales por Excel (2026-08-07): el archivo semanal solo
+  // decide QUIÉN lleva la etiqueta 🔥. Se muestra una vista previa antes de
+  // tocar nada porque, en modo reemplazo, la carga también DESMARCA lo que
+  // no viene en el archivo — igual que la carga de precios, que también
+  // desactiva por omisión y por eso pide confirmar.
+  const [flashBusy, setFlashBusy] = useState(false)
+  const [flashResult, setFlashResult] = useState(null)
+  const [flashPreview, setFlashPreview] = useState(null)
+  const [flashReplace, setFlashReplace] = useState(true)
+  const [flashCommitting, setFlashCommitting] = useState(false)
 
   // Búsqueda y filtros de la tabla
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
   const [lineFilter, setLineFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  // Selección para activar/desactivar en bloque (por casillas). Set de ids.
+  // Selección para acciones en bloque (por casillas). Set de ids.
   const [selected, setSelected] = useState(() => new Set())
+  // Resultado de la última acción en bloque: se muestra aparte porque al
+  // aplicarla la selección se limpia y la barra sticky desaparece con ella.
+  const [bulkNotice, setBulkNotice] = useState(null)
   const [visibleRows, sentinelRef] = useInfiniteRows(100, [query, catFilter, lineFilter, statusFilter])
 
+  // Devuelve las filas recargadas (además de guardarlas en el estado): las
+  // acciones en bloque las necesitan para verificar qué quedó realmente
+  // guardado, y `products` todavía tiene el valor viejo en ese mismo tick.
   const load = async () => {
     try {
-      setProducts(await fetchAll('products', '*', 'name'))
+      const all = await fetchAll('products', '*', 'name')
+      setProducts(all)
+      return all
     } catch {
       /* la tabla queda como estaba; el próximo load reintenta */
+      return null
     }
   }
 
@@ -199,30 +262,11 @@ export default function ProductsAdmin() {
     [products],
   )
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return products.filter((p) => {
-      if (catFilter === '__none__' ? p.category : catFilter && p.category !== catFilter) return false
-      if (lineFilter === '__none__' ? p.product_line : lineFilter && p.product_line !== lineFilter)
-        return false
-      if (statusFilter === 'active' && !p.active) return false
-      if (statusFilter === 'inactive' && p.active) return false
-      if (statusFilter === 'instock' && !(p.stock >= 1)) return false
-      if (statusFilter === 'nostock' && !(p.stock != null && p.stock <= 0)) return false
-      if (statusFilter === 'noimage' && p.image_url) return false
-      if (statusFilter === 'preorder' && p.availability !== 'preorder') return false
-      if (statusFilter === 'flash' && p.availability !== 'flash') return false
-      if (statusFilter === 'new' && !isNew(p)) return false
-      if (
-        q &&
-        !p.name.toLowerCase().includes(q) &&
-        !String(p.sku).toLowerCase().includes(q) &&
-        !String(p.upc ?? '').toLowerCase().includes(q)
-      )
-        return false
-      return true
-    })
-  }, [products, query, catFilter, lineFilter, statusFilter])
+  const filtered = useMemo(
+    () =>
+      products.filter((p) => productMatchesFilters(p, { query, catFilter, lineFilter, statusFilter })),
+    [products, query, catFilter, lineFilter, statusFilter],
+  )
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0]
@@ -305,7 +349,7 @@ export default function ProductsAdmin() {
       // automático. Se sube en dos tandas porque PostgREST exige que todas
       // las filas de un upsert tengan las mismas columnas, y a los
       // existentes no hay que pisarles new_until al re-subir el archivo.
-      const newUntilIso = toIso(defaultNewUntilLocal())
+      const newUntilIso = newUntilIn(NEW_TAG_DAYS)
       const newRows = upserts
         .filter((p) => !existingSkus.has(p.sku.toLowerCase()))
         .map((p) => ({ ...p, new_until: newUntilIso }))
@@ -407,6 +451,88 @@ export default function ProductsAdmin() {
     setImgBusy(false)
   }
 
+  // ---------- Flash Sales por Excel: la etiqueta 🔥, nada más ----------
+  // Reemplaza a la vieja pestaña Flash Sales (2026-08-07). El archivo semanal
+  // ("Special Flash Sale.xlsx") solo aporta la lista de SKUs a destacar: se
+  // les pone la etiqueta y, en modo reemplazo, se le quita a los que la
+  // tenían y no vienen en el archivo. No crea productos (el SKU desconocido
+  // se reporta) y **la columna Price se ignora a propósito**: una Flash Sale
+  // ya no tiene precio propio, el precio sale de la lista del cliente y se
+  // carga en la pestaña Precios como el de cualquier otro producto.
+  const handleFlashFile = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    setFlashBusy(true)
+    setFlashResult(null)
+    setFlashPreview(null)
+
+    try {
+      const rows = await parseSheet(file)
+      if (rows.length === 0) throw new Error('Archivo vacío')
+
+      const bySku = new Map(products.map((p) => [String(p.sku).trim().toLowerCase(), p]))
+      const fileSkus = new Set()
+      const matched = []
+      const unknown = []
+      for (const row of rows) {
+        const raw = pick(row, COLS.sku)
+        const sku = String(raw ?? '').trim().toLowerCase()
+        if (!sku || fileSkus.has(sku)) continue
+        fileSkus.add(sku)
+        const p = bySku.get(sku)
+        if (p) matched.push(p)
+        else unknown.push(String(raw).trim())
+      }
+      if (fileSkus.size === 0) throw new Error('El archivo no tiene filas con SKU')
+
+      setFlashPreview({
+        toTag: matched.filter((p) => p.availability !== 'flash'),
+        toUntag: products.filter(
+          (p) => p.availability === 'flash' && !fileSkus.has(String(p.sku).trim().toLowerCase()),
+        ),
+        unknown,
+        already: matched.filter((p) => p.availability === 'flash').length,
+        inactive: matched.filter((p) => !p.active).length,
+      })
+    } catch (err) {
+      setFlashResult({ ok: false, message: err.message })
+    }
+    setFlashBusy(false)
+  }
+
+  const confirmFlashTags = async () => {
+    if (!flashPreview) return
+    setFlashCommitting(true)
+    try {
+      const tagIds = flashPreview.toTag.map((p) => p.id)
+      const untagIds = flashReplace ? flashPreview.toUntag.map((p) => p.id) : []
+      if (tagIds.length > 0) {
+        const { error } = await updateByIds('products', { availability: 'flash' }, tagIds)
+        if (error) throw error
+      }
+      // Desmarcar = devolver el producto a la disponibilidad que manda su
+      // stock. Se escribe 'available' y el trigger de la base
+      // (products_availability_from_stock) baja a 'preorder' lo que tenga
+      // stock 0 o menos. Los que no tienen stock cargado quedan Disponible:
+      // la disponibilidad que tenían antes de ser 🔥 no se guardó en ningún
+      // lado, así que no hay a qué volver.
+      if (untagIds.length > 0) {
+        const { error } = await updateByIds('products', { availability: 'available' }, untagIds)
+        if (error) throw error
+      }
+      setFlashResult({
+        ok: true,
+        message: `${tagIds.length} ${t('flashTagged')} · ${untagIds.length} ${t('flashUntagged')} · ${flashPreview.unknown.length} ${t('unknownSkusLabel')}`,
+      })
+      setFlashPreview(null)
+      await load()
+    } catch (err) {
+      setFlashResult({ ok: false, message: err.message })
+    }
+    setFlashCommitting(false)
+  }
+
   const save = async (e) => {
     e.preventDefault()
     setBusy(true)
@@ -440,7 +566,7 @@ export default function ProductsAdmin() {
     await load()
   }
 
-  // ----- Selección + activación/desactivación en bloque -----
+  // ----- Selección + acciones en bloque -----
   const toggleSelect = (id) =>
     setSelected((prev) => {
       const next = new Set(prev)
@@ -463,18 +589,101 @@ export default function ProductsAdmin() {
       return next
     })
 
-  const bulkSetActive = async (value) => {
+  // Una acción en bloque que no cambiaría nada no se ofrece: marcar 🔥 sobre
+  // una selección que ya es toda 🔥 mandaría un update inútil y devolvería un
+  // "300 con la etiqueta aplicada" que suena a que hizo algo. Cada botón se
+  // apaga cuando ningún seleccionado cambiaría, y el título dice por qué —
+  // que no siempre es "ya la tienen": pedir Pre-Order sobre productos con
+  // stock tampoco cambia nada, porque la disponibilidad la manda el stock.
+  const selectedProducts = useMemo(
+    () => products.filter((p) => selected.has(p.id)),
+    [products, selected],
+  )
+
+  // null = la acción sí hace algo (botón habilitado); string = motivo por el
+  // que está apagado.
+  const availabilityBlocked = (value) => {
+    if (selectedProducts.some((p) => availabilityAfter(p, value) !== p.availability)) return null
+    return selectedProducts.every((p) => p.availability === value)
+      ? t('bulkAlreadyThat')
+      : t('bulkStockKeeps')
+  }
+  const activeBlocked = (value) =>
+    selectedProducts.some((p) => !!p.active !== value) ? null : t('bulkAlreadyThat')
+  const newBlocked = (on) =>
+    selectedProducts.some((p) => isNew(p) !== on)
+      ? null
+      : on
+        ? t('bulkAlreadyThat')
+        : t('bulkNothingToClear')
+
+  // Toda acción en bloque pasa por acá: update en tandas (una selección de
+  // miles de ids no entra en la URL de PostgREST), limpiar la selección y
+  // recargar. Devuelve los ids tocados y las filas frescas para que quien
+  // llame pueda verificar qué quedó guardado de verdad.
+  const bulkUpdate = async (patch) => {
     const ids = [...selected]
-    if (ids.length === 0) return
+    if (ids.length === 0) return null
     setBusy(true)
     setError('')
-    const { error } = await supabase.from('products').update({ active: value }).in('id', ids)
-    if (error) setError(error.message)
-    else {
-      setSelected(new Set())
+    setBulkNotice(null)
+    const { done, error } = await updateByIds('products', patch, ids)
+    if (error) {
+      // No es atómico: si se cortó a mitad, decir cuántos alcanzó a tocar en
+      // vez de dejar pensando que no se aplicó nada.
+      setError(done > 0 ? `${error.message} — ${done}/${ids.length}` : error.message)
       await load()
+      setBusy(false)
+      return null
     }
+    setSelected(new Set())
+    const fresh = await load()
     setBusy(false)
+    return { ids, fresh }
+  }
+
+  const bulkSetActive = async (value) => {
+    const res = await bulkUpdate({ active: value })
+    if (res) {
+      setBulkNotice({
+        ok: true,
+        message: `${res.ids.length} ${value ? t('activated') : t('deactivated')}`,
+      })
+    }
+  }
+
+  // Disponible y Pre-Order NO son libres: la base las deriva del stock
+  // (trigger products_availability_from_stock, invariante de la tabla desde
+  // 2026-08-04). Pedir Pre-Order sobre un producto con 5 unidades no queda —
+  // solo 🔥 Flash Sale se respeta siempre. Por eso se compara contra lo que
+  // quedó guardado y se informa el número real en vez de dar por hecho que
+  // se aplicó a todos.
+  const bulkSetAvailability = async (value) => {
+    const res = await bulkUpdate({ availability: value })
+    if (!res) return
+    if (!res.fresh) {
+      setBulkNotice({ ok: true, message: `${res.ids.length} ${t('bulkTagged')}` })
+      return
+    }
+    const byId = new Map(res.fresh.map((p) => [p.id, p]))
+    const applied = res.ids.filter((id) => byId.get(id)?.availability === value).length
+    const overridden = res.ids.length - applied
+    setBulkNotice({
+      ok: true,
+      message: `${applied} ${t('bulkTagged')}${
+        overridden > 0 ? ` · ${overridden} ${t('bulkStockOverrode')}` : ''
+      }`,
+    })
+  }
+
+  const bulkSetNew = async (on) => {
+    const res = await bulkUpdate({ new_until: on ? newUntilIn(NEW_TAG_DAYS) : null })
+    if (res) {
+      setBulkNotice({
+        ok: true,
+        message: `${res.ids.length} ${on ? t('bulkNewTagged') : t('bulkNewCleared')}`,
+      })
+    }
   }
 
   const noImageCount = products.filter((p) => !p.image_url).length
@@ -570,7 +779,7 @@ export default function ProductsAdmin() {
       </div>
 
       {isAdmin && (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-3">
           <UploadZone
             icon="📦"
             title={t('bulkUpload')}
@@ -587,6 +796,85 @@ export default function ProductsAdmin() {
             result={imgResult}
             onFile={handleImageFile}
           />
+          <UploadZone
+            icon="🔥"
+            title={t('flashTagUpload')}
+            hint={t('flashTagUploadHint')}
+            busy={flashBusy}
+            result={flashResult}
+            onFile={handleFlashFile}
+          />
+        </div>
+      )}
+
+      {/* Vista previa de la carga de Flash Sales: en modo reemplazo también
+          DESMARCA, así que se confirma antes de tocar nada (mismo criterio
+          que la carga de precios, que desactiva por omisión). */}
+      {isAdmin && flashPreview && (
+        <div className="animate-fade-up space-y-3 rounded-2xl border border-secondary/40 bg-gold-pale/10 p-4">
+          <h3 className="font-brand text-lg font-semibold">
+            🔥 {t('previewTitle')} — {t('flashTagUpload')}
+          </h3>
+          <div className="flex flex-wrap gap-2 text-xs font-semibold">
+            <span className="rounded-full bg-secondary/20 px-3 py-1 text-secondary-dark">
+              {flashPreview.toTag.length} {t('flashTagToTag')}
+            </span>
+            <span className="rounded-full bg-red-100 px-3 py-1 text-red-700 dark:bg-red-900/50 dark:text-red-300">
+              {flashReplace ? flashPreview.toUntag.length : 0} {t('flashTagToUntag')}
+            </span>
+            <span className="rounded-full bg-primary/10 px-3 py-1 text-primary/60">
+              {flashPreview.already} {t('flashTagAlready')}
+            </span>
+            <span className="rounded-full bg-primary/10 px-3 py-1 text-primary/60">
+              {flashPreview.unknown.length} {t('unknownSkusLabel')}
+            </span>
+          </div>
+
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={flashReplace}
+              onChange={(e) => setFlashReplace(e.target.checked)}
+              className="mt-0.5 accent-secondary"
+            />
+            <span>
+              {t('flashTagReplace')} ({flashPreview.toUntag.length})
+              <span className="mt-0.5 block text-xs text-primary/50">{t('flashTagReplaceHint')}</span>
+            </span>
+          </label>
+
+          {flashPreview.inactive > 0 && (
+            <p className="rounded-lg bg-red-50 p-2.5 text-xs leading-relaxed text-red-700 dark:bg-red-950/50 dark:text-red-300">
+              {t('flashTagInactiveWarn', { n: flashPreview.inactive })}
+            </p>
+          )}
+
+          {flashPreview.unknown.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs text-primary/60">{t('unknownSampleHint')}</p>
+              <p className="max-h-24 overflow-y-auto break-words font-mono text-xs text-primary/70">
+                {flashPreview.unknown.slice(0, 60).join(', ')}
+                {flashPreview.unknown.length > 60 ? '…' : ''}
+              </p>
+            </div>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={confirmFlashTags}
+              disabled={flashCommitting}
+              className="rounded-xl bg-secondary px-4 py-2 text-sm font-bold text-ink transition-colors hover:bg-secondary-dark disabled:opacity-50"
+            >
+              {flashCommitting ? t('applying') : t('confirmApply')}
+            </button>
+            <button
+              onClick={() => setFlashPreview(null)}
+              disabled={flashCommitting}
+              className="rounded-xl border border-line px-4 py-2 text-sm text-primary/60 transition-colors hover:border-primary/40 disabled:opacity-50"
+            >
+              {t('cancel')}
+            </button>
+          </div>
         </div>
       )}
 
@@ -687,92 +975,120 @@ export default function ProductsAdmin() {
         </form>
       )}
 
-      {/* Buscador + filtros */}
-      <div className="flex flex-col gap-2 md:flex-row">
-        <div className="relative flex-1">
-          <SearchIcon />
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t('searchProducts')}
-            className={`${inputCls} w-full pl-10`}
-          />
-        </div>
-        <select
-          value={catFilter}
-          onChange={(e) => setCatFilter(e.target.value)}
-          className={inputCls}
-        >
-          <option value="">{t('allCategories')}</option>
-          <option value="__none__">{t('uncategorized')}</option>
-          {categories.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
-        {lines.length > 0 && (
-          <select
-            value={lineFilter}
-            onChange={(e) => setLineFilter(e.target.value)}
-            className={inputCls}
-          >
-            <option value="">{t('allLines')}</option>
-            <option value="__none__">{t('uncategorized')}</option>
-            {lines.map((l) => (
-              <option key={l} value={l}>
-                {lineLabel(l)}
-              </option>
-            ))}
-          </select>
-        )}
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className={inputCls}
-        >
-          <option value="">{t('allStatuses')}</option>
-          <option value="active">{t('active')}</option>
-          <option value="inactive">{t('inactive')}</option>
-          <option value="instock">{t('withStock')}</option>
-          <option value="nostock">{t('outOfStock')}</option>
-          <option value="noimage">{t('noImage')}</option>
-          <option value="preorder">{t('preorder')}</option>
-          <option value="flash">{t('flashSale')}</option>
-          <option value="new">✨ {t('newTag')}</option>
-        </select>
-      </div>
+      {/* Buscador + filtros (los mismos que la pestaña Precios, ver ui.jsx) */}
+      <ProductFilters
+        query={query}
+        onQueryChange={setQuery}
+        categories={categories}
+        catFilter={catFilter}
+        onCatChange={setCatFilter}
+        lines={lines}
+        lineFilter={lineFilter}
+        onLineChange={setLineFilter}
+        lineLabel={lineLabel}
+        statusFilter={statusFilter}
+        onStatusChange={setStatusFilter}
+        withPhotoStatus
+      />
 
       {/* Barra de acción para la selección en bloque (solo admin) */}
       {isAdmin && selected.size > 0 && (
-        <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-2xl border border-secondary/40 bg-gold-pale/60 px-4 py-2.5 shadow-sm">
-          <span className="text-sm font-semibold text-primary">
-            {selected.size} {t('selected')}
-          </span>
-          <div className="ml-auto flex gap-2">
-            <button
-              disabled={busy}
-              onClick={() => bulkSetActive(true)}
-              className="rounded-full bg-green-600 px-4 py-1.5 text-xs font-bold text-white transition-colors hover:bg-green-700 disabled:opacity-50"
-            >
-              {t('activate')}
-            </button>
-            <button
-              disabled={busy}
-              onClick={() => bulkSetActive(false)}
-              className="rounded-full bg-red-600 px-4 py-1.5 text-xs font-bold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
-            >
-              {t('deactivate')}
-            </button>
-            <button
-              onClick={() => setSelected(new Set())}
-              className="rounded-full border border-line px-4 py-1.5 text-xs font-semibold text-primary/60 transition-colors hover:border-primary/40"
-            >
-              {t('clearSelection')}
-            </button>
+        <div className="sticky top-0 z-10 space-y-2 rounded-2xl border border-secondary/40 bg-gold-pale/60 px-4 py-2.5 shadow-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-primary">
+              {selected.size} {t('selected')}
+            </span>
+            <div className="ml-auto flex gap-2">
+              <BulkButton
+                busy={busy}
+                blocked={activeBlocked(true)}
+                onClick={() => bulkSetActive(true)}
+                className="rounded-full bg-green-600 px-4 py-1.5 text-xs font-bold text-white transition-colors hover:bg-green-700 disabled:opacity-40"
+              >
+                {t('activate')}
+              </BulkButton>
+              <BulkButton
+                busy={busy}
+                blocked={activeBlocked(false)}
+                onClick={() => bulkSetActive(false)}
+                className="rounded-full bg-red-600 px-4 py-1.5 text-xs font-bold text-white transition-colors hover:bg-red-700 disabled:opacity-40"
+              >
+                {t('deactivate')}
+              </BulkButton>
+              <button
+                type="button"
+                onClick={() => setSelected(new Set())}
+                className="rounded-full border border-line px-4 py-1.5 text-xs font-semibold text-primary/60 transition-colors hover:border-primary/40"
+              >
+                {t('clearSelection')}
+              </button>
+            </div>
           </div>
+
+          {/* Etiquetas en bloque (2026-08-07): poner/quitar 🔥 Flash Sale y
+              Pre-Order, y marcar/desmarcar ✨ Nuevo sin abrir producto por
+              producto. Quitar 🔥 = volver a Disponible (el stock decide). */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-secondary/25 pt-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-primary/50">
+              {t('tagLabel')}
+            </span>
+            <BulkButton
+              busy={busy}
+              blocked={availabilityBlocked('flash')}
+              onClick={() => bulkSetAvailability('flash')}
+              className="rounded-full bg-secondary px-3.5 py-1.5 text-xs font-bold text-ink transition-colors hover:bg-secondary-dark disabled:opacity-40"
+            >
+              🔥 {t('flashSale')}
+            </BulkButton>
+            <BulkButton
+              busy={busy}
+              blocked={availabilityBlocked('preorder')}
+              onClick={() => bulkSetAvailability('preorder')}
+              className="rounded-full bg-gold-pale px-3.5 py-1.5 text-xs font-bold text-secondary-dark ring-1 ring-secondary/40 transition-colors hover:bg-secondary/30 disabled:opacity-40"
+            >
+              {t('preorder')}
+            </BulkButton>
+            <BulkButton
+              busy={busy}
+              blocked={availabilityBlocked('available')}
+              onClick={() => bulkSetAvailability('available')}
+              className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-xs font-semibold text-primary/70 transition-colors hover:border-secondary disabled:opacity-40"
+            >
+              {t('availableTag')}
+            </BulkButton>
+            <span className="ml-2 text-xs font-semibold uppercase tracking-wider text-primary/50">
+              ✨ {t('newTag')}
+            </span>
+            <BulkButton
+              busy={busy}
+              blocked={newBlocked(true)}
+              onClick={() => bulkSetNew(true)}
+              className="rounded-full bg-green-100 px-3.5 py-1.5 text-xs font-bold text-green-800 transition-colors hover:bg-green-200 disabled:opacity-40 dark:bg-green-900/50 dark:text-green-300 dark:hover:bg-green-900"
+            >
+              {t('markTag')}
+            </BulkButton>
+            <BulkButton
+              busy={busy}
+              blocked={newBlocked(false)}
+              onClick={() => bulkSetNew(false)}
+              className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-xs font-semibold text-primary/70 transition-colors hover:border-secondary disabled:opacity-40"
+            >
+              {t('unmarkTag')}
+            </BulkButton>
+          </div>
+          <p className="text-[11px] leading-relaxed text-primary/50">{t('bulkAvailabilityHint')}</p>
         </div>
+      )}
+
+      {bulkNotice && (
+        <p className="rounded-lg bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/50 dark:text-green-300">
+          {bulkNotice.message}
+        </p>
+      )}
+      {error && !form && (
+        <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
+          {error}
+        </p>
       )}
 
       <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-sm">

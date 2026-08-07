@@ -4,7 +4,13 @@ import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { parseSheet, normalizeHeader } from '../../utils/excel'
 import { money } from '../../utils/format'
-import { SearchIcon, inputCls, useInfiniteRows } from './ui'
+import {
+  ProductFilters,
+  isNewProduct,
+  productMatchesFilters,
+  inputCls,
+  useInfiniteRows,
+} from './ui'
 
 // Alias aceptados por lista para la columna de precio del Excel (algunos
 // archivos reales nombran la columna igual que la lista, ej. "US Minimum
@@ -36,6 +42,10 @@ const LIST_ORDER = ['us_min', 'us_wholesale', 've_min', 've_wholesale', 'special
 
 export default function PricesUpload() {
   const { t } = useI18n()
+  // Mismo criterio que ProductsAdmin/Catalog: los dos valores canónicos se
+  // leen traducidos, el resto (Beauty, Electronics…) tal cual viene.
+  const lineLabel = (raw) =>
+    raw === 'Perfume' ? t('lineDesigner') : raw === 'Perfume - Arabes' ? t('lineArabic') : raw
   const { role } = useOutletContext()
   const isAdmin = role === 'admin'
   const [priceLists, setPriceLists] = useState([])
@@ -54,13 +64,32 @@ export default function PricesUpload() {
   const [query, setQuery] = useState('')
   const [priceFilter, setPriceFilter] = useState('') // '' | 'has' | 'missing'
   const [listFilter, setListFilter] = useState('') // '' = todas las listas
-  const [visibleRows, sentinelRef] = useInfiniteRows(100, [query, priceFilter, listFilter])
+  // Filtros por grupo de producto (2026-08-07): mirar los precios de un
+  // recorte concreto — los 🔥 Flash Sale, los ✨ Nuevos, los Pre-Order, una
+  // marca, los árabes. Son los mismos de la pestaña Productos (ui.jsx).
+  const [catFilter, setCatFilter] = useState('')
+  const [lineFilter, setLineFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [visibleRows, sentinelRef] = useInfiniteRows(100, [
+    query,
+    priceFilter,
+    listFilter,
+    catFilter,
+    lineFilter,
+    statusFilter,
+  ])
 
   const load = async () => {
     try {
       const [pls, ps, pps] = await Promise.all([
         fetchAll('price_lists'),
-        fetchAll('products', 'id, sku, name', 'name'),
+        // Los campos de más son los que necesitan los filtros por grupo
+        // (marca, línea, disponibilidad, ✨ nuevo, activo, stock).
+        fetchAll(
+          'products',
+          'id, sku, upc, name, category, product_line, availability, new_until, active, stock',
+          'name',
+        ),
         fetchAll('product_prices', 'product_id, price_list_id, price', 'product_id'),
       ])
       // 'quote' nunca usa product_prices (get_catalog la ignora por
@@ -88,6 +117,15 @@ export default function PricesUpload() {
     [priceLists],
   )
 
+  const categories = useMemo(
+    () => [...new Set(products.map((p) => p.category).filter(Boolean))].sort(),
+    [products],
+  )
+  const lines = useMemo(
+    () => [...new Set(products.map((p) => p.product_line).filter(Boolean))].sort(),
+    [products],
+  )
+
   // Filtrar por lista: la matriz muestra solo esa columna, y "solo sin
   // precios" pasa a significar "sin precio en esa lista".
   const visibleLists = useMemo(
@@ -105,27 +143,33 @@ export default function PricesUpload() {
     return value != null && Number(value) > 0
   }
 
-  // Contadores de los botones de filtro: sobre todos los productos (no
-  // solo los que matchea el buscador), igual que los contadores de la
-  // pestaña Productos — así el número no cambia al escribir en el buscador.
-  const withPricesCount = useMemo(
-    () => products.filter((p) => visibleLists.some((l) => hasPrice(p.id, l.id))).length,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [products, priceMap, visibleLists],
+  // Universo sobre el que se cuenta y se lista. Los filtros por grupo
+  // (marca/línea/estado) SÍ recortan los contadores: el sentido de filtrar
+  // por 🔥 Flash Sale es justamente saber cuántos de ESOS están sin precio.
+  // El buscador de texto no entra, para que el número no baile tecla a tecla.
+  const inGroup = useMemo(
+    () => products.filter((p) => productMatchesFilters(p, { catFilter, lineFilter, statusFilter })),
+    [products, catFilter, lineFilter, statusFilter],
   )
-  const missingPricesCount = products.length - withPricesCount
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return products.filter((p) => {
-      const hasVisiblePrice = visibleLists.some((l) => hasPrice(p.id, l.id))
-      if (priceFilter === 'has' && !hasVisiblePrice) return false
-      if (priceFilter === 'missing' && hasVisiblePrice) return false
-      if (q && !p.name.toLowerCase().includes(q) && !String(p.sku).toLowerCase().includes(q))
-        return false
-      return true
-    })
-  }, [products, priceMap, visibleLists, query, priceFilter])
+  const withPricesCount = useMemo(
+    () => inGroup.filter((p) => visibleLists.some((l) => hasPrice(p.id, l.id))).length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inGroup, priceMap, visibleLists],
+  )
+  const missingPricesCount = inGroup.length - withPricesCount
+
+  const filtered = useMemo(
+    () =>
+      inGroup.filter((p) => {
+        const hasVisiblePrice = visibleLists.some((l) => hasPrice(p.id, l.id))
+        if (priceFilter === 'has' && !hasVisiblePrice) return false
+        if (priceFilter === 'missing' && hasVisiblePrice) return false
+        return productMatchesFilters(p, { query })
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inGroup, priceMap, visibleLists, query, priceFilter],
+  )
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0]
@@ -333,21 +377,26 @@ export default function PricesUpload() {
       {/* Matriz de precios por lista */}
       <div className="space-y-3 pt-2">
         <h3 className="font-brand text-xl font-semibold">{t('priceMatrixTitle')}</h3>
+        {/* Filtros por grupo de producto: los mismos de la pestaña Productos
+            (ui.jsx), para poder mirar los precios de un recorte concreto. */}
+        <ProductFilters
+          query={query}
+          onQueryChange={setQuery}
+          categories={categories}
+          catFilter={catFilter}
+          onCatChange={setCatFilter}
+          lines={lines}
+          lineFilter={lineFilter}
+          onLineChange={setLineFilter}
+          lineLabel={lineLabel}
+          statusFilter={statusFilter}
+          onStatusChange={setStatusFilter}
+        />
         <div className="flex flex-col gap-2 md:flex-row md:items-center">
-          <div className="relative flex-1">
-            <SearchIcon />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t('searchProducts')}
-              className={`${inputCls} w-full pl-10`}
-            />
-          </div>
           <select
             value={listFilter}
             onChange={(e) => setListFilter(e.target.value)}
-            className={inputCls}
+            className={`${inputCls} md:flex-1`}
           >
             <option value="">{t('allLists')}</option>
             {orderedLists.map((l) => (
@@ -397,6 +446,29 @@ export default function PricesUpload() {
                   <tr key={p.id} className="border-b border-line/60 transition-colors hover:bg-gold-pale/20">
                     <td className="p-3">
                       <span className="font-medium">{p.name}</span>
+                      {/* Mismas etiquetas que la pestaña Productos: con los
+                          filtros por grupo puestos hay que poder ver de qué
+                          producto se está mirando el precio. */}
+                      {p.availability === 'flash' && (
+                        <span className="ml-2 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink">
+                          🔥 {t('flashSale')}
+                        </span>
+                      )}
+                      {p.availability === 'preorder' && (
+                        <span className="ml-2 rounded-full bg-gold-pale px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-secondary-dark">
+                          {t('preorder')}
+                        </span>
+                      )}
+                      {isNewProduct(p) && (
+                        <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-green-800 dark:bg-green-900/50 dark:text-green-300">
+                          ✨ {t('newTag')}
+                        </span>
+                      )}
+                      {!p.active && (
+                        <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700 dark:bg-red-900/50 dark:text-red-300">
+                          {t('inactive')}
+                        </span>
+                      )}
                       <span className="block font-mono text-[11px] text-primary/45">{p.sku}</span>
                     </td>
                     {visibleLists.map((l) => {

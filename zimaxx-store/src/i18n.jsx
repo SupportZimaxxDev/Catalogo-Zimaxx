@@ -21,11 +21,9 @@ const dict = {
     minOrderIs: 'El pedido mínimo es',
     missingForMin: 'Te faltan',
 
-    // Flash sale
+    // Flash Sale: desde 2026-08-07 es solo una etiqueta del producto (badge
+    // en la tarjeta + chip de filtro). No hay más precio promo ni countdown.
     flashSale: 'Flash Sale',
-    flashEnds: 'Termina en',
-    days: 'd',
-    flashOnly: 'Oferta por tiempo limitado',
 
     // Cart
     add: 'Agregar',
@@ -85,13 +83,11 @@ const dict = {
     clients: 'Clientes',
     vendedoras: 'Vendedoras',
     orders: 'Pedidos',
-    flashSales: 'Flash Sales',
     save: 'Guardar',
     cancel: 'Cancelar',
     confirm: 'Confirmar',
     confirmListChangeText: '¿Cambiar la lista de precio del cliente a',
     edit: 'Editar',
-    change: 'Cambiar',
     newProduct: 'Nuevo producto',
     name: 'Nombre',
     category: 'Categoría',
@@ -168,11 +164,10 @@ const dict = {
     deactivated: 'desactivados',
     copyLink: 'Copiar link',
     copied: 'Copiado',
-    expiresAt: 'Expira',
-    startsAt: 'Empieza',
-    promoPrice: 'Precio promo',
     selectProduct: 'Seleccionar producto',
     noOrders: 'Aún no hay pedidos registrados.',
+    ordersLoadFailed:
+      'No se pudieron cargar todos los pedidos. Recargá la página: puede que la lista esté incompleta.',
     date: 'Fecha',
     type: 'Tipo',
     order: 'Pedido',
@@ -257,18 +252,37 @@ const dict = {
     assignedToOwner: 'Esta lista es exclusiva de',
     quoteRequestTitle: 'Solicitud de cotización — Zimaxx Store',
     quoteRequestGreeting: 'Hola! Quiero cotización de estos productos:',
-    bulkFlashUpload: 'Carga masiva por Excel',
-    flashUploadHint:
-      'Excel con columnas SKU y Price (mismo formato del "Special Flash Sale", con membrete y columnas UPC/Sku/Brand/Title Product/Price/Type/Qty — Type/Qty/Total se ignoran). Elegí primero la fecha de inicio y fin de la promo: se aplica igual a todos los productos del archivo.',
-    flashUploadNeedDates: 'Elegí la fecha de inicio y fin de la promoción antes de subir el Excel.',
-    flashStatus_live: 'LIVE',
-    flashStatus_scheduled: 'Programada',
-    flashStatus_expired: 'Expiró',
-    flashStatus_deactivated: 'Desactivada',
-    flashBatchGroup: 'Lote de carga masiva',
-    flashExpiryGroup: 'Mismo vencimiento',
-    deactivateGroup: 'Desactivar grupo',
-    applyToGroup: 'Aplicar al grupo',
+    // ---------- Flash Sales = etiqueta del producto (2026-08-07) ----------
+    flashTagUpload: 'Flash Sales por Excel',
+    flashTagUploadHint:
+      'Excel con columna SKU (sirve el "Special Flash Sale" tal cual, con membrete y columnas UPC/Sku/Brand/Title Product/Price/Type/Qty). Le pone la etiqueta 🔥 Flash Sale a esos productos, para que el cliente los reconozca y pueda filtrarlos en el catálogo. No crea productos ni toca precios: la columna Price se ignora, los precios se cargan por lista en la pestaña Precios. Se muestra una vista previa antes de aplicar.',
+    flashTagToTag: 'a marcar 🔥',
+    flashTagToUntag: 'a desmarcar',
+    flashTagAlready: 'ya tenían la etiqueta',
+    flashTagReplace: 'Quitarle la etiqueta 🔥 a los que no vienen en el archivo',
+    flashTagReplaceHint:
+      'Así el archivo reemplaza la promo entera. Los que se desmarcan vuelven a Disponible, o a Pre-Order si su stock está en 0.',
+    flashTagInactiveWarn:
+      '{n} producto(s) del archivo están inactivos: no se ven en el catálogo aunque lleven la etiqueta. Filtrá por 🔥 Flash Sale, seleccionalos y usá "Activar".',
+    flashTagged: 'marcados 🔥',
+    flashUntagged: 'desmarcados',
+    // Acciones en bloque sobre la selección de la tabla
+    tagLabel: 'Etiqueta',
+    availableTag: 'Disponible',
+    markTag: 'Marcar',
+    unmarkTag: 'Quitar',
+    bulkAvailabilityHint:
+      'Disponible y Pre-Order las decide el stock: en un producto con stock cargado la base las recalcula sola (0 o menos → Pre-Order). Solo 🔥 Flash Sale se respeta siempre. Una acción que no cambiaría nada aparece deshabilitada.',
+    // Motivos por los que un botón de la barra de selección queda apagado
+    bulkAlreadyThat: 'Todos los seleccionados ya están así.',
+    bulkNothingToClear: 'Ninguno de los seleccionados tiene esta etiqueta.',
+    bulkStockKeeps:
+      'No cambiaría nada: la disponibilidad de los seleccionados la manda su stock. Cambiales el stock (o marcalos 🔥 Flash Sale, que sí se respeta siempre).',
+    bulkTagged: 'con la etiqueta aplicada',
+    bulkStockOverrode: 'recalculados por su stock',
+    bulkNewTagged: 'marcados ✨ Nuevo',
+    bulkNewCleared: 'sin la etiqueta ✨ Nuevo',
+    activated: 'activados',
     newTag: 'Nuevo',
     newUntil: 'Nuevo hasta',
     newUntilHint:
@@ -362,17 +376,6 @@ const dict = {
     metricsExcluded: 'Fuera del cálculo (cuentas de prueba):',
     metricsMigrationMissing:
       'Falta correr migration-2026-08-06-sa-metrics.sql en la base de datos: la RPC sa_metrics_overview todavía no existe.',
-    // Flash Sales — prender/apagar y reprogramar grupos (2026-08-06)
-    reactivate: 'Reactivar',
-    reactivateGroup: 'Reactivar grupo',
-    flashStatusHint:
-      'En el catálogo se ven solo las ofertas EN VIVO. "Expiró" es por fecha y se arregla reprogramando el vencimiento; "Desactivada" es a mano y se arregla con Reactivar — reprogramar la fecha NO la vuelve a prender.',
-    flashGroupHiddenByFilter: '({n} no se muestran por el filtro)',
-    flashRescheduleWhat: 'Se reprograma el vencimiento de las {n} ofertas del grupo.',
-    flashRescheduleGoLive: '{n} van a verse en el catálogo desde ya.',
-    flashRescheduleStayOff: '{n} están desactivadas y siguen apagadas.',
-    flashRescheduleOnly: 'Solo reprogramar',
-    flashRescheduleAndOn: 'Reprogramar y reactivar todo',
     invalidZeroPriceHint:
       'Precio en 0: cuenta como sin precio, así que el producto NO sale en el catálogo. Volvé a cargarlo con el precio real.',
   },
@@ -395,9 +398,6 @@ const dict = {
     missingForMin: 'You need',
 
     flashSale: 'Flash Sale',
-    flashEnds: 'Ends in',
-    days: 'd',
-    flashOnly: 'Limited-time offer',
 
     add: 'Add',
     addToCart: 'Add to cart',
@@ -451,13 +451,11 @@ const dict = {
     clients: 'Clients',
     vendedoras: 'Sales Reps',
     orders: 'Orders',
-    flashSales: 'Flash Sales',
     save: 'Save',
     cancel: 'Cancel',
     confirm: 'Confirm',
     confirmListChangeText: "Change the client's price list to",
     edit: 'Edit',
-    change: 'Change',
     newProduct: 'New product',
     name: 'Name',
     category: 'Category',
@@ -531,11 +529,10 @@ const dict = {
     deactivated: 'deactivated',
     copyLink: 'Copy link',
     copied: 'Copied',
-    expiresAt: 'Expires',
-    startsAt: 'Starts',
-    promoPrice: 'Promo price',
     selectProduct: 'Select product',
     noOrders: 'No orders yet.',
+    ordersLoadFailed:
+      'Could not load every order. Reload the page: the list may be incomplete.',
     date: 'Date',
     type: 'Type',
     order: 'Order',
@@ -619,18 +616,37 @@ const dict = {
     assignedToOwner: 'This list is exclusive to',
     quoteRequestTitle: 'Quote Request — Zimaxx Store',
     quoteRequestGreeting: 'Hi! I would like a quote for these products:',
-    bulkFlashUpload: 'Bulk upload via Excel',
-    flashUploadHint:
-      'Excel with SKU and Price columns (same format as "Special Flash Sale", with letterhead and UPC/Sku/Brand/Title Product/Price/Type/Qty columns — Type/Qty/Total are ignored). Pick the start and end date of the promo first: it applies to every product in the file.',
-    flashUploadNeedDates: 'Pick the start and end date of the promotion before uploading the Excel.',
-    flashStatus_live: 'LIVE',
-    flashStatus_scheduled: 'Scheduled',
-    flashStatus_expired: 'Expired',
-    flashStatus_deactivated: 'Deactivated',
-    flashBatchGroup: 'Bulk upload batch',
-    flashExpiryGroup: 'Same expiration',
-    deactivateGroup: 'Deactivate group',
-    applyToGroup: 'Apply to group',
+    // ---------- Flash Sales = a product tag (2026-08-07) ----------
+    flashTagUpload: 'Flash Sales via Excel',
+    flashTagUploadHint:
+      'Excel with a SKU column (the "Special Flash Sale" file works as-is, letterhead and UPC/Sku/Brand/Title Product/Price/Type/Qty columns included). It tags those products with 🔥 Flash Sale so clients can spot and filter them in the catalog. It never creates products and never touches prices: the Price column is ignored — prices are uploaded per list in the Prices tab. You get a preview before anything is applied.',
+    flashTagToTag: 'to tag 🔥',
+    flashTagToUntag: 'to untag',
+    flashTagAlready: 'already tagged',
+    flashTagReplace: 'Remove the 🔥 tag from products not in the file',
+    flashTagReplaceHint:
+      'That way the file replaces the whole promo. Untagged products go back to Available, or Pre-Order if their stock is 0.',
+    flashTagInactiveWarn:
+      '{n} product(s) in the file are inactive: they stay out of the catalog even with the tag. Filter by 🔥 Flash Sale, select them and hit "Activate".',
+    flashTagged: 'tagged 🔥',
+    flashUntagged: 'untagged',
+    // Bulk actions on the table selection
+    tagLabel: 'Tag',
+    availableTag: 'Available',
+    markTag: 'Mark',
+    unmarkTag: 'Remove',
+    bulkAvailabilityHint:
+      'Available and Pre-Order are driven by stock: on a product with stock on file the database recalculates them on its own (0 or less → Pre-Order). Only 🔥 Flash Sale always sticks. An action that would change nothing shows up disabled.',
+    // Why a button in the selection bar is disabled
+    bulkAlreadyThat: 'Every selected product is already like this.',
+    bulkNothingToClear: 'None of the selected products has this tag.',
+    bulkStockKeeps:
+      "Nothing would change: the selected products' availability is driven by their stock. Change the stock (or tag them 🔥 Flash Sale, which always sticks).",
+    bulkTagged: 'tagged',
+    bulkStockOverrode: 'recalculated from their stock',
+    bulkNewTagged: 'tagged ✨ New',
+    bulkNewCleared: 'cleared of the ✨ New tag',
+    activated: 'activated',
     newTag: 'New',
     newUntil: 'New until',
     newUntilHint:
@@ -724,17 +740,6 @@ const dict = {
     metricsExcluded: 'Left out of the numbers (test accounts):',
     metricsMigrationMissing:
       'migration-2026-08-06-sa-metrics.sql has not been run on the database yet: the sa_metrics_overview RPC does not exist.',
-    // Flash Sales — turning groups on/off and rescheduling (2026-08-06)
-    reactivate: 'Reactivate',
-    reactivateGroup: 'Reactivate group',
-    flashStatusHint:
-      'Only LIVE offers show in the catalog. "Expired" is by date and is fixed by rescheduling the expiry; "Deactivated" was done by hand and is fixed with Reactivate — changing the date does NOT turn it back on.',
-    flashGroupHiddenByFilter: '({n} hidden by the filter)',
-    flashRescheduleWhat: 'This reschedules the expiry of all {n} offers in the group.',
-    flashRescheduleGoLive: '{n} will show in the catalog right away.',
-    flashRescheduleStayOff: '{n} are deactivated and will stay off.',
-    flashRescheduleOnly: 'Reschedule only',
-    flashRescheduleAndOn: 'Reschedule and reactivate all',
     invalidZeroPriceHint:
       'Price is 0: that counts as no price, so the product does NOT show in the catalog. Upload it again with the real price.',
   },

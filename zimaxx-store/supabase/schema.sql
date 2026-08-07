@@ -259,6 +259,17 @@ create table if not exists public.product_prices (
   primary key (product_id, price_list_id)
 );
 
+-- ⚠ LEGADO (2026-08-07): la app ya NO usa esta tabla. Las "ofertas con
+-- precio promo + cuenta regresiva" se eliminaron del producto — la pestaña
+-- Flash Sales del panel y la sección del catálogo se borraron, y nada llama
+-- más a get_flash_sales(). Hoy una Flash Sale es solo la ETIQUETA del
+-- producto (products.availability = 'flash'), que se pone desde la pestaña
+-- Productos y el cliente filtra con el chip 🔥.
+-- La tabla, sus datos y las funciones que la leen se dejan en pie a
+-- propósito: no se borró nada (es reversible) y compute_order_items todavía
+-- la consulta para revalorizar una línea vieja marcada `flash` de un pedido
+-- anterior — como ya no hay ofertas vigentes, cae al precio de lista, que es
+-- justo lo que corresponde. No hace falta ninguna migración.
 create table if not exists public.flash_sales (
   id         uuid primary key default gen_random_uuid(),
   product_id uuid not null references public.products (id) on delete cascade,
@@ -1180,6 +1191,9 @@ revoke execute on function public.get_catalog(text) from public;
 grant execute on function public.get_catalog(text) to anon, authenticated;
 
 -- ---------- RPC: get_flash_sales ----------
+-- ⚠ LEGADO (2026-08-07): sin llamadores. El catálogo dejó de pedirla al
+-- eliminarse la sección de ofertas; se deja creada por si hiciera falta
+-- volver atrás. Ver la nota sobre la tabla `flash_sales` más arriba.
 -- Pública, sin token. Devuelve solo ofertas vigentes.
 create or replace function public.get_flash_sales()
 returns jsonb

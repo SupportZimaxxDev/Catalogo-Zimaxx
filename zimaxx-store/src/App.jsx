@@ -9,7 +9,6 @@ const PricesUpload = lazy(() => import('./pages/admin/PricesUpload'))
 const ClientsAdmin = lazy(() => import('./pages/admin/ClientsAdmin'))
 const AuditLogAdmin = lazy(() => import('./pages/admin/AuditLogAdmin'))
 const VendedorasAdmin = lazy(() => import('./pages/admin/VendedoresAdmin'))
-const FlashSalesAdmin = lazy(() => import('./pages/admin/FlashSalesAdmin'))
 const OrdersAdmin = lazy(() => import('./pages/admin/OrdersAdmin'))
 const SuperAdminPanel = lazy(() => import('./pages/admin/SuperAdminPanel'))
 const MetricsAdmin = lazy(() => import('./pages/admin/MetricsAdmin'))
@@ -34,7 +33,6 @@ export default function App() {
           <Route path="clients" element={<ClientsAdmin />} />
           <Route path="audit" element={<AuditLogAdmin />} />
           <Route path="vendedoras" element={<VendedorasAdmin />} />
-          <Route path="flash" element={<FlashSalesAdmin />} />
           <Route path="orders" element={<OrdersAdmin />} />
           {/* Solo superadmin: AdminLayout corta la ruta para cualquier otro */}
           <Route path="superadmin" element={<SuperAdminPanel />} />

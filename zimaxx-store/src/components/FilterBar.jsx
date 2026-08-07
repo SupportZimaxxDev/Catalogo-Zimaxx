@@ -8,8 +8,11 @@ const chipCls = (active, size = 'text-xs') =>
   }`
 
 // Chips de categoría/línea/disponibilidad. Vive pegado al Header (ver
-// Catalog.jsx: ambos comparten el mismo contenedor sticky) para que no
-// queden escondidos debajo de Flash Sale cuando esa sección crece.
+// Catalog.jsx: ambos comparten el mismo contenedor sticky) para quedar
+// siempre a la vista sin importar cuánto crezca el contenido de abajo.
+// El chip 🔥 Flash Sale filtra por la etiqueta del producto: desde
+// 2026-08-07 es la única Flash Sale que hay (no existe más la sección de
+// ofertas con precio promo y cuenta regresiva).
 export default function FilterBar({
   categories,
   category,

@@ -43,3 +43,22 @@ export async function fetchAll(table, columns = '*', orderBy = 'id') {
   }
   return all
 }
+
+// UPDATE ... WHERE id IN (...) en tandas (2026-08-07). PostgREST manda el
+// `in.(...)` en la query string: con una selección grande de la pestaña
+// Productos (marcar 🔥 media promo, activar todo lo filtrado) son ~37 bytes
+// por uuid, así que 1,000 ids arman una URL de ~37 KB y el request se cae
+// por largo antes de llegar a la base. De a 100 la URL queda en ~4 KB.
+// No es atómico: si una tanda falla, las anteriores ya se aplicaron — se
+// devuelve cuántas filas se alcanzaron a tocar junto con el error para
+// poder decirlo en pantalla en vez de dar el bulk entero por fallado.
+export async function updateByIds(table, patch, ids, chunkSize = 100) {
+  let done = 0
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize)
+    const { error } = await supabase.from(table).update(patch).in('id', chunk)
+    if (error) return { done, error }
+    done += chunk.length
+  }
+  return { done, error: null }
+}

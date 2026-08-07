@@ -1,7 +1,15 @@
 # Zimaxx Store — Referencia completa del proyecto
 
 > Documento de referencia para retomar el trabajo en cualquier sesión.
-> Creado: 2026-07-02. Última actualización: 2026-08-06 (**pestaña 📈 Métricas**,
+> Creado: 2026-07-02. Última actualización: 2026-08-07 (**se eliminó el área de
+> Flash Sales**: la pestaña del panel y la sección con countdown del catálogo.
+> Una Flash Sale pasa a ser solo la **etiqueta 🔥 del producto**, que se pone
+> desde Productos con un Excel nuevo o con la selección en bloque; en la misma
+> tanda, **acciones en bloque de etiquetas** (🔥 / Pre-Order / Disponible /
+> ✨ Nuevo) y **filtros por grupo de producto en la pestaña Precios** —
+> punto 53, **sin migración**. Cuarta tanda: **la bandeja de Pedidos deja de
+> estar topeada en 200** — carga todos y el conteo pasa a ser el real, punto 54).
+> Antes: 2026-08-06 (**pestaña 📈 Métricas**,
 > solo superadmin: KPIs de todo el sistema en vivo por polling de 60 s, rango
 > 7/14/30 días, adopción por vendedora y mini-gráfico de monto por día, todo
 > desde una sola RPC `sa_metrics_overview` — punto 50; **migración pendiente de
@@ -226,6 +234,87 @@
 > reabrir/cancelar, cotización que no toca stock, y el bloqueo del update
 > directo a `stock_applied`.
 >
+> 2026-08-07, **punto 53: se eliminó el área de Flash Sales; la Flash Sale
+> pasa a ser una etiqueta del producto**. A pedido del usuario, con el porqué
+> textual: *"los flash sales no hace falta que tengan un countdown, ya que
+> realmente se usa como una estrategia para vender productos de los cuales se
+> quiere mover inventario"*. Se fueron la pestaña **Flash Sales** del panel (la
+> que estaba al lado de Vendedoras, `FlashSalesAdmin.jsx`) y la **sección negra
+> con cuenta regresiva** del catálogo (`FlashSaleSection.jsx`), más la llamada a
+> `get_flash_sales()` que el catálogo hacía en cada carga. Queda la etiqueta 🔥
+> (`products.availability = 'flash'`), que ya existía desde 2026-07-08 con su
+> badge en la tarjeta y su chip de filtro — el cliente no pierde nada visible
+> salvo la caja de ofertas. **Sin migración y sin borrar datos**: la tabla
+> `flash_sales`, sus filas y `get_flash_sales()` quedan en la base marcadas como
+> LEGADO en `schema.sql`; deshacer esto es reponer código, no recuperar datos.
+> Tampoco se tocó el flag `flash` de los ítems del carrito ni la rama que
+> `compute_order_items` usa para revalorizarlos: ya nadie lo pone en true, y una
+> línea vieja marcada así cae al precio de lista, que es lo correcto — sacarlo
+> era refactorizar el carrito del cliente entero a cambio de nada.
+>
+> Tres cosas nuevas en la misma tanda:
+> **(1) Carga de Flash Sales por Excel en la pestaña Productos** — el archivo
+> semanal "Special Flash Sale" tal cual (323 SKU útiles de 324 filas en el real;
+> la que sobra no trae SKU). Solo lee la columna SKU y pone la etiqueta; **la
+> columna Price se ignora a propósito**, porque una Flash Sale ya no tiene
+> precio propio. Vista previa antes de escribir (a marcar / a desmarcar / ya
+> etiquetados / SKU sin producto) por la misma razón que la de precios: **por
+> defecto también desmarca**, para que el archivo reemplace la promo de la
+> semana; se puede destildar para acumular. De paso desaparece el pisón de la
+> carga vieja, que no hacía upsert y duplicaba las ofertas al re-subir el mismo
+> archivo. Avisa en rojo cuántos productos del archivo están **inactivos** (con
+> etiqueta y todo, no se ven en el catálogo).
+> **(2) Acciones en bloque de etiquetas** en la selección por casillas que ya
+> existía: 🔥 Flash Sale / Pre-Order / Disponible, y marcar/quitar ✨ Nuevo. A
+> pedido del usuario en la misma sesión, **un botón que no cambiaría nada
+> aparece deshabilitado** con el motivo en el tooltip (marcar 🔥 sobre una
+> selección que ya es toda 🔥, Activar sobre lo que ya está activo, etc.). Se
+> calcula con `availabilityAfter()`, espejo del trigger, no con la etiqueta a
+> secas — por eso distingue "ya están así" de "la disponibilidad la manda su
+> stock" (Pre-Order sobre productos con stock ≥ 1 no cambia nada tampoco, pero
+> por otro motivo, y decirlo bien es lo que evita que el admin lo intente tres
+> veces). Con selección mixta siguen habilitados: la acción aplica al
+> subconjunto que sí cambia.
+> **(3) Filtros por grupo de producto en la pestaña Precios** (marca, línea,
+> activo, con/sin stock, Pre-Order, 🔥, ✨), los mismos de Productos, extraídos a
+> `pages/admin/ui.jsx` (`ProductFilters` + `productMatchesFilters`) para que las
+> dos pestañas no puedan divergir; los contadores con/sin precios se recalculan
+> sobre el grupo filtrado, que es lo único que hace útil la combinación.
+>
+> **Dos detalles que importan para no romper esto en el futuro.** El primero:
+> Disponible y Pre-Order **no son libres**, las deriva del stock el trigger
+> `products_availability_from_stock` (invariante de la tabla desde 2026-08-04),
+> y solo `flash` se respeta siempre. O sea que un bulk de Pre-Order sobre
+> productos con stock **no queda**, y desmarcar 🔥 devuelve el producto a
+> Disponible o a Pre-Order según su stock. En vez de esconderlo, el panel relee
+> después de aplicar y reporta el número real ("N con la etiqueta aplicada · M
+> recalculados por su stock"). El segundo: los updates masivos van **en tandas
+> de 100 ids** (`updateByIds` en `lib/supabase.js`). PostgREST manda el
+> `id=in.(...)` en la query string: 300 uuids son ~11 KB de URL, y el bulk
+> "Activar" sobre todo lo filtrado (3,500 productos, ~130 KB) se habría caído
+> antes de llegar a la base — el `.in()` suelto que arrastraba `bulkSetActive`
+> desde 2026-07-14 era una bomba de tiempo con esa selección.
+>
+> Verificado: build limpio; chequeo de que toda key `t()` exista en es/en (316 y
+> 316, sin huérfanas nuevas tras borrar las ~25 keys de la pestaña vieja); el
+> trigger contra un **PostgreSQL 18 desechable** con la tabla y el trigger
+> copiados de `schema.sql` (4 escenarios: marcar 🔥 gana siempre, desmarcar
+> manda stock 0/negativo a Pre-Order, Pre-Order en bloque se revierte con
+> stock, ✨ Nuevo es independiente); la lógica de marcar/desmarcar contra el
+> Excel real con un catálogo simulado; y **en navegador real con Playwright**:
+> el catálogo (no queda sección ni countdown, no se llama más a
+> `get_flash_sales()`, el chip 🔥 filtra 6 de 40); la **matriz de 52 aserciones
+> de los botones deshabilitados** (6 selecciones × 7 botones, más los dos
+> motivos y que un click forzado sobre un botón apagado no manda ningún PATCH);
+> y **el panel admin con sesión
+> de Supabase mockeada** — 29 aserciones, subiendo el `Special Flash Sale.xlsx`
+> de verdad por el input y con un servidor falso que aplica los PATCH y
+> reproduce el trigger: la vista previa da 295/7/5/23 y 4 inactivos, confirmar
+> escribe 295 + 7 en tandas de 100+100+95 y 7, el aviso del bulk dice 150/150
+> (exactamente lo que quedó en la base) y los filtros de Precios recortan la
+> matriz con sus contadores. **Nada de esto tocó producción**: todas las
+> llamadas a Supabase estaban interceptadas.
+>
 > 2026-08-06, **punto 50: pestaña 📈 Métricas** (`/admin/metrics`,
 > `MetricsAdmin.jsx` + `migration-2026-08-06-sa-metrics.sql`), a pedido del
 > usuario: los KPIs de todo el sistema en una pantalla, **en vivo**. Solo
@@ -328,7 +417,10 @@
 > `list_code`/`list_label`, lo que habría roto el preview de la carga de precios.
 >
 > 2026-08-06, **punto 51: el grupo de Flash Sales que volvía al catálogo
-> mientras el panel decía "Desactivada"**. Reportado por el usuario: le puso al
+> mientras el panel decía "Desactivada"**. ⚠ **Historia**: al día siguiente
+> (punto 53) se eliminó esa pestaña entera y el concepto de oferta con
+> countdown — este apartado describe algo que ya no existe. Se deja porque
+> explica por qué el modelo viejo era confuso. Reportado por el usuario: le puso al
 > grupo una fecha de vencimiento nueva para el mes siguiente, el panel siguió
 > mostrando "Desactivada" y el catálogo empezó a mostrar la sección Flash Sale.
 > Las dos cosas eran ciertas **sobre filas distintas del mismo grupo**: el badge
@@ -828,6 +920,14 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   vive el resto. Verificado: `schema.sql` corre limpio desde cero **y** dos
   veces seguidas (idempotente).
 
+- [x] **Área de Flash Sales eliminada** (2026-08-07, punto 53): la pestaña del
+  panel y la sección con countdown del catálogo. **No requiere migración** —
+  la tabla `flash_sales` y `get_flash_sales()` quedan en la base sin uso,
+  marcadas como LEGADO en `schema.sql`. Solo hay que **desplegar el frontend**.
+  En la misma tanda: carga de Flash Sales por Excel y acciones en bloque de
+  etiquetas en Productos, y filtros por grupo de producto en Precios (todo
+  frontend, sin SQL).
+
 ---
 
 ## Stack
@@ -870,7 +970,6 @@ zimaxx-store/
     │   ├── FilterBar.jsx       ← chips de categoría/línea/disponibilidad (2026-07-09, extraído de Catalog.jsx)
     │   ├── ProductCard.jsx     ← tarjeta con precio y botón agregar (memoizada)
     │   ├── ProductImage.jsx    ← imagen con fallback emoji
-    │   ├── FlashSaleSection.jsx← sección flash sale con cuenta regresiva
     │   ├── CartDrawer.jsx      ← carrito lateral + checkout WhatsApp + PDF
     │   └── CartBar.jsx         ← barra inferior fija en móvil
     ├── pages/
@@ -881,7 +980,6 @@ zimaxx-store/
     │       ├── PricesUpload.jsx
     │       ├── ClientsAdmin.jsx
     │       ├── VendedoresAdmin.jsx
-    │       ├── FlashSalesAdmin.jsx
     │       ├── AuditLogAdmin.jsx
     │       ├── OrdersAdmin.jsx
     │       ├── SuperAdminPanel.jsx  ← solo superadmin (usuarios/roles/contraseñas + dueñas de listas)
@@ -924,7 +1022,7 @@ negro+dorado es idéntico en ambos modos).
 | `vendedores` | Nombre + teléfono de cada vendedora (2026-07-06; antes texto libre en `clients`). Desde el rol vendedora (2026-07-06): `user_id` (FK a `auth.users`, nullable, único) + `login_email` (solo display) para vincular su login |
 | `products` | Catálogo de productos (`availability`: 'available' \| 'preorder' \| 'flash', este último desde 2026-07-08 — etiqueta "Flash Sale" del Excel de inventario, sin relación con la tabla `flash_sales`). `product_line` (2026-07-08, texto libre, nullable): tipo real del perfume desde `PRODUCT_CATEGORY` del export SellerCloud (`Perfume` / `Perfume - Arabes`), **distinto** de `category` que acá guarda la marca/Brand. `new_until` (2026-07-09, timestamptz nullable): mientras `now() < new_until` el producto lleva la etiqueta ✨ Nuevo en catálogo y admin; se setea automático (+10 días) al crear el producto y es editable en el formulario. `stock` (2026-07-14, int nullable, `migration-2026-07-14-inventory-stock.sql`): InventoryAvailableQTY de SellerCloud — **no** se expone en el catálogo del cliente (`get_catalog` no lo incluye), solo visible en el admin. Decide la disponibilidad en cada carga/sync (`>= 1` available, `0`/negativo preorder, respetando flash); NO toca `active`. null = "todavía no se sabe el stock" (distinto de 0 = sin stock). **Desde 2026-08-04 esa regla vive en un trigger de la tabla** (`products_availability_from_stock`, `migration-2026-08-04-order-stock.sql`) y no solo en cada camino de escritura: cualquier insert/update con `stock` no-null y `availability <> 'flash'` deja `availability` derivada del stock, venga del sync, del Excel, del bulk, del formulario, del descuento de un pedido atendido o de un request directo. Eso además tapó un agujero real: `apply_price_list` ponía `availability = 'available'` a todos los productos de un Excel de precios sin columna `Type`, con stock 0 incluido. El `stock` también **baja solo** al marcar un pedido Atendido (ver `apply_order_stock`) y es editable a mano en el formulario de la pestaña Productos. `upc` (2026-07-14, text nullable, `migration-2026-07-14-product-upc.sql`): código de barras, dato interno del admin (**no** lo expone `get_catalog`), visible/editable en la pestaña Productos y buscable |
 | `product_prices` | Precio por producto+lista (clave compuesta) |
-| `flash_sales` | Ofertas con fecha de expiración |
+| `flash_sales` | **LEGADO desde 2026-08-07**: ofertas con precio promo + fecha de expiración. La app ya no la lee (se eliminó la pestaña Flash Sales y la sección del catálogo). No se borró nada: la tabla y sus datos siguen ahí, sin migración de por medio, así que volver atrás es reponer código. `compute_order_items` todavía la consulta para revalorizar una línea vieja marcada `flash` de un pedido anterior — sin ofertas vigentes cae al precio de lista, que es lo correcto |
 | `orders` | Pedidos del checkout — fuente de verdad (precios recalculados en el servidor) con `status` 'new' \| 'done' \| 'cancelled'. `stock_applied` (2026-08-04, boolean not null default false, `migration-2026-08-04-order-stock.sql`): ¿este pedido ya descontó su stock? Marcar Atendido descuenta las cantidades de `products.stock`, reabrir/cancelar las devuelve, y esta bandera — **no** el estado — es la que evita el doble descuento (un pedido puede ir done → new → done varias veces). `request_id` (2026-08-05, uuid nullable + índice único **parcial** `where request_id is not null`, `migration-2026-08-05-order-capture.sql`): identifica al **carrito**, no al envío — `CartContext` lo genera una vez y lo rota al vaciar el carrito, así reintentar un envío que falló devuelve el pedido ya guardado en vez de duplicarlo. Null en los pedidos previos al cambio y en los que llegan de un frontend sin actualizar (de ahí que el índice sea parcial). Las dos columnas están blindadas por el trigger `orders_guard_items_edit` igual que `items`/`total`/`status`/`kind` |
 | `order_failures` | **Los pedidos que el cliente envió y NO entraron** (2026-08-05, `migration-2026-08-05-order-capture.sql`). Existe porque un pedido de ~10k se perdió sin dejar rastro: `create_order` lo rechazó con un `return null` mudo (superaba el tope de líneas de entonces, 200) y el único registro del rechazo era un `console.warn` en el teléfono del cliente. Guarda `client_id` (nullable, `on delete set null`), `token_hint` (los primeros 8 caracteres, para rastrear sin guardar la credencial completa), `reason` (texto legible: 'token inválido' \| 'payload vacío o mal formado' \| 'demasiadas líneas: N (el tope es 1000)' \| 'ningún ítem válido…'), `line_count`, `kind`, `items` (el payload, **solo si el token era válido** — con token inválido se guarda nada más el motivo y el conteo, para que nadie con la anon key infle la tabla) y `recovered_order_id` (FK a `orders`, null = sin recuperar, que es lo que muestra el aviso de `OrdersAdmin.jsx`). RLS de **solo lectura**, mismo criterio que `admin_audit_log`: admin todo, vendedora los de sus propios clientes, `anon` nada, y sin policy de insert/update/delete para nadie — solo la escribe `create_order` (SECURITY DEFINER). El `grant select to authenticated` es explícito y no heredado de los default privileges de Supabase |
 | `admins` | user_id de Supabase Auth autorizados como admin. Desde 2026-08-05 la **escribe solo el superadmin** (policies `superadmin_all` + `admin_read_only`; antes tenía `admin_all`, o sea que cualquier admin podía nombrar admins vía API aunque no hubiera UI) |
@@ -998,6 +1096,10 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
   más arriba).
 
 ### `get_flash_sales() → jsonb`
+- **LEGADO desde 2026-08-07: sin llamadores.** El catálogo dejó de pedirla al
+  eliminarse la sección de ofertas con countdown. Sigue creada (y con sus
+  grants) por si hubiera que volver atrás; ver la nota de la tabla
+  `flash_sales`.
 - Acceso: `anon` y `authenticated`. Sin token.
 - Devuelve solo las ofertas activas con `starts_at <= now() < expires_at`.
 
@@ -1494,6 +1596,33 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
 ### Productos
 - Crear manualmente en `/admin` (Productos) o
 - Cargar el Excel de precios (el parser no crea productos, necesitan existir primero)
+- **🔥 Flash Sales por Excel** (2026-08-07): el archivo semanal "Special Flash
+  Sale" tal cual. Solo usa la columna SKU y **le pone la etiqueta 🔥** a esos
+  productos; **la columna Price se ignora a propósito** (una Flash Sale ya no
+  tiene precio propio — el precio sale de la lista del cliente, pestaña
+  Precios). Vista previa antes de aplicar: a marcar / a desmarcar / ya
+  etiquetados / SKU sin producto, con aviso rojo si alguno del archivo está
+  inactivo. Por defecto **reemplaza la promo** (les quita 🔥 a los que no
+  vienen en el archivo); se puede destildar para acumular. Al desmarcar, el
+  producto vuelve a Disponible o a Pre-Order **según su stock** (lo decide el
+  trigger `products_availability_from_stock`, no el frontend). Los updates van
+  en tandas de 100 ids (`updateByIds` en `lib/supabase.js`): PostgREST manda el
+  `id=in.(...)` en la URL y 300 uuids arman una query string de ~11 KB.
+- **Acciones en bloque** (selección por casillas, solo admin): activar/
+  desactivar, etiqueta 🔥 Flash Sale / Pre-Order / Disponible, y marcar/quitar
+  ✨ Nuevo. Ojo: Disponible y Pre-Order **las decide el stock** (mismo trigger),
+  así que pedir Pre-Order sobre algo con stock no queda — el panel relee
+  después de aplicar y avisa "N con la etiqueta aplicada · M recalculados por
+  su stock" en vez de dar por hecho que se aplicó a todos.
+- **Una acción que no cambiaría nada se muestra deshabilitada**, con el motivo
+  en el tooltip. El cálculo usa `availabilityAfter()` (espejo del trigger: con
+  qué disponibilidad va a quedar el producto si le escribimos X), no la
+  etiqueta a secas, así que distingue dos casos: *"todos los seleccionados ya
+  están así"* (marcar 🔥 sobre puros 🔥, Activar sobre activos, ✨ Marcar sobre
+  los que ya la llevan, ✨ Quitar cuando ninguno la tiene) y *"la
+  disponibilidad la manda su stock"* (Pre-Order sobre productos con stock ≥ 1,
+  Disponible sobre productos en 0). Con selección mixta quedan habilitados: la
+  acción aplica al subconjunto que sí cambia.
 
 ### Precios (Excel/CSV) — 2026-07-17: una lista por archivo + preview/confirmar
 - Elegir arriba a qué lista corresponde el archivo (selector con
@@ -1515,6 +1644,17 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
   UPDATE command cannot affect row a second time" (pasaba con el archivo
   real de US Minimum Order, SKU `ZX_PE-MA-U-599175` duplicado).
 - El parser normaliza encabezados (sin acentos, minúsculas) → aceptan variaciones.
+- **Filtros por grupo de producto en la matriz** (2026-08-07): además del
+  buscador y del selector de lista, se filtra por marca, línea de perfume y
+  estado (activo/inactivo, con/sin stock, Pre-Order, 🔥 Flash Sale, ✨ Nuevo).
+  Son los MISMOS de la pestaña Productos, compartidos en `pages/admin/ui.jsx`
+  (`ProductFilters` + `productMatchesFilters`) para que las dos pestañas no
+  puedan divergir sobre los mismos productos. Los contadores "con precios /
+  sin precios" se recalculan **sobre el grupo filtrado** — sirve para
+  responder "¿los 🔥 de esta semana tienen precio en US Wholesale?" —, pero el
+  buscador de texto no los mueve, para que el número no baile tecla a tecla.
+  Cada fila muestra las etiquetas del producto (🔥 / Pre-Order / ✨ Nuevo /
+  Inactivo).
 
 ### Clientes (Excel/CSV)
 - Columnas requeridas: `nombre`, `teléfono`, `lista de precio`, `vendedora`
@@ -1556,6 +1696,26 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
   un aviso — hay que reasignar esos clientes primero.
 
 ### Pedidos (`/admin/orders`, `OrdersAdmin.jsx`)
+- **Sin tope: se cargan todos los pedidos** (2026-08-07, a pedido del
+  usuario). Antes la consulta traía los últimos 200, con dos consecuencias
+  feas: el conteo del encabezado **mentía** apenas se pasaba de ahí (decía
+  "200" hubiera 200 o 900), y los pedidos más viejos no se podían ver ni
+  marcar atendidos. Ahora usa `fetchAll` (páginas de 1,000 en paralelo,
+  ordenadas ascendente por `created_at` y dadas vuelta en el cliente porque
+  `fetchAll` necesita un orden estable para el `range`). Tres cosas que van
+  de la mano y conviene no deshacer:
+  1. **Scroll infinito** (`useInfiniteRows(100)`): traerlos todos no es
+     dibujarlos todos — cada fila puede desplegar su detalle.
+  2. **`get_quotes_live_pricing` en tandas de 100 ids** (`LIVE_PRICING_CHUNK`).
+     Esa RPC recalcula el precio vigente de cada línea de cada cotización:
+     pedirle 800 de una es una sola consulta larga que puede chocar con el
+     `statement_timeout`, y si falla no se muestra **ningún** precio vigente.
+  3. **Estado de carga**: hasta que termine, la tabla no puede decir "aún no
+     hay pedidos" (diría que no hay ninguno mientras todavía están viniendo),
+     y si la carga falla se avisa en rojo en vez de mostrar una lista
+     incompleta como si fuera completa.
+  El aviso rojo de `order_failures` de arriba sigue con su `limit(50)`: es una
+  alarma de pedidos sin recuperar, no el listado de pedidos.
 - Click en una fila expande un detalle de ancho completo (2026-07-17,
   ajuste visual sobre una primera versión que lo abría angosto dentro de
   la columna Ítems y quedaba muy alto y feo): fila propia con
@@ -1788,3 +1948,13 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 48. **Perfil superadmin: nombrar admins, cambiar contraseñas y asignar listas desde el panel** (2026-08-05, a pedido del usuario: "quiero tener un perfil que sea superadmin, ya que las acciones tipo de hacer admin, cambiar la contraseña y ahora la de asignar o desasignar una lista a alguna vendedora deberían de poder hacerse sin necesidad de meterme en el sql editor... pero que solo un perfil tenga acceso, el del correo support5@firstchoiceonline.com, además de alguna que otra función que puedas agregar"). **Lo primero que apareció al mirar el modelo no fue una feature faltante sino un permiso de más**: `admins` tenía la policy `admin_all` (`for all`), o sea que cualquier admin ya podía insertar filas ahí con un request directo y nombrarse/nombrar admins — nunca hubo UI, así que en la práctica no pasó, pero ponerle UI encima habría convertido el permiso en un botón. Por eso el diseño arranca cerrando eso: `admins` y `price_list_owners` salen del loop de `admin_all` y quedan con `superadmin_all` (escritura) + `admin_read_only` (lectura — la de `price_list_owners` la usa `ClientsAdmin.jsx`, que pide las dueñas embebidas). **Decisión de diseño central: dónde vive la marca de superadmin.** No en una columna de `admins` (ver arriba: cualquiera se habría podido coronar) sino en una tabla propia `superadmins` con **RLS activo y CERO policies** — desde la app no existe para nadie, ni para el propio superadmin; solo la leen las funciones SECURITY DEFINER y el SQL Editor, y encima se le hizo `revoke all ... from anon, authenticated`. Sumar o quitar un superadmin queda a propósito como acción de SQL Editor: es la llave maestra, no un permiso más del panel (los queries están al final de la migración). **Segunda decisión: `is_admin()` pasa a ser "está en `admins` o es superadmin"** — así el superadmin no puede dejarse afuera del panel ni tocando el botón "Quitar admin" sobre sí mismo (la RPC igual lo rechaza), y las ~15 policies + RPC que ya usaban `is_admin()` lo dejan entrar sin tocarlas una por una. **Tercera: `get_my_role()` sigue devolviendo `'admin'` para él, no `'superadmin'`** — hay 6 páginas admin que comparan `role === 'admin'` para mostrar sus controles de edición (`ProductsAdmin`, `PricesUpload`, `ClientsAdmin`, `FlashSalesAdmin`, `OrdersAdmin`, `AdminLayout`), así que devolver un valor nuevo ahí habría dejado al superadmin en modo solo-lectura en todo el panel; `AdminLayout.jsx` pregunta aparte con `is_superadmin()` (las dos RPC salen en un solo `Promise.all`) y pasa `isSuper` por el `Outlet context` junto a `role`. **12 RPC `sa_*`** (todas con `is_superadmin()` adentro y todas auditadas vía `sa_log()`, que guarda el objetivo de la acción en `admin_audit_log.client_name` — de ahí que la columna de la pestaña Registro pasara a titularse "Cliente / objetivo"): usuarios (`sa_list_users` sobre `auth.users`, que no es legible desde el cliente; `sa_set_admin`; `sa_register_new_admin`; `sa_log_password_change`) y listas (`sa_price_list_overview`, `sa_add_price_list_owner`, `sa_remove_price_list_owner`, `sa_set_primary_price_list_owner`, `sa_sync_price_list_clients`, `sa_create_price_list`, `sa_update_price_list`, `sa_delete_price_list`). **Lo que no puede hacer Postgres**: crear un usuario de Auth o cambiarle la contraseña necesita la Admin API de GoTrue (service_role), imposible desde el navegador — eso vive en la Edge Function nueva `supabase/functions/superadmin-users` (una sola función con `action`, porque cada Edge Function es un deploy aparte), que valida `is_superadmin()` con el JWT de quien llama y después vuelve a Postgres **con ese mismo JWT** para dejar la auditoría con su `auth.uid()` real; la contraseña no se guarda ni se loguea en ninguna parte (se verificó con un assert). **Funciones agregadas sin que se pidieran, en la misma línea de "no volver al SQL Editor"**: crear un admin desde cero (usuario + rol en un paso), el listado de usuarios con rol y último acceso, **reasignar de una vez los clientes que quedaron con una vendedora que dejó de ser dueña de su lista** (el footgun que la migración del 08-04 documentaba para resolver a mano con un UPDATE) y crear/renombrar/borrar listas de precio (crear una lista era un INSERT a mano: así nacieron `quote` y `luzmar`). Tres criterios ahí: el `code` de una lista **no** se puede renombrar (lo lee código real — `quote`/`special` en `get_catalog`, los alias de `PricesUpload.jsx`), el borrado solo aplica a listas que no siembra `schema.sql` y que estén completamente vacías (es para deshacer un alta con el código mal escrito, no una herramienta de limpieza), y quitar una dueña **no** mueve sus clientes solo: el panel avisa cuántos quedaron y ofrece el botón. **Colisión de nombres detectada y corregida antes de terminar**: el rename de lista iba a auditarse como `update_price_list`, que ya existe en `admin_audit_log` con otro significado (`update_client_price_list`, cuando se le cambia la lista a un cliente) — quedó como `update_price_list_label`. De paso, `AuditLogAdmin.jsx` pasó de una cadena de 6 ternarios a dos mapas (`ACTION_LABELS`/`ACTION_STYLES`) porque con 16 acciones era ilegible, y el filtro por acción agrupa varias acciones por opción (las 3 de dueñas comparten etiqueta). **Verificado de verdad**: `npm run build` limpio, y la migración probada contra un **PostgreSQL 18 real** (cluster desechable en el scratchpad, borrado al terminar) arrancando del estado real de producción — `schema.sql` de HEAD + `migration-2026-08-04-shared-price-lists.sql` — con 18 bloques de assert: identidad de los 3 roles (incluido que `get_my_role()` sigue diciendo `'admin'` y que el superadmin **no** tiene fila en `admins`), rechazo de las RPC a un admin común y a una vendedora, RLS de las 3 tablas **actuando como el rol `authenticated`** (postgres saltea RLS, así que probarlo como superusuario no probaba nada), ciclo completo de dueñas (agregar, cambiar principal, quitar la principal → promoción automática de la que queda, clientes colgados detectados y reasignados, idempotencia, lista que vuelve a general), validación del código de lista, guardas del borrado, y auditoría de las 11 acciones nuevas. Además: la migración es re-corrible y `schema.sql` completo corre encima sin romper nada (las policies quedan exactamente en `superadmin_all` + `admin_read_only`, sin `admin_all` colgado). Dos falsos positivos fueron **errores de mis propias expectativas de test**, no del código: una vendedora que no es dueña ve 0 filas de `price_list_owners` (no 1) porque la RLS se las oculta, y `'MAYUSCULAS'` sí es un código válido porque la RPC lo normaliza a minúsculas. **Pendiente del usuario**: correr `migration-2026-08-05-superadmin.sql` (después de las dos que lista el preflight) y correr `supabase functions deploy superadmin-users`; el frontend se puede desplegar antes, sin la migración la pestaña simplemente no aparece.
 
 49. **Export a Excel del Registro de movimientos** (2026-08-05, segunda tanda del día, a pedido del usuario: "quiero para la vista admin y superadmin la posibilidad de descargar un excel desde el área del registro de movimientos con todos los movimientos que se hayan realizado"). No hizo falta tocar permisos: la pestaña ya es admin-only y la RLS `admin_read_audit` usa `is_admin()`, que desde el punto 48 incluye al superadmin — así que "admin y superadmin" ya era exactamente quién puede leer `admin_audit_log`. **La decisión de diseño real fue el alcance del archivo**: la tabla en pantalla carga solo los **últimos 200** movimientos (`.limit(200)`) y los filtros son client-side sobre esos 200, así que exportar "lo que se ve" habría entregado un recorte silencioso justo en la pantalla donde eso más importa. El export usa `fetchAll('admin_audit_log', '*', 'created_at')` — pagina más allá del corte de 1,000 filas de PostgREST — y después aplica **los mismos filtros activos**, con lo cual también resuelve el caso "bajame todo lo que hizo tal usuario" o un rango de fechas más viejo que los 200 visibles (en pantalla se vería vacío, en el Excel viene completo). Para que eso no sea una trampa, el botón dice "(todo el historial)" o "(filtrado)" según el estado de los filtros y hay una línea de ayuda explicando la diferencia. El criterio de filtrado se factorizó en `matchesFilters()`, usado por la tabla y por el export, para que no puedan divergir. **Columnas**: Fecha, Usuario, Acción, Cliente / objetivo, Detalle, ID cliente, ID pedido y **Datos completos (JSON)**. Dos detalles: (a) la fecha se escribe como `YYYY-MM-DD HH:MM:SS` en hora local **como texto**, no como celda de fecha — así ordena y filtra bien en cualquier Excel sin depender de la configuración regional de la máquina; (b) se incluye el `detail` jsonb crudo además del resumen legible, porque es un registro de auditoría y el resumen pierde información a propósito (el antes/después ítem por ítem de una edición de pedido, el movimiento de stock producto por producto, los ids de las dueñas). Si los filtros no dejan ninguna fila no se genera un archivo vacío: avisa "Sin movimientos registrados". **Implementación**: `downloadAuditLogExcel({rows, header, widths, sheetName, filenameStamp})` en `utils/excel.js` (XLSX lazy, igual que los otros dos exports) recibe las filas y los encabezados **ya armados** desde el componente — al revés que `downloadOrderExcel`/`downloadMissingPhotosExcel`, que se arman solos — porque las etiquetas de acción y el texto de detalle dependen de `t()` (idioma del panel) y de la forma del `detail` de cada acción, que ya vive resuelta en `AuditLogAdmin.jsx`; duplicar eso en `excel.js` habría sido la vía rápida a que el Excel y la pantalla digan cosas distintas. De paso se reemplazó el último encabezado hardcodeado de la tabla ("Detalle") por la key nueva `auditDetail`. **Verificado**: build limpio, i18n sin keys duplicadas (277 por idioma, ninguna sin par), y el export probado de verdad con Node — 10 filas que imitan cada tipo de movimiento (incluidos `detail` null y una acción desconocida, que caen en el label por defecto y celda vacía sin romper), escribiendo el `.xlsx` con la misma llamada de XLSX que hace el navegador y **releyéndolo** para confirmar encabezados en orden, orden descendente por fecha, formato de fecha ordenable, el resumen de cada acción, que el JSON exportado se vuelve a parsear con el detalle ítem por ítem intacto, que la fila de cambio de contraseña no lleva ninguna contraseña, y los 4 casos de filtrado (por usuario, por rango de fechas, por grupo de acciones y filtro sin resultados → no genera archivo). Una de las aserciones falló al principio por una doble negación mal escrita en el test, no por el código.
+
+50. **Pestaña 📈 Métricas (solo superadmin)** (2026-08-06) — ver el detalle en la narrativa del principio del documento (punto 50).
+
+51. **El grupo de Flash Sales que volvía al catálogo mientras el panel decía "Desactivada"** (2026-08-06) — ver la narrativa del principio (punto 51). **Quedó obsoleto al día siguiente**: el punto 53 eliminó esa pestaña entera.
+
+52. **Un producto sin precio (o con precio 0) no sale en el catálogo, no se cotiza y no se puede pedir** (2026-08-06, `migration-2026-08-06-require-price.sql`) — ver la narrativa del principio (punto 52).
+
+53. **Se eliminó el área de Flash Sales; la Flash Sale pasa a ser una etiqueta del producto** (2026-08-07, a pedido del usuario: "vamos a quitar la seccion de flash sales que esta al lado de la seccion de vendedoras, los flash sales no hace falta que tengan un countdown, ya que realmente se usa como una estrategia para vender productos de los cuales se quiere mover inventario") — se fueron `FlashSalesAdmin.jsx`, `FlashSaleSection.jsx` y la llamada a `get_flash_sales()`; queda la etiqueta 🔥 (`products.availability = 'flash'`) con su badge y su chip de filtro. **Sin migración**: la tabla `flash_sales` y sus datos quedan en la base marcados como LEGADO. En la misma tanda, y también a pedido: **carga de Flash Sales por Excel** en la pestaña Productos (el "Special Flash Sale" semanal, solo la columna SKU, con vista previa y modo reemplazo que desmarca lo que no viene en el archivo), **acciones en bloque de etiquetas** (🔥 / Pre-Order / Disponible / ✨ Nuevo) y **filtros por grupo de producto en la pestaña Precios**. Detalle completo y las dos trampas a recordar (el trigger de stock que pisa Disponible/Pre-Order, y los updates en tandas de 100 ids por el largo de la URL de PostgREST) en la narrativa del principio.
+
+54. **La bandeja de Pedidos deja de estar topeada en 200** (2026-08-07, a pedido del usuario: "esta limitado a marcar hasta 200 pedidos, quitale el limite para que se vea siempre la cantidad precisa de pedidos") — `OrdersAdmin.jsx` traía los últimos 200, así que el conteo del encabezado mentía apenas se pasaba de ahí y los pedidos viejos no se podían ver ni marcar atendidos. Ahora carga todo con `fetchAll` (páginas de 1,000 en paralelo) y se renderiza por lotes con scroll infinito; `get_quotes_live_pricing` pasa a pedirse en tandas de 100 ids para no mandar una sola consulta larga que pueda chocar con el `statement_timeout`; y se agregó estado de carga + aviso de error, porque una lista incompleta mostrada como completa es el mismo problema que el tope. Verificado en navegador con 2,340 pedidos mockeados (10 aserciones): pagina 1000+1000+340, el encabezado dice 2340, los filtros cuentan sobre el total, el 8º pedido más viejo aparece al buscarlo por teléfono, y no se dibujan las 2,340 filas de golpe. El `limit(50)` del aviso de `order_failures` se dejó como está: es una alarma, no el listado.

@@ -4,7 +4,6 @@ import { supabase } from '../lib/supabase'
 import { useI18n } from '../i18n'
 import Header from '../components/Header'
 import FilterBar from '../components/FilterBar'
-import FlashSaleSection from '../components/FlashSaleSection'
 import ProductCard from '../components/ProductCard'
 import CartBar from '../components/CartBar'
 import CartDrawer from '../components/CartDrawer'
@@ -23,7 +22,6 @@ export default function Catalog() {
   const [loading, setLoading] = useState(true)
   const [client, setClient] = useState(null)
   const [products, setProducts] = useState([])
-  const [flashSales, setFlashSales] = useState([])
   // `searchInput` es lo que se ve en el campo (responde a cada tecla sin
   // demora); `search`, con debounce, es lo que de verdad filtra. Filtrar
   // miles de productos en cada tecla es lo que causaba el lag al escribir.
@@ -45,15 +43,13 @@ export default function Catalog() {
     let cancelled = false
     async function load() {
       setLoading(true)
-      const [catalogRes, flashRes] = await Promise.all([
-        token ? supabase.rpc('get_catalog', { p_token: token }) : Promise.resolve({ data: null }),
-        supabase.rpc('get_flash_sales'),
-      ])
+      const catalogRes = token
+        ? await supabase.rpc('get_catalog', { p_token: token })
+        : { data: null }
       if (cancelled) return
       const catalog = catalogRes.data
       setClient(catalog?.client ?? null)
       setProducts(catalog?.products ?? [])
-      setFlashSales(Array.isArray(flashRes.data) ? flashRes.data : [])
       setLoading(false)
     }
     load()
@@ -79,9 +75,11 @@ export default function Catalog() {
   // categoría también entra en la búsqueda de texto, y availability tiene
   // su propio filtro además de los chips de categoría.
   const hasPreorder = useMemo(() => products.some((p) => p.availability === 'preorder'), [products])
-  // 'flash' es una etiqueta del producto en el Excel de inventario (Type =
-  // Flash Sale), distinta de la tabla flash_sales de ofertas con precio
-  // promo — acá solo filtra por la etiqueta, sin precio asociado.
+  // 'flash' es una etiqueta del producto (Type = Flash Sale del Excel de
+  // inventario, o puesta a mano desde la pestaña Productos): marca lo que se
+  // quiere mover, sin precio promo ni countdown asociado. Desde 2026-08-07 es
+  // la única forma de Flash Sale que existe — la tabla `flash_sales` de
+  // ofertas con precio propio y cuenta regresiva salió del producto.
   const hasFlashType = useMemo(() => products.some((p) => p.availability === 'flash'), [products])
   // is_new lo calcula get_catalog en el servidor (now() < products.new_until).
   const hasNew = useMemo(() => products.some((p) => p.is_new), [products])
@@ -103,15 +101,12 @@ export default function Catalog() {
 
   const validClient = !!client
   const showFilters = validClient && !loading
-  // Con búsqueda o algún chip activo, Flash Sale se oculta para no competir
-  // con los resultados; sin filtros vuelve a aparecer como al entrar.
-  const hasActiveFilters = !!search.trim() || !!category || !!line || !!availability || onlyNew
 
   return (
     <div className="min-h-screen pb-24 md:pb-8">
       {/* Header + filtros comparten este sticky (2026-07-09): así los chips
-          quedan pegados al buscador sin importar cuánto crezca Flash Sale
-          debajo, y sin tener que calcular a mano la altura del header. */}
+          quedan pegados al buscador sin tener que calcular a mano la altura
+          del header. */}
       <div className="sticky top-0 z-30">
         <Header
           clientName={client?.name}
@@ -140,12 +135,6 @@ export default function Catalog() {
       </div>
 
       <main className="mx-auto max-w-6xl px-4 py-6">
-        {/* Flash Sale siempre trae precio real: no aplica al catálogo de cotización sin precios.
-            Se oculta mientras haya una búsqueda o filtro activo, para no competir con los resultados. */}
-        {!client?.is_quote_only && !hasActiveFilters && (
-          <FlashSaleSection sales={flashSales} canOrder={validClient} />
-        )}
-
         {loading ? (
           <div className="flex flex-col items-center gap-3 py-20">
             <img src="/zimaxx.png" alt="" className="h-12 w-12 animate-pulse" />

@@ -97,11 +97,15 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
 - **Disponibilidad**: `available`, `preorder` o `flash` (2026-07-08). Los
   pre-order se muestran con badge dorado "Pre-Order" en el catálogo y se
   pueden pedir igual; el estado viaja en el mensaje de WhatsApp. Los
-  `flash` (columna Type = "Flash Sale" en el Excel de inventario) se
-  muestran con badge 🔥 "Flash Sale" — es solo una etiqueta del producto,
-  **no tiene relación con la tabla `flash_sales`** (ofertas con precio
-  promo y countdown, pestaña Flash Sales): un producto puede tener esta
-  etiqueta sin tener ninguna oferta activa, y viceversa.
+  `flash` se muestran con badge 🔥 "Flash Sale" y tienen su propio chip de
+  filtro. **Una Flash Sale es exactamente eso: una etiqueta** (2026-08-07) —
+  no tiene precio propio ni cuenta regresiva; marca los productos de los que
+  se quiere mover inventario, y el precio sigue siendo el de la lista del
+  cliente. Se pone de tres formas: la columna Type del Excel de inventario,
+  el Excel de Flash Sales de la pestaña Productos, o la selección en bloque
+  de esa misma tabla. (Hasta 2026-08-06 existía además una tabla
+  `flash_sales` de ofertas con precio promo + countdown y su propia pestaña;
+  se eliminó del producto — ver "Flash Sales" en la sección 3.)
 - **La disponibilidad la decide el stock, sola** (2026-08-04, trigger
   `products_availability_from_stock` en la base): `products.stock >= 1` →
   Disponible, `0` o negativo → Pre-Order, `null` ("todavía no se sabe el
@@ -241,8 +245,7 @@ edición y un valor nuevo ahí las habría dejado en solo lectura:
   sus propios clientes y pedidos** (RLS filtra por fila, no por UI —
   nunca ve cuántos clientes/pedidos tienen otras vendedoras), y Productos
   / Precios **de solo lectura** (sin botones de carga ni edición). No
-  tiene pestaña Vendedoras ni **Flash Sales** (2026-07-15, oculta por
-  completo para el rol vendedora). En Precios, una lista "personal" (ej.
+  tiene pestaña Vendedoras ni Registro de movimientos. En Precios, una lista "personal" (ej.
   `luzmar`) solo la ve su dueña — el resto ni la ve en la matriz ni en el
   selector de listas (2026-07-15, RLS `vendedora_select_price_lists`/
   `vendedora_select_product_prices`). **Sí puede cambiarle la lista de
@@ -254,12 +257,24 @@ Pestañas:
 
 | Pestaña | Qué hace |
 |---|---|
-| **Productos** | Tabla completa con buscador (nombre/SKU/UPC), filtros (categoría/marca, línea de perfume, activo/inactivo/con stock/sin stock/sin foto/pre-order/flash), columnas **UPC** y **Stock** (datos internos, no se muestran al cliente), contadores clickeables de "sin foto", "Pre-Order" y "🔥 Flash Sale", miniaturas, alta/edición manual **con campo Stock editable** (2026-08-04 — reponer stock a mano es lo que devuelve un producto de Pre-Order a Disponible sin esperar al sync; vacío = "sin dato", distinto de 0), **selección por casillas para activar/desactivar en bloque** (solo admin), y dos cargas por Excel (productos y fotos). |
-| **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador y botones con contador "con precios" / "sin precios". |
+| **Productos** | Tabla completa con buscador (nombre/SKU/UPC), filtros (categoría/marca, línea de perfume, activo/inactivo/con stock/sin stock/sin foto/pre-order/🔥 flash/✨ nuevo), columnas **UPC** y **Stock** (datos internos, no se muestran al cliente), contadores clickeables de "sin foto", "Pre-Order", "✨ Nuevo" y "🔥 Flash Sale", miniaturas, alta/edición manual **con campo Stock editable** (2026-08-04 — reponer stock a mano es lo que devuelve un producto de Pre-Order a Disponible sin esperar al sync; vacío = "sin dato", distinto de 0), **selección por casillas para acciones en bloque** (solo admin: activar/desactivar, poner o quitar las etiquetas 🔥 Flash Sale / Pre-Order / Disponible, y marcar o quitar ✨ Nuevo — ver abajo), y **tres cargas por Excel**: productos, fotos y **🔥 Flash Sales** (2026-08-07). |
+| **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador, botones con contador "con precios" / "sin precios" y **los mismos filtros por grupo de producto que la pestaña Productos** (2026-08-07: marca, línea, activo/inactivo, con/sin stock, Pre-Order, 🔥 Flash Sale, ✨ Nuevo) para revisar los precios de un recorte concreto. |
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila con confirmación** (2026-07-15: elegir una opción no aplica el cambio de una — pide "¿Cambiar la lista a X?" con Confirmar/Cancelar; ahora lo puede hacer también una vendedora con sus propios clientes, no solo admin) y campo **"$ inversión → nivel"** (solo admin, asigna el nivel automáticamente sin confirmación — pensado para carga rápida), **reasignar vendedora** por fila y **eliminar cliente** (ambos solo admin, vía RPC con registro de auditoría), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
 | **🛡️ Registro de movimientos** (solo admin, pestaña propia desde 2026-07-15 — antes vivía colapsada dentro de Clientes) | Historial de quién reasignó/borró un cliente, le cambió la lista de precio, o tocó un pedido (editar ítems, cambiar estado, convertir cotización) — con el **movimiento de stock** de ese cambio de estado cuando hubo uno (2026-08-04: "Stock descontado: N · M sin dato de stock"; el `detail` guarda producto, SKU, cantidad y el antes/después de cada uno). Fecha, usuario, acción, cliente, detalle, leído directo de `admin_audit_log`. Desde 2026-08-05 también registra **todo lo que se hace en la pestaña Superadmin** (rol admin, cambios de contraseña, dueñas de listas, alta/renombre/borrado de listas) — en esas filas la columna "Cliente / objetivo" no es un cliente sino el email del usuario o el nombre de la lista. **Filtros** (2026-07-15): por usuario, por acción y por rango de fechas (desde/hasta). **"⬇️ Descargar Excel"** (2026-08-05): baja **todo** el historial, no los 200 que muestra la tabla (usa `fetchAll`, así pasa el corte de 1,000 filas de PostgREST), respetando los filtros activos — el botón aclara "(todo el historial)" o "(filtrado)". Columnas: Fecha (texto `YYYY-MM-DD HH:MM:SS` local, ordenable en cualquier Excel sin depender de la configuración regional), Usuario, Acción, Cliente / objetivo, Detalle, ID cliente, ID pedido y **Datos completos (JSON)** — el `detail` crudo, porque el resumen legible deja cosas afuera (el antes/después ítem por ítem de una edición de pedido, el stock producto por producto). Con filtros que no dejan ninguna fila no genera archivo vacío: avisa. Es de solo lectura: la tabla no tiene policy de insert/update/delete para nadie, solo la escriben las RPC (`reassign_client`/`delete_client`/`update_client_price_list`/las de pedidos/`sa_log` desde las `sa_*`). |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**, dos formas de dar acceso a una vendedora sin cuenta: **"Vincular acceso"** (email de un usuario que ya existe en Supabase Auth, RPC `link_vendedora_login`) o **"+ Crear acceso"** (2026-07-15: crea el usuario de una — el admin define email + contraseña inicial ahí mismo, sin pasar por el dashboard de Supabase — vía la Edge Function `admin-create-vendedora-user`, ver sección 6). "Desvincular" le quita el acceso sin borrar la vendedora ni el usuario de Auth. |
-| **Flash Sales** | Crear ofertas con precio promo y vencimiento (alta manual, un producto a la vez) o **carga masiva por Excel** (2026-07-08: mismo archivo semanal "Special Flash Sale" con formato letterhead — UPC/Sku/Brand/Title Product/Price/Type/Qty/Total —, matchea por SKU y precio propio de cada fila; la fecha de inicio/fin se elige una vez con el selector de arriba y se aplica a todos los productos del archivo). Visibles para todos con countdown; **se apagan solas por fecha, sin acción manual** (`get_flash_sales()` ya filtra por `expires_at`). La tabla del admin distingue 4 estados (`LIVE` / Programada / Expiró / Desactivada, 2026-07-08) — el botón "Desactivar" es solo para cortar una oferta *antes* de su fecha de fin, no hace falta para que termine normalmente. **"Reactivar" por fila y "Reactivar grupo" (N)** (2026-08-06): desactivar era un camino de ida, y esa era la causa del bug de abajo. El encabezado de cada grupo muestra **su composición real** (badges "2 LIVE · 3 Expiró · 1 Desactivada"), y **"Aplicar al grupo" pide confirmación** diciendo cuántas ofertas van a volver al catálogo en el acto y cuántas están desactivadas y seguirán apagadas, con dos salidas: "Solo reprogramar" o "Reprogramar y reactivar todo". Los botones del grupo actúan **siempre sobre el grupo completo**, incluso con el filtro de estado puesto (antes se agrupaba la lista ya filtrada, así que "Desactivar grupo" con el filtro "Expiró" apagaba media promo sin decirlo; ahora avisa "(N no se muestran por el filtro)"). |
+| **Pedidos** | **Todos los pedidos, sin tope** (2026-08-07: antes traía los últimos 200, así que el conteo del encabezado decía "200" hubiera 200 o 900 y los pedidos viejos no se podían ni ver ni marcar atendidos). Carga con `fetchAll` (páginas de 1,000 en paralelo) y se renderiza por lotes con scroll infinito; el encabezado muestra el total real y, con filtros puestos, "coinciden / total". Click en una fila expande un detalle de ancho completo (tabla Producto/Cantidad/Precio/Subtotal, 2026-07-17 — antes se abría angosto dentro de la columna Ítems). Cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado; 2026-07-17: las 3 acciones piden confirmación en un modal antes de aplicarse, y quedan auditadas vía RPC `update_order_status`, antes un `update` directo sin rastro) y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"**/**"Descargar Excel"** por fila (2026-07-17 el primero, mismo generador que el carrito del cliente; el Excel con las columnas exactas de `UploadTemplate.xls` para subirlo directo al bulk-order upload de SellerCloud); debajo, separados, **"Editar"** y **"Convertir en pedido"** — ambos **solo para cotizaciones** (`kind = 'quote'`), nunca para un pedido real, y "Editar" además solo mientras la cotización sigue `new` (ni atendida ni cancelada se edita). "Editar" (RPC auditada `update_order_items`) deja cambiar cantidad/quitar/agregar producto — cualquiera con acceso al pedido puede hacerlo (admin siempre, vendedora solo los de sus propios clientes). "Convertir en pedido" (RPC `convert_quote_to_order`) congela el precio de ese momento con la lista real del cliente (a diferencia de la cotización, que sigue mostrando el precio **vigente** vía `get_quotes_live_pricing` — ver sección 6) y deja de ajustarse a cambios de precio futuros. Arriba de la lista, **aviso rojo de los pedidos que el cliente envió y no se registraron** (2026-08-05, `order_failures`): cliente, fecha, motivo y cantidad de líneas, con un botón **"Recuperar"** que lo carga como pedido con los precios vigentes de su lista (RPC `recover_order_failure`, auditada) — antes un pedido rechazado no dejaba rastro en ninguna parte. Aparece también cuando todavía no hay ningún pedido, para que "aún no hay pedidos" no tape justo lo que hay que ver. Una vendedora solo ve (y recupera) los de sus propios clientes. |
+| **🔐 Superadmin** (2026-08-05, solo superadmin) | Lo que antes obligaba a entrar al SQL Editor o al dashboard de Auth. **Usuarios y accesos**: todos los usuarios de Supabase Auth con su rol (Superadmin/Admin/Vendedora/Sin rol), la vendedora vinculada, fecha de alta y último acceso; por fila, "Hacer admin"/"Quitar admin" (con confirmación) y **"Cambiar contraseña"** (sirve para cualquier acceso: vendedora, admin o el propio superadmin); arriba, **"+ Crear admin"** (crea el usuario de Auth con su contraseña inicial y le da el rol, en un paso). **Listas de precio y dueñas**: por lista, cuántos clientes y cuántos precios tiene, sus dueñas con la principal marcada (★), agregar/quitar dueña y cambiar cuál es la principal; si al mover dueñas quedaron clientes con una vendedora que ya no es dueña, avisa cuántos y ofrece pasarlos a la principal de una vez. También **crear** una lista nueva (código + nombre visible; el código se valida y no se puede cambiar después), **renombrar** el nombre visible y **eliminar** una lista que no sea de las base y esté completamente vacía. Todo va por RPC `sa_*` con `is_superadmin()` adentro (o por la Edge Function `superadmin-users` cuando hace falta la Admin API de Auth) y **todo queda en el Registro de movimientos**. |
+| **📈 Métricas** (2026-08-06, solo superadmin) | Los KPIs de todo el sistema en una pantalla, **en vivo** (se refresca solo cada 60 s, más un botón "↻ Actualizar" y un cartel "actualizado hace X"). Selector de rango **7 / 14 / 30 días** (default 14). Ocho tarjetas: monto capturado, pedidos, ticket promedio, cotizaciones, vendedoras activas, **tiempo promedio a atender** (horas desde que entró el pedido hasta la primera vez que se marcó Atendido; "—" con la aclaración "aún sin pedidos marcados atendidos" cuando todavía no hay ninguno), cotizaciones convertidas y cancelados; debajo, los **fallos de envío** del período y cuántos se recuperaron. Después, un **mini-gráfico de barras del monto por día** (SVG propio, sin librería de charts) y la tabla **"Adopción por vendedora"** (pedidos, monto, ticket y cotizaciones por vendedora, ordenada por monto, con fila de total del período que cuadra con las tarjetas) y su **"⬇️ Descargar Excel"**. Los pedidos sin vendedora salen agrupados en una fila "—". **Las cuentas de prueba (`SystemsPruebas` y compañía) quedan afuera de todos los números** y sus nombres se listan al pie de la tabla, para que la exclusión se vea en vez de ser invisible. Toda la data viene de **una sola RPC** `sa_metrics_overview(p_days)` con `is_superadmin()` adentro: los agregados cruzan a todas las vendedoras, así que sumarlos desde el cliente daría un número distinto según quién mira (la RLS le recorta a cada vendedora sus propios pedidos). Es la única `sa_*` que **no** audita: es de solo lectura, y una fila por refresco llenaría `admin_audit_log` con una por minuto por pestaña abierta. |
+
+> **La pestaña Flash Sales se eliminó** (2026-08-07). Estaba entre Vendedoras
+> y Pedidos y manejaba ofertas con precio promo propio + cuenta regresiva
+> (tabla `flash_sales`). El negocio no las usa así: una Flash Sale es una
+> **estrategia para mover inventario**, no un precio distinto con reloj. Hoy
+> es la etiqueta 🔥 del producto, que se pone desde Productos (Excel o
+> selección en bloque) y el cliente filtra con el chip 🔥 del catálogo.
+> **No hizo falta ninguna migración**: la tabla y sus datos quedan en la base
+> sin que nadie los lea (ver el comentario "LEGADO" en `schema.sql`), así que
+> volver atrás es reponer el código, no recuperar datos.
 
 #### Un producto sin precio no sale en el catálogo (2026-08-06)
 
@@ -313,9 +328,11 @@ y nunca publicó una oferta apagada (verificado). Era el panel, que dejaba
 reprogramar un grupo mixto sin decir qué iba a publicar y no tenía forma de
 volver a prender lo apagado. Arreglado enteramente en `FlashSalesAdmin.jsx`,
 **sin migración**.
-| **Pedidos** | Últimos 200; click en una fila expande un detalle de ancho completo (tabla Producto/Cantidad/Precio/Subtotal, 2026-07-17 — antes se abría angosto dentro de la columna Ítems). Cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado; 2026-07-17: las 3 acciones piden confirmación en un modal antes de aplicarse, y quedan auditadas vía RPC `update_order_status`, antes un `update` directo sin rastro) y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"**/**"Descargar Excel"** por fila (2026-07-17 el primero, mismo generador que el carrito del cliente; el Excel con las columnas exactas de `UploadTemplate.xls` para subirlo directo al bulk-order upload de SellerCloud); debajo, separados, **"Editar"** y **"Convertir en pedido"** — ambos **solo para cotizaciones** (`kind = 'quote'`), nunca para un pedido real, y "Editar" además solo mientras la cotización sigue `new` (ni atendida ni cancelada se edita). "Editar" (RPC auditada `update_order_items`) deja cambiar cantidad/quitar/agregar producto — cualquiera con acceso al pedido puede hacerlo (admin siempre, vendedora solo los de sus propios clientes). "Convertir en pedido" (RPC `convert_quote_to_order`) congela el precio de ese momento con la lista real del cliente (a diferencia de la cotización, que sigue mostrando el precio **vigente** vía `get_quotes_live_pricing` — ver sección 6) y deja de ajustarse a cambios de precio futuros. Arriba de la lista, **aviso rojo de los pedidos que el cliente envió y no se registraron** (2026-08-05, `order_failures`): cliente, fecha, motivo y cantidad de líneas, con un botón **"Recuperar"** que lo carga como pedido con los precios vigentes de su lista (RPC `recover_order_failure`, auditada) — antes un pedido rechazado no dejaba rastro en ninguna parte. Aparece también cuando todavía no hay ningún pedido, para que "aún no hay pedidos" no tape justo lo que hay que ver. Una vendedora solo ve (y recupera) los de sus propios clientes. |
-| **🔐 Superadmin** (2026-08-05, solo superadmin) | Lo que antes obligaba a entrar al SQL Editor o al dashboard de Auth. **Usuarios y accesos**: todos los usuarios de Supabase Auth con su rol (Superadmin/Admin/Vendedora/Sin rol), la vendedora vinculada, fecha de alta y último acceso; por fila, "Hacer admin"/"Quitar admin" (con confirmación) y **"Cambiar contraseña"** (sirve para cualquier acceso: vendedora, admin o el propio superadmin); arriba, **"+ Crear admin"** (crea el usuario de Auth con su contraseña inicial y le da el rol, en un paso). **Listas de precio y dueñas**: por lista, cuántos clientes y cuántos precios tiene, sus dueñas con la principal marcada (★), agregar/quitar dueña y cambiar cuál es la principal; si al mover dueñas quedaron clientes con una vendedora que ya no es dueña, avisa cuántos y ofrece pasarlos a la principal de una vez. También **crear** una lista nueva (código + nombre visible; el código se valida y no se puede cambiar después), **renombrar** el nombre visible y **eliminar** una lista que no sea de las base y esté completamente vacía. Todo va por RPC `sa_*` con `is_superadmin()` adentro (o por la Edge Function `superadmin-users` cuando hace falta la Admin API de Auth) y **todo queda en el Registro de movimientos**. |
-| **📈 Métricas** (2026-08-06, solo superadmin) | Los KPIs de todo el sistema en una pantalla, **en vivo** (se refresca solo cada 60 s, más un botón "↻ Actualizar" y un cartel "actualizado hace X"). Selector de rango **7 / 14 / 30 días** (default 14). Ocho tarjetas: monto capturado, pedidos, ticket promedio, cotizaciones, vendedoras activas, **tiempo promedio a atender** (horas desde que entró el pedido hasta la primera vez que se marcó Atendido; "—" con la aclaración "aún sin pedidos marcados atendidos" cuando todavía no hay ninguno), cotizaciones convertidas y cancelados; debajo, los **fallos de envío** del período y cuántos se recuperaron. Después, un **mini-gráfico de barras del monto por día** (SVG propio, sin librería de charts) y la tabla **"Adopción por vendedora"** (pedidos, monto, ticket y cotizaciones por vendedora, ordenada por monto, con fila de total del período que cuadra con las tarjetas) y su **"⬇️ Descargar Excel"**. Los pedidos sin vendedora salen agrupados en una fila "—". **Las cuentas de prueba (`SystemsPruebas` y compañía) quedan afuera de todos los números** y sus nombres se listan al pie de la tabla, para que la exclusión se vea en vez de ser invisible. Toda la data viene de **una sola RPC** `sa_metrics_overview(p_days)` con `is_superadmin()` adentro: los agregados cruzan a todas las vendedoras, así que sumarlos desde el cliente daría un número distinto según quién mira (la RLS le recorta a cada vendedora sus propios pedidos). Es la única `sa_*` que **no** audita: es de solo lectura, y una fila por refresco llenaría `admin_audit_log` con una por minuto por pestaña abierta. |
+
+> Al día siguiente (2026-08-07) el usuario decidió **eliminar el área entera**:
+> lo que el negocio necesita de una Flash Sale es destacar productos para mover
+> inventario, no un precio con reloj. Este apartado queda como historia — ese
+> panel ya no existe. Ver el recuadro arriba de esta sección.
 
 ### Descuento de stock al atender un pedido (2026-08-04)
 
@@ -411,8 +428,7 @@ wholesale con membrete:
   de URLs de foto aunque tenga encabezado inservible (ej. `Column1`).
 - **Type** (`type`, `tipo`, `disponibilidad`): `Available` / `Pre Order` /
   `Flash Sale` (2026-07-08: antes se trataba como disponible, ahora se
-  guarda como su propio estado — badge 🔥 en el catálogo y filtro propio,
-  sin relación con la tabla `flash_sales` de ofertas con precio promo).
+  guarda como su propio estado — badge 🔥 en el catálogo y filtro propio).
 - **Activo** (`activo`, `active`): `no/false/0/inactivo` desactiva. El
   inventario **no** toca este campo — activo/inactivo es 100% manual
   (edición o selección en bloque, ver abajo) más la exclusión de
@@ -470,22 +486,84 @@ La matriz de precios (debajo, de solo lectura) tiene botones con contador
 para ver solo productos **con precio** o **sin precio** (según la lista
 seleccionada en el filtro).
 
-### Flash Sales (pestaña Flash Sales, 2026-07-08)
+**Filtros por grupo de producto** (2026-08-07): además del buscador, la
+matriz filtra por marca, línea de perfume y estado (activo/inactivo, con/sin
+stock, Pre-Order, 🔥 Flash Sale, ✨ Nuevo) — son literalmente los mismos de la
+pestaña Productos (`ProductFilters`/`productMatchesFilters` en
+`pages/admin/ui.jsx`, compartidos para que las dos pestañas no puedan
+divergir sobre los mismos productos). Sirve para responder "¿los 🔥 de esta
+semana tienen precio en US Wholesale?" sin buscarlos de a uno. Los contadores
+"con precios / sin precios" **se recalculan sobre el grupo filtrado** (no
+sobre el catálogo entero), que es lo único que hace útil la combinación; el
+buscador de texto no los mueve, para que el número no baile tecla a tecla.
+Cada fila muestra las etiquetas del producto (🔥 / Pre-Order / ✨ Nuevo /
+Inactivo) para saber qué se está mirando.
 
-Mismo formato letterhead que las listas wholesale (ej. el archivo semanal
-"Special Flash Sale"): columnas `UPC`, `Sku`, `Brand`, `Title Product`,
-`Price`, `Type`, `Qty`, `Total Price`. Solo se usan **Sku** y **Price**
-(acepta el precio con `$`/comas, ej. `$22.00`); `Type`/`Qty`/`Total Price`
-se ignoran — la fecha de inicio y fin de la promo **no viene del Excel**,
-se elige una sola vez con los selectores de arriba y se aplica igual a
-todos los productos del archivo. Filas con SKU que no matchea ningún
-producto activo, o con precio inválido/vacío, se cuentan como omitidas
-sin tumbar la carga. A diferencia de las cargas de Productos/Precios/
-Clientes, **no hace upsert**: cada carga crea filas nuevas en
-`flash_sales` (igual que el alta manual de una por una) — si volvés a
-subir el mismo archivo se duplican las ofertas, así que para reemplazar
-la promo de la semana hay que desactivar las anteriores a mano en la
-tabla antes de cargar la nueva.
+### Flash Sales (🔥 en pestaña Productos, 2026-08-07)
+
+Sube el archivo semanal **"Special Flash Sale"** tal cual viene (formato
+letterhead: `UPC`, `Sku`, `Brand`, `Title Product`, `Price`, `Type`, `Qty`,
+`Total Price`) y **le pone la etiqueta 🔥 Flash Sale a esos productos**. Solo
+se usa la columna **Sku**: no crea productos y **la columna Price se ignora
+a propósito** — una Flash Sale ya no tiene precio propio, el precio sale de
+la lista del cliente y se carga en la pestaña Precios como el de cualquier
+otro producto.
+
+Dos pasos, igual que la carga de precios y por el mismo motivo (esta carga
+también **desmarca** por omisión):
+
+1. **Vista previa**: cuántos se van a marcar, cuántos se van a desmarcar,
+   cuántos ya tenían la etiqueta y cuántos SKU del archivo no existen (con
+   la lista de esos SKU). Si alguno de los productos del archivo está
+   **inactivo**, avisa en rojo: la etiqueta no lo hace visible en el
+   catálogo.
+2. **Confirmar y aplicar**.
+
+Por defecto **reemplaza la promo entera**: a los productos que hoy tienen 🔥
+y no vienen en el archivo se les quita la etiqueta. Se puede destildar
+("Quitarle la etiqueta 🔥 a los que no vienen en el archivo") para acumular
+sobre la promo anterior. Al desmarcar, el producto vuelve a **Disponible**, o
+a **Pre-Order si su stock está en 0** — lo decide el trigger de la base, no
+el frontend; la disponibilidad que tenía antes de ser 🔥 no se guarda en
+ningún lado, así que no hay a qué "volver" cuando no hay dato de stock.
+
+Los `update` van **en tandas de 100 ids** (`updateByIds` en
+`lib/supabase.js`): PostgREST manda el `id=in.(...)` en la URL, y una promo de
+300 productos armaba una query string de ~11 KB que se cae antes de llegar a
+la base.
+
+### Acciones en bloque de la tabla de Productos (solo admin)
+
+Las casillas seleccionan **todo lo que pasa los filtros actuales** (no solo
+las filas renderizadas por el scroll infinito), y la barra sticky ofrece:
+
+- **Activar / Desactivar** (2026-07-14).
+- **Etiqueta** (2026-08-07): 🔥 Flash Sale · Pre-Order · Disponible.
+- **✨ Nuevo** (2026-08-07): Marcar (pone `new_until` a +10 días) o Quitar
+  (lo deja en `null`).
+
+Ojo con Disponible/Pre-Order: **las decide el stock**. El trigger
+`products_availability_from_stock` las recalcula en cualquier escritura sobre
+un producto con stock cargado, así que marcar Pre-Order sobre algo con 5
+unidades no queda — solo 🔥 se respeta siempre. El panel no finge que
+funcionó: después de aplicar **relee y compara**, y avisa "N con la etiqueta
+aplicada · M recalculados por su stock".
+
+**Un botón que no cambiaría nada aparece deshabilitado**, con el motivo en el
+tooltip. Se calcula sobre la selección real, no sobre la etiqueta a secas:
+`availabilityAfter()` en `ProductsAdmin.jsx` es el **espejo del trigger** (con
+qué disponibilidad va a quedar el producto si le escribimos X), y el botón se
+apaga cuando ningún seleccionado cambiaría. Por eso hay dos motivos distintos:
+
+- *"Todos los seleccionados ya están así"* — marcar 🔥 sobre una selección que
+  ya es toda 🔥, Activar sobre lo que ya está activo, ✨ Marcar sobre lo que ya
+  lleva la etiqueta (y ✨ Quitar cuando ninguno la tiene).
+- *"No cambiaría nada: la disponibilidad la manda su stock"* — Pre-Order sobre
+  productos con stock ≥ 1, o Disponible sobre productos con stock 0. No es que
+  "ya estén así": es que el trigger los va a devolver a donde estaban.
+
+Con selección **mixta** los botones siguen habilitados: la acción se aplica al
+subconjunto que sí cambia, y el aviso posterior dice cuántos fueron.
 
 ### Clientes (pestaña Clientes)
 
@@ -597,7 +675,9 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
     **No expone el SKU.** Excepción: la lista `quote` devuelve todos los
     productos activos con precio `null` (catálogo de cotización, ver
     sección 1).
-  - `get_flash_sales()` — pública, solo ofertas vigentes, sin SKU.
+  - `get_flash_sales()` — **legado, sin llamadores desde 2026-08-07**: el
+    catálogo dejó de pedirla al eliminarse la sección de ofertas. Sigue
+    creada por si hiciera falta volver atrás.
   - `create_order(p_token, ...)` — inserta pedidos validando token; el
     cliente nunca puede leer/modificar `orders`. **Los precios y el total se
     recalculan en el servidor** con la lista del cliente y las flash sales
@@ -683,9 +763,9 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   borrar nada más — el frontend además oculta esos controles para esa
   vista, pero la restricción real vive en RLS, no en la UI. El RPC
   `get_my_role()` resuelve `'admin' | 'vendedora' | null` para que
-  `AdminLayout.jsx` arme las pestañas correctas (2026-07-15: a una
-  vendedora ya no le arma pestaña Flash Sales, con redirect si entra por
-  URL directa).
+  `AdminLayout.jsx` arme las pestañas correctas (a una vendedora no le arma
+  Vendedoras ni Registro de movimientos, con redirect si entra por URL
+  directa).
 - **`price_lists`/`product_prices` con dueña** (2026-07-15; rehecho
   2026-08-04 en `migration-2026-08-04-shared-price-lists.sql`, que
   **reemplaza** a `migration-2026-07-15-restrict-vendedora-luzmar.sql`): la
@@ -1155,22 +1235,21 @@ src/
     whatsapp.js         Mensaje de pedido + link wa.me
     pdf.js              PDF del pedido (jsPDF)
     format.js           money / cleanPhone
-  components/           Header, ProductCard, FlashSaleSection, CartBar,
+  components/           Header, FilterBar, ProductCard, CartBar,
                         CartDrawer, ProductImage, ThemeToggle
   pages/
     Catalog.jsx         Catálogo del cliente
     admin/
       AdminLayout.jsx   Login + shell del panel
-      ProductsAdmin.jsx Productos + carga Excel + fotos Excel
-      PricesUpload.jsx  Precios Excel + matriz por lista
+      ProductsAdmin.jsx Productos + carga Excel (productos, fotos, 🔥 Flash Sales) + acciones en bloque
+      PricesUpload.jsx  Precios Excel + matriz por lista + filtros por grupo de producto
       ClientsAdmin.jsx  Clientes + niveles por inversión
       AuditLogAdmin.jsx Registro de movimientos (clientes, pedidos, superadmin)
       VendedoresAdmin.jsx  Alta manual de vendedoras + teléfono + acceso
-      FlashSalesAdmin.jsx
       OrdersAdmin.jsx   Bandeja de pedidos + aviso de los que no se registraron (order_failures) con "Recuperar"
       SuperAdminPanel.jsx  Usuarios/roles/contraseñas + dueñas de listas (solo superadmin)
       MetricsAdmin.jsx  KPIs en vivo por polling + gráfico SVG + adopción por vendedora (solo superadmin)
-      ui.jsx            Piezas compartidas (UploadZone, SearchIcon, ...)
+      ui.jsx            Piezas compartidas (UploadZone, SearchIcon, ProductFilters/productMatchesFilters, ...)
 supabase/schema.sql     Esquema completo + RLS + RPCs + migraciones
 supabase/migration-*.sql  Deltas idempotentes para producción (no re-correr el schema completo)
 supabase/functions/admin-create-vendedora-user/  Edge Function (Deno) — crea el usuario de Auth de una vendedora, requiere deploy manual

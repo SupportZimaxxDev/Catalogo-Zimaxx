@@ -1,5 +1,7 @@
 // Piezas de UI compartidas del panel admin.
 
+import { useI18n } from '../../i18n'
+
 export { useInfiniteRows } from '../../hooks/useInfiniteRows'
 
 export function SearchIcon() {
@@ -20,6 +22,137 @@ export function SearchIcon() {
 
 export const inputCls =
   'rounded-xl border border-line bg-surface px-3 py-2 text-sm outline-none transition-colors placeholder:text-primary/35 focus:border-secondary'
+
+// ---------- Filtros de producto (compartidos Productos ↔ Precios) ----------
+// 2026-08-07: la pestaña Precios pasó a filtrar por los mismos grupos que la
+// de Productos (marca, línea, pre-order, 🔥 flash, ✨ nuevo, stock) para poder
+// mirar los precios de un grupo puntual. La regla de qué pasa cada filtro vive
+// acá y no duplicada en cada página: si divergen, el panel dice una cosa y la
+// otra pestaña otra sobre los mismos productos.
+
+// La etiqueta ✨ Nuevo es una fecha, no un booleano: vence sola.
+export const isNewProduct = (p) => !!p.new_until && new Date(p.new_until).getTime() > Date.now()
+
+// Estados disponibles en el select. `photo: true` = solo tiene sentido donde
+// se cargó image_url (Productos); Precios no lo pide y lo omite.
+const STATUS_OPTIONS = [
+  { value: 'active', key: 'active' },
+  { value: 'inactive', key: 'inactive' },
+  { value: 'instock', key: 'withStock' },
+  { value: 'nostock', key: 'outOfStock' },
+  { value: 'noimage', key: 'noImage', photo: true },
+  { value: 'preorder', key: 'preorder' },
+  { value: 'flash', key: 'flashSale', icon: '🔥' },
+  { value: 'new', key: 'newTag', icon: '✨' },
+]
+
+export function productMatchesStatus(p, statusFilter) {
+  switch (statusFilter) {
+    case '':
+    case undefined:
+      return true
+    case 'active':
+      return !!p.active
+    case 'inactive':
+      return !p.active
+    case 'instock':
+      return p.stock >= 1
+    case 'nostock':
+      return p.stock != null && p.stock <= 0
+    case 'noimage':
+      return !p.image_url
+    case 'preorder':
+      return p.availability === 'preorder'
+    case 'flash':
+      return p.availability === 'flash'
+    case 'new':
+      return isNewProduct(p)
+    default:
+      return true
+  }
+}
+
+// `__none__` en marca/línea = "sin ese dato" (productos sin categorizar).
+export function productMatchesFilters(p, { query = '', catFilter = '', lineFilter = '', statusFilter = '' }) {
+  if (catFilter === '__none__' ? p.category : catFilter && p.category !== catFilter) return false
+  if (lineFilter === '__none__' ? p.product_line : lineFilter && p.product_line !== lineFilter)
+    return false
+  if (!productMatchesStatus(p, statusFilter)) return false
+  const q = query.trim().toLowerCase()
+  if (
+    q &&
+    !String(p.name ?? '').toLowerCase().includes(q) &&
+    !String(p.sku ?? '').toLowerCase().includes(q) &&
+    !String(p.upc ?? '').toLowerCase().includes(q)
+  )
+    return false
+  return true
+}
+
+// Buscador + los tres selects, idénticos en las dos pestañas.
+export function ProductFilters({
+  query,
+  onQueryChange,
+  categories,
+  catFilter,
+  onCatChange,
+  lines,
+  lineFilter,
+  onLineChange,
+  lineLabel,
+  statusFilter,
+  onStatusChange,
+  withPhotoStatus = false,
+}) {
+  const { t } = useI18n()
+  return (
+    <div className="flex flex-col gap-2 md:flex-row">
+      <div className="relative flex-1">
+        <SearchIcon />
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
+          placeholder={t('searchProducts')}
+          className={`${inputCls} w-full pl-10`}
+        />
+      </div>
+      <select value={catFilter} onChange={(e) => onCatChange(e.target.value)} className={inputCls}>
+        <option value="">{t('allCategories')}</option>
+        <option value="__none__">{t('uncategorized')}</option>
+        {categories.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+      </select>
+      {lines.length > 0 && (
+        <select value={lineFilter} onChange={(e) => onLineChange(e.target.value)} className={inputCls}>
+          <option value="">{t('allLines')}</option>
+          <option value="__none__">{t('uncategorized')}</option>
+          {lines.map((l) => (
+            <option key={l} value={l}>
+              {lineLabel ? lineLabel(l) : l}
+            </option>
+          ))}
+        </select>
+      )}
+      <select
+        value={statusFilter}
+        onChange={(e) => onStatusChange(e.target.value)}
+        className={inputCls}
+      >
+        <option value="">{t('allStatuses')}</option>
+        {STATUS_OPTIONS.filter((o) => withPhotoStatus || !o.photo).map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.icon ? `${o.icon} ` : ''}
+            {t(o.key)}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
 
 // Zona de carga de Excel colapsable: los uploads son ocasionales y no
 // deben robarle espacio a la tabla, que es el trabajo diario.

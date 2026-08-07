@@ -5,7 +5,7 @@ import { useI18n } from '../../i18n'
 import { money, cleanPhone } from '../../utils/format'
 import { downloadOrderExcel } from '../../utils/excel'
 import { downloadOrderPdf } from '../../utils/pdf'
-import { SearchIcon, inputCls } from './ui'
+import { SearchIcon, inputCls, useInfiniteRows } from './ui'
 
 // Estilos de badge por estado (2026-07-15 agrega 'cancelled': un pedido
 // se arma y confirma, pero a veces el cliente lo cancela después).
@@ -15,6 +15,17 @@ const STATUS_STYLES = {
   cancelled: 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
 }
 
+// El join a vendedora solo lo necesita el filtro que ve el admin; a una
+// vendedora RLS ya le recorta la consulta a sus propios pedidos.
+const ORDER_SELECT = '*, clients(name, phone, vendedora_id, vendedores(name))'
+
+// Cuántos ids por llamada a get_quotes_live_pricing. La RPC recalcula el
+// precio vigente de cada línea de cada cotización: pedirle 800 de una es
+// una sola consulta larga que puede chocar con el statement_timeout, y si
+// falla no se muestra ningún precio. En tandas, cada una responde por su
+// cuenta y los precios van apareciendo.
+const LIVE_PRICING_CHUNK = 100
+
 // Bandeja de pedidos: cada uno se marca atendido para no depender de la
 // memoria del chat de WhatsApp.
 export default function OrdersAdmin() {
@@ -23,6 +34,11 @@ export default function OrdersAdmin() {
   const isAdmin = role === 'admin'
   const [orders, setOrders] = useState([])
   const [expanded, setExpanded] = useState(null)
+  // Sin el tope de 200 la primera carga puede tardar: hasta que termine, la
+  // tabla no puede decir "aún no hay pedidos" (diría que no hay ninguno
+  // cuando en realidad todavía están viniendo).
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
 
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
@@ -65,9 +81,25 @@ export default function OrdersAdmin() {
 
   const loadLivePricing = async (list) => {
     const quoteIds = list.filter((o) => o.kind === 'quote').map((o) => o.id)
-    if (quoteIds.length === 0) return
-    const { data } = await supabase.rpc('get_quotes_live_pricing', { p_order_ids: quoteIds })
-    if (data) setLivePricing((prev) => ({ ...prev, ...data }))
+    for (let i = 0; i < quoteIds.length; i += LIVE_PRICING_CHUNK) {
+      const chunk = quoteIds.slice(i, i + LIVE_PRICING_CHUNK)
+      const { data } = await supabase.rpc('get_quotes_live_pricing', { p_order_ids: chunk })
+      if (data) setLivePricing((prev) => ({ ...prev, ...data }))
+    }
+  }
+
+  // Todos los pedidos, sin tope (2026-08-07). Antes traía los últimos 200 y
+  // el conteo del encabezado mentía apenas se pasaba de ahí: decía "200"
+  // hubiera 200 o 900, y los pedidos viejos no se podían ni ver ni marcar
+  // atendidos. `fetchAll` pagina de a 1,000 (el corte de PostgREST) pidiendo
+  // las páginas en paralelo. Se ordena descendente acá porque `fetchAll`
+  // pagina ascendente para que el `range` sea estable.
+  const loadOrders = async () => {
+    const all = await fetchAll('orders', ORDER_SELECT, 'created_at')
+    const list = all.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+    setOrders(list)
+    loadLivePricing(list)
+    return list
   }
 
   const loadFailures = () =>
@@ -80,19 +112,11 @@ export default function OrdersAdmin() {
       .then(({ data }) => setFailures(data ?? []))
 
   useEffect(() => {
-    // A una vendedora, RLS ya le filtra esto a sus propios pedidos —
-    // el join de vendedora solo importa para el filtro que ve el admin.
-    supabase
-      .from('orders')
-      .select('*, clients(name, phone, vendedora_id, vendedores(name))')
-      .order('created_at', { ascending: false })
-      .limit(200)
-      .then(({ data }) => {
-        const list = data ?? []
-        setOrders(list)
-        loadLivePricing(list)
-      })
+    loadOrders()
+      .catch(() => setLoadError(true))
+      .finally(() => setLoading(false))
     loadFailures()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Rescata el pedido perdido: lo crea como pedido de ese cliente con los
@@ -108,15 +132,7 @@ export default function OrdersAdmin() {
     }
     // Recargar las dos listas: el pedido nuevo tiene que aparecer arriba y el
     // aviso desaparecer.
-    const { data: fresh } = await supabase
-      .from('orders')
-      .select('*, clients(name, phone, vendedora_id, vendedores(name))')
-      .order('created_at', { ascending: false })
-      .limit(200)
-    if (fresh) {
-      setOrders(fresh)
-      loadLivePricing(fresh)
-    }
+    await loadOrders().catch(() => {})
     loadFailures()
   }
 
@@ -261,6 +277,16 @@ export default function OrdersAdmin() {
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]))
   }, [orders])
 
+  // Traer todos los pedidos no significa dibujarlos todos de golpe: cada fila
+  // puede desplegar su detalle, así que se rinden por lotes con scroll
+  // infinito, igual que la tabla de Productos.
+  const [visibleRows, sentinelRef] = useInfiniteRows(100, [
+    query,
+    statusFilter,
+    typeFilter,
+    repFilter,
+  ])
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     const qDigits = q.replace(/\D/g, '')
@@ -343,10 +369,26 @@ export default function OrdersAdmin() {
 
   return (
     <div className="space-y-4">
+      {/* El número es el total real, no "los últimos N": la bandeja carga
+          todos los pedidos (2026-08-07). Con filtros puestos muestra
+          "coinciden / total". */}
       <h2 className="text-xl font-bold">
-        {t('orders')} ({filtered.length}
-        {filtered.length !== orders.length ? ` / ${orders.length}` : ''})
+        {t('orders')}{' '}
+        {loading ? (
+          <span className="text-base font-normal text-primary/40">{t('loading')}</span>
+        ) : (
+          <>
+            ({filtered.length}
+            {filtered.length !== orders.length ? ` / ${orders.length}` : ''})
+          </>
+        )}
       </h2>
+
+      {loadError && (
+        <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
+          {t('ordersLoadFailed')}
+        </p>
+      )}
 
       {failuresNotice}
 
@@ -388,7 +430,9 @@ export default function OrdersAdmin() {
         )}
       </div>
 
-      {filtered.length === 0 ? (
+      {loading ? (
+        <p className="py-10 text-center text-primary/50">{t('loading')}</p>
+      ) : filtered.length === 0 ? (
         <p className="py-10 text-center text-primary/50">{t('noOrders')}</p>
       ) : (
       <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-sm">
@@ -405,7 +449,7 @@ export default function OrdersAdmin() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((o) => {
+            {filtered.slice(0, visibleRows).map((o) => {
               const canEdit = o.kind === 'quote' && (o.status ?? 'new') === 'new'
               const canConvert = o.kind === 'quote' && (o.status ?? 'new') !== 'cancelled'
               return (
@@ -701,6 +745,14 @@ export default function OrdersAdmin() {
             })}
           </tbody>
         </table>
+        {filtered.length > visibleRows && (
+          <div ref={sentinelRef} className="py-4 text-center text-xs text-primary/40">
+            {t('loading')}
+          </div>
+        )}
+        <div className="border-t border-line px-4 py-2.5 text-xs text-primary/50">
+          {filtered.length} {t('results')}
+        </div>
       </div>
       )}
 
