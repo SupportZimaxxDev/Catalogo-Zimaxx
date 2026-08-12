@@ -223,26 +223,65 @@ alter table public.products
 alter table public.products
   add column if not exists stock int;
 
--- Disponibilidad derivada del stock (2026-08-04,
--- migration-2026-08-04-order-stock.sql). La regla vivía duplicada en cada
+-- ¿Lo apagó la regla de stock 0? (2026-08-12,
+-- migration-2026-08-12-hide-out-of-stock.sql). No es "está sin stock" —eso ya lo
+-- dice products.stock— sino "esta regla fue la que lo despublicó", que es lo
+-- único que habilita volver a prenderlo solo cuando entre stock.
+--
+--   true  → inactivo por falta de stock; vuelve SOLO cuando entre stock
+--   false → si está inactivo, lo apagó una persona (o la exclusión de
+--           no-catálogo) y solo una persona lo vuelve a prender
+alter table public.products
+  add column if not exists deactivated_by_stock boolean not null default false;
+
+-- Disponibilidad y publicación derivadas del stock (2026-08-04,
+-- migration-2026-08-04-order-stock.sql; ampliado 2026-08-12,
+-- migration-2026-08-12-hide-out-of-stock.sql). La regla vivía duplicada en cada
 -- camino de escritura (sync_upsert_products, resolveAvailability de
 -- ProductsAdmin.jsx) y apply_price_list la pisaba sin querer; acá pasa a ser
 -- una invariante de la tabla: no importa quién escriba (sync, Excel, carga
 -- masiva, formulario, el descuento de un pedido atendido o un request
--- directo), un producto con stock 0 no puede quedar marcado Disponible.
+-- directo), un producto con stock 0 no puede quedar marcado Disponible ni
+-- publicado en el catálogo.
 --
 --   stock null → no se toca (no se sabe el stock; manda availability)
---   stock >= 1 → 'available'
---   stock <= 0 → 'preorder'
---   'flash'    → se conserva siempre (el stock solo alterna available↔preorder)
+--   stock >= 1 → 'available' + se reactiva si lo había apagado esta regla
+--   stock <= 0 → 'preorder'  + INACTIVO (no sale en get_catalog)
+--   'flash'    → la etiqueta se conserva siempre (el stock solo alterna
+--                available↔preorder), pero con stock <= 0 también se
+--                desactiva: la etiqueta 🔥 no publica nada
+--
+-- 2026-08-12 revierte a propósito media decisión de 2026-07-14 ("un producto
+-- con stock 0 se MUESTRA como pre-order; ocultarlo es una acción manual
+-- aparte"). Sigue quedando en 'preorder' —es el dato con el que la asesora sabe
+-- que se puede reservar— pero deja de publicarse.
 create or replace function public.products_availability_from_stock()
 returns trigger
 language plpgsql
 as $$
 begin
-  if new.stock is not null and coalesce(new.availability, '') <> 'flash' then
+  -- Sin dato de stock no se deduce nada: null es "todavía no se sabe", no "0".
+  if new.stock is null then
+    return new;
+  end if;
+
+  if coalesce(new.availability, '') <> 'flash' then
     new.availability := case when new.stock >= 1 then 'available' else 'preorder' end;
   end if;
+
+  if new.stock <= 0 then
+    -- La bandera se marca solo cuando ESTA regla es la que apaga. Si la fila ya
+    -- venía inactiva se deja como está: puede ser un producto que apagó el admin
+    -- (false, no vuelve solo) o uno que esta regla ya apagó antes (true).
+    if new.active then
+      new.active               := false;
+      new.deactivated_by_stock := true;
+    end if;
+  elsif new.deactivated_by_stock then
+    new.active               := true;
+    new.deactivated_by_stock := false;
+  end if;
+
   return new;
 end;
 $$;
@@ -774,6 +813,7 @@ declare
   v_list              public.price_lists%rowtype;
   v_to_upsert         int;
   v_to_reactivate     int;
+  v_blocked_by_stock  int;   -- 2026-08-12
   v_to_deactivate     int;
   v_unknown_skus      int;
   v_invalid_prices    int;
@@ -829,7 +869,10 @@ begin
     end as availability,
     p.id     as product_id,
     p.name   as product_name,
-    p.active as was_active
+    p.active as was_active,
+    -- 2026-08-12: hace falta para saber a quién va a dejar apagado el trigger
+    -- por no tener stock (ver los contadores más abajo).
+    p.stock  as product_stock
   from dedup d
   left join public.products p on lower(trim(p.sku)) = lower(d.sku);
 
@@ -845,8 +888,18 @@ begin
 
   select count(*) into v_to_upsert
     from tmp_price_rows where product_id is not null and price is not null;
+  -- "A reactivar" = los que van a volver a verse DE VERDAD (2026-08-12). Los
+  -- inactivos con stock <= 0 no vuelven con esta carga: el trigger los deja
+  -- apagados y marcados para publicarse cuando entre stock, así que van a un
+  -- contador propio en vez de inflar la promesa del preview.
   select count(*) into v_to_reactivate
-    from tmp_price_rows where product_id is not null and price is not null and was_active = false;
+    from tmp_price_rows
+    where product_id is not null and price is not null and was_active = false
+      and (product_stock is null or product_stock >= 1);
+  select count(*) into v_blocked_by_stock
+    from tmp_price_rows
+    where product_id is not null and price is not null and was_active = false
+      and product_stock is not null and product_stock <= 0;
   select count(*) into v_unknown_skus
     from tmp_price_rows where product_id is null;
   select count(*) into v_invalid_prices
@@ -868,6 +921,9 @@ begin
     where product_id is not null and price is not null
     on conflict (product_id, price_list_id) do update set price = excluded.price;
 
+    -- active = true a propósito, aunque el trigger apague lo que no tenga stock
+    -- (2026-08-12): el archivo de precios dice "este producto se publica", y el
+    -- trigger lo deja marcado para publicarse solo cuando entre stock.
     update public.products p
     set active = true,
         availability = t.availability
@@ -880,8 +936,14 @@ begin
     where pp.product_id = d.product_id
       and pp.price_list_id = v_list.id;
 
+    -- Sacar un producto de la lista es decisión de una persona, así que también
+    -- cancela el regreso automático por stock (2026-08-12): sin el
+    -- `deactivated_by_stock = false`, uno que la regla de stock había apagado
+    -- volvería solo al catálogo en la próxima entrada de inventario,
+    -- contradiciendo esta misma carga.
     update public.products p
-    set active = false
+    set active = false,
+        deactivated_by_stock = false
     from tmp_deactivate d
     where p.id = d.product_id;
   end if;
@@ -891,6 +953,7 @@ begin
     'list',               jsonb_build_object('code', v_list.code, 'label', v_list.label),
     'to_upsert',          v_to_upsert,
     'to_reactivate',      v_to_reactivate,
+    'blocked_by_stock',   v_blocked_by_stock,
     'to_deactivate',      v_to_deactivate,
     'unknown_skus',       v_unknown_skus,
     'invalid_prices',     v_invalid_prices,
@@ -1281,7 +1344,21 @@ begin
     if v_qty is null or v_qty < 1 then continue; end if;
     if v_qty > 9999 then v_qty := 9999; end if;
 
-    select * into v_product from public.products where id = v_id and active;
+    -- 2026-08-12 (migration-2026-08-12-hide-out-of-stock.sql):
+    -- `or p.deactivated_by_stock`. Desde que quedarse sin stock DESACTIVA, un
+    -- producto que el cliente ya tenía en el carrito puede haber salido del
+    -- catálogo entre que lo agregó y lo mandó — y una línea de producto inactivo
+    -- se descarta acá en silencio (`continue`), o sea que el pedido entraría con
+    -- menos ítems sin que nadie se entere. En este proyecto una línea que se cae
+    -- en silencio ya costó un pedido de ~10k.
+    -- La bandera es la diferencia que hace falta: lo que salió del catálogo por
+    -- falta de stock se sigue pudiendo pedir (es un pre-order, "agotado pero se
+    -- puede reservar", y el carrito ya avisa que la disponibilidad la confirma
+    -- la asesora); lo que apagó una persona sigue sin poder pedirse.
+    select p.* into v_product
+    from public.products p
+    where p.id = v_id
+      and (p.active or p.deactivated_by_stock);
     if not found then continue; end if;
 
     v_price := null;

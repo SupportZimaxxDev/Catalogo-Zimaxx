@@ -38,6 +38,10 @@ export const isNewProduct = (p) => !!p.new_until && new Date(p.new_until).getTim
 const STATUS_OPTIONS = [
   { value: 'active', key: 'active' },
   { value: 'inactive', key: 'inactive' },
+  // 2026-08-12: los que apagó la regla de stock 0 (vuelven solos cuando entre
+  // stock), separados de los que apagó una persona — que son los únicos que hay
+  // que revisar a mano.
+  { value: 'inactivebystock', key: 'inactiveByStock', icon: '📦' },
   { value: 'instock', key: 'withStock' },
   { value: 'nostock', key: 'outOfStock' },
   { value: 'noimage', key: 'noImage', photo: true },
@@ -55,6 +59,8 @@ export function productMatchesStatus(p, statusFilter) {
       return !!p.active
     case 'inactive':
       return !p.active
+    case 'inactivebystock':
+      return !p.active && !!p.deactivated_by_stock
     case 'instock':
       return p.stock >= 1
     case 'nostock':

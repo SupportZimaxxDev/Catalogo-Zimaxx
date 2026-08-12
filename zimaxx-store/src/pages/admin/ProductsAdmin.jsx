@@ -169,6 +169,12 @@ function availabilityAfter(product, value) {
   return value
 }
 
+// El otro lado del mismo trigger (2026-08-12): un producto sin stock no se
+// publica, así que pedir "Activar" sobre él no lo saca al catálogo. No es un
+// no-op igual: queda marcado (deactivated_by_stock) y se publica solo cuando
+// entre stock, y eso es justo lo que el aviso del panel tiene que decir.
+const stockKeepsOff = (product) => product.stock != null && product.stock <= 0
+
 // Botón de la barra de selección. `blocked` es el motivo por el que la acción
 // no haría nada (null = habilitado). Un `<button disabled>` no dispara eventos
 // de mouse y su `title` no se ve en todos los navegadores, así que apagado va
@@ -239,7 +245,7 @@ export default function ProductsAdmin() {
   // guardado, y `products` todavía tiene el valor viejo en ese mismo tick.
   const load = async () => {
     try {
-      const all = await fetchAll('products', '*', 'name')
+      const all = await fetchAll('products', '*', ['name', 'id'])
       setProducts(all)
       return all
     } catch {
@@ -334,6 +340,12 @@ export default function ProductsAdmin() {
           sku,
           name: String(name).trim(),
           active: parseActive(pick(row, COLS.active)),
+          // La columna Activo del archivo es intención explícita del admin, así
+          // que borra la marca de "lo apagó el stock" (2026-08-12): un Activo=No
+          // deja el producto apagado incluso si después entra stock. Si el
+          // archivo dice Activo=Sí y el producto está en 0, el trigger lo vuelve
+          // a marcar y se publica solo cuando haya stock.
+          deactivated_by_stock: false,
           ...(hasUpc ? { upc: pick(row, COLS.upc) || null } : {}),
           ...(hasCategory ? { category: pick(row, COLS.category) || null } : {}),
           ...(hasLine ? { product_line: parseLine(pick(row, COLS.line)) } : {}),
@@ -561,9 +573,27 @@ export default function ProductsAdmin() {
     setBusy(false)
   }
 
+  // Activar/desactivar una fila. Al desactivar se apaga también la bandera de
+  // "lo apagó el stock": el admin lo está apagando a mano, así que no tiene que
+  // volver solo cuando entre stock. Al activar puede no quedar activo (stock 0);
+  // en ese caso se relee y se explica, en vez de dejar el botón en rojo sin
+  // motivo aparente.
   const toggleActive = async (p) => {
-    await supabase.from('products').update({ active: !p.active }).eq('id', p.id)
-    await load()
+    const value = !p.active
+    setBulkNotice(null)
+    const { error: err } = await supabase
+      .from('products')
+      .update(value ? { active: true } : { active: false, deactivated_by_stock: false })
+      .eq('id', p.id)
+    if (err) {
+      setError(err.message)
+      return
+    }
+    const fresh = await load()
+    const after = fresh?.find((r) => r.id === p.id)
+    if (value && after && !after.active) {
+      setBulkNotice({ ok: true, message: t('activateBlockedByStock') })
+    }
   }
 
   // ----- Selección + acciones en bloque -----
@@ -608,8 +638,23 @@ export default function ProductsAdmin() {
       ? t('bulkAlreadyThat')
       : t('bulkStockKeeps')
   }
-  const activeBlocked = (value) =>
-    selectedProducts.some((p) => !!p.active !== value) ? null : t('bulkAlreadyThat')
+  const activeBlocked = (value) => {
+    if (value) {
+      if (!selectedProducts.some((p) => !p.active)) return t('bulkAlreadyThat')
+      // "Activar" sobre productos sin stock que YA están marcados para volver no
+      // cambia nada: ni se publican ahora ni cambia lo que va a pasar cuando
+      // entre stock. Si alguno todavía no está marcado, el botón sirve.
+      if (selectedProducts.every((p) => p.active || (stockKeepsOff(p) && p.deactivated_by_stock)))
+        return t('activateBlockedByStock')
+      return null
+    }
+    // "Desactivar" sirve también sobre un producto que YA está inactivo si lo
+    // apagó la regla de stock (2026-08-12): apagarlo a mano cancela ese regreso
+    // automático. Es la única forma de decir "este no vuelve" desde el panel —
+    // el badge de la fila solo ofrece activar mientras esté inactivo.
+    if (selectedProducts.some((p) => p.active || p.deactivated_by_stock)) return null
+    return t('bulkAlreadyThat')
+  }
   const newBlocked = (on) =>
     selectedProducts.some((p) => isNew(p) !== on)
       ? null
@@ -642,14 +687,43 @@ export default function ProductsAdmin() {
     return { ids, fresh }
   }
 
+  // Igual que la disponibilidad, el estado activo tampoco es libre desde
+  // 2026-08-12: un producto con stock 0 no se publica. "Activar" sobre uno así
+  // igual sirve (queda marcado para publicarse cuando entre stock), así que el
+  // botón no se apaga — pero el aviso separa cuántos quedaron visibles de verdad
+  // y cuántos siguen esperando stock. Desactivar apaga la bandera: si el admin
+  // lo apaga a mano, no tiene que volver solo.
   const bulkSetActive = async (value) => {
-    const res = await bulkUpdate({ active: value })
-    if (res) {
+    const res = await bulkUpdate(
+      value ? { active: true } : { active: false, deactivated_by_stock: false },
+    )
+    if (!res) return
+    const label = value ? t('activated') : t('deactivated')
+    if (!res.fresh) {
+      setBulkNotice({ ok: true, message: `${res.ids.length} ${label}` })
+      return
+    }
+    const byId = new Map(res.fresh.map((p) => [p.id, p]))
+    if (value) {
+      const applied = res.ids.filter((id) => byId.get(id)?.active).length
+      const keptOff = res.ids.length - applied
       setBulkNotice({
         ok: true,
-        message: `${res.ids.length} ${value ? t('activated') : t('deactivated')}`,
+        message: `${applied} ${label}${keptOff > 0 ? ` · ${keptOff} ${t('bulkStockKeptOff')}` : ''}`,
       })
+      return
     }
+    // Al desactivar hay dos efectos distintos y conviene no mezclarlos: los que
+    // estaban visibles y ahora no, y los que ya estaban inactivos por stock y lo
+    // único que cambió es que dejaron de tener el regreso automático pendiente.
+    const wasActive = new Set(selectedProducts.filter((p) => p.active).map((p) => p.id))
+    const turnedOff = res.ids.filter((id) => wasActive.has(id) && byId.get(id)?.active === false)
+      .length
+    const cancelled = selectedProducts.filter((p) => !p.active && p.deactivated_by_stock).length
+    const parts = []
+    if (turnedOff > 0 || cancelled === 0) parts.push(`${turnedOff} ${label}`)
+    if (cancelled > 0) parts.push(`${cancelled} ${t('bulkStockReturnCancelled')}`)
+    setBulkNotice({ ok: true, message: parts.join(' · ') })
   }
 
   // Disponible y Pre-Order NO son libres: la base las deriva del stock
@@ -947,15 +1021,25 @@ export default function ProductsAdmin() {
             />
             <span className="mt-1 block text-xs text-primary/50">{t('stockHint')}</span>
           </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={form.active}
-              onChange={(e) => setForm({ ...form, active: e.target.checked })}
-              className="accent-secondary"
-            />
-            {t('active')}
-          </label>
+          <div className="text-sm">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={form.active}
+                onChange={(e) => setForm({ ...form, active: e.target.checked })}
+                className="accent-secondary"
+              />
+              {t('active')}
+            </label>
+            {/* Tildar Activo con stock 0 no publica nada (trigger
+                products_availability_from_stock, 2026-08-12): mejor decirlo acá
+                que dejar al admin guardando dos veces sin entender. */}
+            {form.active && stockKeepsOff({ stock: parseStock(form.stock) }) && (
+              <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                {t('activeBlockedByStockHint')}
+              </p>
+            )}
+          </div>
           {error && <p className="text-sm text-red-600 dark:text-red-400 md:col-span-2">{error}</p>}
           <div className="flex gap-2 md:col-span-2">
             <button
@@ -1193,9 +1277,17 @@ export default function ProductsAdmin() {
                   )}
                 </td>
                 <td className="p-3">
+                  {/* 📦 en el badge = lo apagó el stock, no una persona; vuelve
+                      solo cuando entre stock (2026-08-12). El title lo explica:
+                      si no, el admin lo intenta activar a mano y no pasa nada. */}
                   {isAdmin ? (
                     <button
                       onClick={() => toggleActive(p)}
+                      title={
+                        p.deactivated_by_stock
+                          ? `${t('inactiveByStockTitle')} ${t('inactiveByStockCancelHint')}`
+                          : undefined
+                      }
                       className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
                         p.active
                           ? 'bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900/50 dark:text-green-300 dark:hover:bg-green-900'
@@ -1203,9 +1295,11 @@ export default function ProductsAdmin() {
                       }`}
                     >
                       {p.active ? t('active') : t('inactive')}
+                      {!p.active && p.deactivated_by_stock ? ' 📦' : ''}
                     </button>
                   ) : (
                     <span
+                      title={p.deactivated_by_stock ? t('inactiveByStockTitle') : undefined}
                       className={`rounded-full px-3 py-1 text-xs font-semibold ${
                         p.active
                           ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300'
@@ -1213,6 +1307,7 @@ export default function ProductsAdmin() {
                       }`}
                     >
                       {p.active ? t('active') : t('inactive')}
+                      {!p.active && p.deactivated_by_stock ? ' 📦' : ''}
                     </span>
                   )}
                 </td>

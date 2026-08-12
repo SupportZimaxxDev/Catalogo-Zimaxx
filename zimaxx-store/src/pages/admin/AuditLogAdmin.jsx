@@ -215,7 +215,7 @@ export default function AuditLogAdmin() {
     setExporting(true)
     setExportError('')
     try {
-      const all = await fetchAll('admin_audit_log', '*', 'created_at')
+      const all = await fetchAll('admin_audit_log', '*', ['created_at', 'id'])
       const data = all
         .filter(matchesFilters)
         .sort((a, b) => b.created_at.localeCompare(a.created_at)) // igual que la tabla: lo último arriba

@@ -3,6 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { money, cleanPhone } from '../../utils/format'
+import { searchTerms, matchesTerms } from '../../utils/search'
 import { downloadOrderExcel } from '../../utils/excel'
 import { downloadOrderPdf } from '../../utils/pdf'
 import { SearchIcon, inputCls, useInfiniteRows } from './ui'
@@ -95,7 +96,11 @@ export default function OrdersAdmin() {
   // las páginas en paralelo. Se ordena descendente acá porque `fetchAll`
   // pagina ascendente para que el `range` sea estable.
   const loadOrders = async () => {
-    const all = await fetchAll('orders', ORDER_SELECT, 'created_at')
+    // `['created_at', 'id']` y no solo la fecha: sin una clave única el
+    // paginado en paralelo puede saltearse una fila en el borde de una página
+    // (ver fetchAll) — o sea un pedido que está en la base y no aparece en la
+    // bandeja, que es justo el síntoma que se reportó el 2026-08-12.
+    const all = await fetchAll('orders', ORDER_SELECT, ['created_at', 'id'])
     const list = all.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
     setOrders(list)
     loadLivePricing(list)
@@ -215,7 +220,7 @@ export default function OrdersAdmin() {
     setProductQuery('')
     if (products === null) {
       setProducts([])
-      const all = await fetchAll('products', 'id, sku, name, active', 'name')
+      const all = await fetchAll('products', 'id, sku, name, active', ['name', 'id'])
       setProducts(all.filter((p) => p.active))
     }
   }
@@ -288,15 +293,20 @@ export default function OrdersAdmin() {
   ])
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
+    const q = query.trim()
+    // Por términos y no por subcadena contigua (2026-08-12): buscar
+    // "robert carlos" tiene que encontrar a "Robert Edu Carlos Pacheco".
+    // Ver utils/search.js — que ese cliente no apareciera acá es lo que se
+    // reportó como "sus pedidos no se registraron".
+    const terms = searchTerms(q)
     const qDigits = q.replace(/\D/g, '')
     return orders.filter((o) => {
       if (statusFilter && (o.status ?? 'new') !== statusFilter) return false
       if (typeFilter && (o.kind ?? 'order') !== typeFilter) return false
       if (repFilter && o.clients?.vendedora_id !== repFilter) return false
-      if (!q) return true
+      if (terms.length === 0) return true
       return (
-        (o.clients?.name ?? '').toLowerCase().includes(q) ||
+        matchesTerms(terms, o.clients?.name) ||
         (qDigits && cleanPhone(o.clients?.phone).includes(qDigits))
       )
     })

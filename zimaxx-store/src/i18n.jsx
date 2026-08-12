@@ -133,7 +133,7 @@ const dict = {
     withStock: 'Con stock',
     outOfStock: 'Sin stock',
     stockHint:
-      'Cantidad disponible (dato interno, el cliente no lo ve). Decide la disponibilidad sola: 0 o menos → Pre-Order, 1 o más → Disponible. Vacío = sin dato, no se toca la disponibilidad ni se descuenta al atender un pedido.',
+      'Cantidad disponible (dato interno, el cliente no lo ve). Decide la disponibilidad sola: 0 o menos → Pre-Order y fuera del catálogo (inactivo, vuelve solo cuando entre stock), 1 o más → Disponible. Vacío = sin dato, no se toca la disponibilidad ni se descuenta al atender un pedido.',
     selected: 'seleccionados',
     selectAll: 'Seleccionar todos',
     activate: 'Activar',
@@ -263,7 +263,7 @@ const dict = {
     flashTagReplaceHint:
       'Así el archivo reemplaza la promo entera. Los que se desmarcan vuelven a Disponible, o a Pre-Order si su stock está en 0.',
     flashTagInactiveWarn:
-      '{n} producto(s) del archivo están inactivos: no se ven en el catálogo aunque lleven la etiqueta. Filtrá por 🔥 Flash Sale, seleccionalos y usá "Activar".',
+      '{n} producto(s) del archivo están inactivos: no se ven en el catálogo aunque lleven la etiqueta. Los que están así por tener stock 0 vuelven solos cuando entre stock; al resto, filtrá por 🔥 Flash Sale, seleccionalos y usá "Activar".',
     flashTagged: 'marcados 🔥',
     flashUntagged: 'desmarcados',
     // Acciones en bloque sobre la selección de la tabla
@@ -272,7 +272,7 @@ const dict = {
     markTag: 'Marcar',
     unmarkTag: 'Quitar',
     bulkAvailabilityHint:
-      'Disponible y Pre-Order las decide el stock: en un producto con stock cargado la base las recalcula sola (0 o menos → Pre-Order). Solo 🔥 Flash Sale se respeta siempre. Una acción que no cambiaría nada aparece deshabilitada.',
+      'Disponible y Pre-Order las decide el stock: en un producto con stock cargado la base las recalcula sola (0 o menos → Pre-Order, y además lo deja fuera del catálogo hasta que entre stock). Solo 🔥 Flash Sale se respeta siempre, pero tampoco publica un producto sin stock. Una acción que no cambiaría nada aparece deshabilitada.',
     // Motivos por los que un botón de la barra de selección queda apagado
     bulkAlreadyThat: 'Todos los seleccionados ya están así.',
     bulkNothingToClear: 'Ninguno de los seleccionados tiene esta etiqueta.',
@@ -283,6 +283,18 @@ const dict = {
     bulkNewTagged: 'marcados ✨ Nuevo',
     bulkNewCleared: 'sin la etiqueta ✨ Nuevo',
     activated: 'activados',
+    // ---------- Stock 0 = fuera del catálogo (2026-08-12) ----------
+    bulkStockKeptOff: 'siguen inactivos por stock 0 (vuelven solos cuando entre stock)',
+    activateBlockedByStock:
+      'Sin stock no se publica: el producto queda inactivo y vuelve al catálogo solo cuando entre stock.',
+    activeBlockedByStockHint:
+      'Con stock 0 o menos el producto se guarda inactivo (no sale en el catálogo) y vuelve solo cuando entre stock.',
+    inactiveByStock: 'Inactivos por stock 0',
+    inactiveByStockTitle:
+      'Inactivo porque se quedó sin stock. Vuelve al catálogo solo cuando entre stock, sin tocar nada.',
+    inactiveByStockCancelHint: 'Si no querés que vuelva, seleccionalo y usá "Desactivar".',
+    bulkStockReturnCancelled: 'ya no vuelven solos cuando entre stock',
+    blockedByStockLabel: 'no vuelven (stock 0)',
     newTag: 'Nuevo',
     newUntil: 'Nuevo hasta',
     newUntilHint:
@@ -499,7 +511,7 @@ const dict = {
     withStock: 'In stock',
     outOfStock: 'Out of stock',
     stockHint:
-      'Quantity on hand (internal — never shown to the client). It drives availability on its own: 0 or less → Pre-Order, 1 or more → Available. Empty = unknown, so availability is left alone and nothing is deducted when an order is marked done.',
+      'Quantity on hand (internal — never shown to the client). It drives availability on its own: 0 or less → Pre-Order and out of the catalog (inactive, back on its own once stock arrives), 1 or more → Available. Empty = unknown, so availability is left alone and nothing is deducted when an order is marked done.',
     selected: 'selected',
     selectAll: 'Select all',
     activate: 'Activate',
@@ -627,7 +639,7 @@ const dict = {
     flashTagReplaceHint:
       'That way the file replaces the whole promo. Untagged products go back to Available, or Pre-Order if their stock is 0.',
     flashTagInactiveWarn:
-      '{n} product(s) in the file are inactive: they stay out of the catalog even with the tag. Filter by 🔥 Flash Sale, select them and hit "Activate".',
+      '{n} product(s) in the file are inactive: they stay out of the catalog even with the tag. The ones sitting at stock 0 come back on their own once stock arrives; for the rest, filter by 🔥 Flash Sale, select them and hit "Activate".',
     flashTagged: 'tagged 🔥',
     flashUntagged: 'untagged',
     // Bulk actions on the table selection
@@ -636,7 +648,7 @@ const dict = {
     markTag: 'Mark',
     unmarkTag: 'Remove',
     bulkAvailabilityHint:
-      'Available and Pre-Order are driven by stock: on a product with stock on file the database recalculates them on its own (0 or less → Pre-Order). Only 🔥 Flash Sale always sticks. An action that would change nothing shows up disabled.',
+      'Available and Pre-Order are driven by stock: on a product with stock on file the database recalculates them on its own (0 or less → Pre-Order, and it also drops out of the catalog until stock arrives). Only 🔥 Flash Sale always sticks, but not even that publishes a product with no stock. An action that would change nothing shows up disabled.',
     // Why a button in the selection bar is disabled
     bulkAlreadyThat: 'Every selected product is already like this.',
     bulkNothingToClear: 'None of the selected products has this tag.',
@@ -647,6 +659,18 @@ const dict = {
     bulkNewTagged: 'tagged ✨ New',
     bulkNewCleared: 'cleared of the ✨ New tag',
     activated: 'activated',
+    // ---------- Stock 0 = out of the catalog (2026-08-12) ----------
+    bulkStockKeptOff: 'stay inactive (stock 0 — they come back once stock arrives)',
+    activateBlockedByStock:
+      "No stock, no catalog: the product stays inactive and comes back on its own once stock arrives.",
+    activeBlockedByStockHint:
+      'At stock 0 or less the product is saved as inactive (hidden from the catalog) and comes back on its own once stock arrives.',
+    inactiveByStock: 'Inactive (stock 0)',
+    inactiveByStockTitle:
+      'Inactive because it ran out of stock. It comes back to the catalog on its own once stock arrives — nothing to do.',
+    inactiveByStockCancelHint: 'If you do not want it back, select it and hit "Deactivate".',
+    bulkStockReturnCancelled: 'no longer come back on their own when stock arrives',
+    blockedByStockLabel: "won't return (stock 0)",
     newTag: 'New',
     newUntil: 'New until',
     newUntilHint:

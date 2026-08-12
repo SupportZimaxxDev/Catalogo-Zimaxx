@@ -5,6 +5,7 @@ import { useI18n } from '../../i18n'
 import { parseSheet, pick, normalizeHeader } from '../../utils/excel'
 import { generateToken } from '../../utils/token'
 import { cleanPhone, hasCountryCode } from '../../utils/format'
+import { searchTerms, matchesTerms } from '../../utils/search'
 import { SearchIcon, UploadZone, inputCls, useInfiniteRows } from './ui'
 
 // Alias aceptados en el Excel de clientes (es/en, con o sin acentos).
@@ -222,13 +223,13 @@ export default function ClientsAdmin() {
   const load = async () => {
     try {
       const [cs, pls, vs] = await Promise.all([
-        fetchAll('clients', '*, vendedores(name, phone)', 'name'),
+        fetchAll('clients', '*, vendedores(name, phone)', ['name', 'id']),
         // Las dueñas vienen embebidas (2026-08-04): una lista puede tener
         // varias (compartida), así que ya no alcanza una columna —
         // price_list_owners es la fuente de verdad. RLS ya filtra las listas
         // que esta vendedora no puede usar.
         fetchAll('price_lists', '*, price_list_owners(vendedora_id, is_primary)'),
-        fetchAll('vendedores', '*', 'name'),
+        fetchAll('vendedores', '*', ['name', 'id']),
       ])
       setClients(cs)
       setPriceLists(pls)
@@ -243,16 +244,20 @@ export default function ClientsAdmin() {
   }, [])
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
+    const q = query.trim()
+    // Mismo criterio que la bandeja de Pedidos (2026-08-12, ver
+    // utils/search.js): por términos, no por subcadena contigua. Acá importa
+    // igual — si el cliente no se encuentra en Clientes, tampoco se puede
+    // revisar su lista de precio ni su vendedora para explicar un pedido.
+    const terms = searchTerms(q)
     const qDigits = q.replace(/\D/g, '')
     return clients.filter((c) => {
       if (listFilter && c.price_list_id !== listFilter) return false
       if (repFilter && c.vendedora_id !== repFilter) return false
-      if (!q) return true
+      if (terms.length === 0) return true
       return (
-        c.name.toLowerCase().includes(q) ||
-        (qDigits && cleanPhone(c.phone).includes(qDigits)) ||
-        (c.vendedores?.name ?? '').toLowerCase().includes(q)
+        matchesTerms(terms, c.name, c.vendedores?.name) ||
+        (qDigits && cleanPhone(c.phone).includes(qDigits))
       )
     })
   }, [clients, query, listFilter, repFilter])

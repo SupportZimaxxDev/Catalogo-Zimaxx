@@ -47,7 +47,7 @@ export default function SuperAdminPanel() {
       const [u, l, v] = await Promise.all([
         supabase.rpc('sa_list_users'),
         supabase.rpc('sa_price_list_overview'),
-        fetchAll('vendedores', 'id, name', 'name'),
+        fetchAll('vendedores', 'id, name', ['name', 'id']),
       ])
       if (u.error) throw u.error
       if (l.error) throw l.error

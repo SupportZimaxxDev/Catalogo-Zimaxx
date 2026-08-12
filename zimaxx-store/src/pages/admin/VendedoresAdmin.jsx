@@ -33,7 +33,7 @@ export default function VendedoresAdmin() {
   const load = async () => {
     try {
       const [vs, cs] = await Promise.all([
-        fetchAll('vendedores', '*', 'name'),
+        fetchAll('vendedores', '*', ['name', 'id']),
         fetchAll('clients', 'id, vendedora_id'),
       ])
       setVendedoras(vs)

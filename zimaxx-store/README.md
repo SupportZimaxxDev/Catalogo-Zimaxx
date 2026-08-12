@@ -117,6 +117,29 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
   quedar marcado Disponible. Antes esto se podía romper: un Excel de precios
   sin columna `Type` dejaba en Disponible a todos sus productos, con stock 0
   incluido.
+- **Y además lo saca del catálogo** (2026-08-12,
+  `migration-2026-08-12-hide-out-of-stock.sql`): un producto que queda con
+  `stock <= 0` pasa a Pre-Order **y a inactivo**, así que `get_catalog` deja de
+  devolverlo. Esto revierte a propósito media decisión del 2026-07-14 ("stock 0
+  se muestra como pre-order; ocultarlo es una acción manual aparte"): la
+  **etiqueta** sigue siendo Pre-Order —es el dato con el que la asesora sabe que
+  se puede reservar— lo que cambia es la **publicación**.
+  - **Vuelve solo cuando entra stock**, pero solo el que apagó esta regla. Eso
+    lo distingue la columna nueva `products.deactivated_by_stock`: `true` =
+    "lo apagó el stock" (se reactiva en cuanto `stock >= 1`), `false` = si está
+    inactivo lo apagó una persona (o la exclusión de no-catálogo: SKU
+    `-SPECIAL`, beauty/electronics/support/packing/test) y solo una persona lo
+    vuelve a prender. Sin esa bandera, reactivar por stock resucitaría también
+    lo que se apagó a mano.
+  - Un producto **🔥 Flash Sale con stock 0 también se despublica**: conserva la
+    etiqueta (el stock nunca la pisa), pero una Flash Sale es para mover
+    inventario y sin inventario no hay nada que mover.
+  - **Lo que ya estaba en el carrito se puede pedir igual**:
+    `compute_order_items` busca el producto con `(active or
+    deactivated_by_stock)`, así que la línea de un cliente que mandó el pedido
+    justo después de que el sync bajó el stock no se cae en silencio (es un
+    pre-order: agotado pero reservable). Lo que apagó una persona sigue sin
+    poder pedirse.
 - **`stock`** es dato interno (nunca lo devuelve `get_catalog`). Entra por el
   sync (`InventoryAvailableQTY`), por el Excel de productos (columna
   `Inventory`/`Stock`), a mano desde el formulario de la pestaña Productos
@@ -259,10 +282,10 @@ Pestañas:
 |---|---|
 | **Productos** | Tabla completa con buscador (nombre/SKU/UPC), filtros (categoría/marca, línea de perfume, activo/inactivo/con stock/sin stock/sin foto/pre-order/🔥 flash/✨ nuevo), columnas **UPC** y **Stock** (datos internos, no se muestran al cliente), contadores clickeables de "sin foto", "Pre-Order", "✨ Nuevo" y "🔥 Flash Sale", miniaturas, alta/edición manual **con campo Stock editable** (2026-08-04 — reponer stock a mano es lo que devuelve un producto de Pre-Order a Disponible sin esperar al sync; vacío = "sin dato", distinto de 0), **selección por casillas para acciones en bloque** (solo admin: activar/desactivar, poner o quitar las etiquetas 🔥 Flash Sale / Pre-Order / Disponible, y marcar o quitar ✨ Nuevo — ver abajo), y **tres cargas por Excel**: productos, fotos y **🔥 Flash Sales** (2026-08-07). |
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador, botones con contador "con precios" / "sin precios" y **los mismos filtros por grupo de producto que la pestaña Productos** (2026-08-07: marca, línea, activo/inactivo, con/sin stock, Pre-Order, 🔥 Flash Sale, ✨ Nuevo) para revisar los precios de un recorte concreto. |
-| **Clientes** | Tabla con buscador (nombre/teléfono/vendedora), filtros por lista y vendedora, **selector de lista por fila con confirmación** (2026-07-15: elegir una opción no aplica el cambio de una — pide "¿Cambiar la lista a X?" con Confirmar/Cancelar; ahora lo puede hacer también una vendedora con sus propios clientes, no solo admin) y campo **"$ inversión → nivel"** (solo admin, asigna el nivel automáticamente sin confirmación — pensado para carga rápida), **reasignar vendedora** por fila y **eliminar cliente** (ambos solo admin, vía RPC con registro de auditoría), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
+| **Clientes** | Tabla con buscador (nombre/teléfono/vendedora) **por términos** (2026-08-12, mismo criterio que Pedidos — ver "Buscadores del panel" más abajo), filtros por lista y vendedora, **selector de lista por fila con confirmación** (2026-07-15: elegir una opción no aplica el cambio de una — pide "¿Cambiar la lista a X?" con Confirmar/Cancelar; ahora lo puede hacer también una vendedora con sus propios clientes, no solo admin) y campo **"$ inversión → nivel"** (solo admin, asigna el nivel automáticamente sin confirmación — pensado para carga rápida), **reasignar vendedora** por fila y **eliminar cliente** (ambos solo admin, vía RPC con registro de auditoría), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
 | **🛡️ Registro de movimientos** (solo admin, pestaña propia desde 2026-07-15 — antes vivía colapsada dentro de Clientes) | Historial de quién reasignó/borró un cliente, le cambió la lista de precio, o tocó un pedido (editar ítems, cambiar estado, convertir cotización) — con el **movimiento de stock** de ese cambio de estado cuando hubo uno (2026-08-04: "Stock descontado: N · M sin dato de stock"; el `detail` guarda producto, SKU, cantidad y el antes/después de cada uno). Fecha, usuario, acción, cliente, detalle, leído directo de `admin_audit_log`. Desde 2026-08-05 también registra **todo lo que se hace en la pestaña Superadmin** (rol admin, cambios de contraseña, dueñas de listas, alta/renombre/borrado de listas) — en esas filas la columna "Cliente / objetivo" no es un cliente sino el email del usuario o el nombre de la lista. **Filtros** (2026-07-15): por usuario, por acción y por rango de fechas (desde/hasta). **"⬇️ Descargar Excel"** (2026-08-05): baja **todo** el historial, no los 200 que muestra la tabla (usa `fetchAll`, así pasa el corte de 1,000 filas de PostgREST), respetando los filtros activos — el botón aclara "(todo el historial)" o "(filtrado)". Columnas: Fecha (texto `YYYY-MM-DD HH:MM:SS` local, ordenable en cualquier Excel sin depender de la configuración regional), Usuario, Acción, Cliente / objetivo, Detalle, ID cliente, ID pedido y **Datos completos (JSON)** — el `detail` crudo, porque el resumen legible deja cosas afuera (el antes/después ítem por ítem de una edición de pedido, el stock producto por producto). Con filtros que no dejan ninguna fila no genera archivo vacío: avisa. Es de solo lectura: la tabla no tiene policy de insert/update/delete para nadie, solo la escriben las RPC (`reassign_client`/`delete_client`/`update_client_price_list`/las de pedidos/`sa_log` desde las `sa_*`). |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**, dos formas de dar acceso a una vendedora sin cuenta: **"Vincular acceso"** (email de un usuario que ya existe en Supabase Auth, RPC `link_vendedora_login`) o **"+ Crear acceso"** (2026-07-15: crea el usuario de una — el admin define email + contraseña inicial ahí mismo, sin pasar por el dashboard de Supabase — vía la Edge Function `admin-create-vendedora-user`, ver sección 6). "Desvincular" le quita el acceso sin borrar la vendedora ni el usuario de Auth. |
-| **Pedidos** | **Todos los pedidos, sin tope** (2026-08-07: antes traía los últimos 200, así que el conteo del encabezado decía "200" hubiera 200 o 900 y los pedidos viejos no se podían ni ver ni marcar atendidos). Carga con `fetchAll` (páginas de 1,000 en paralelo) y se renderiza por lotes con scroll infinito; el encabezado muestra el total real y, con filtros puestos, "coinciden / total". Click en una fila expande un detalle de ancho completo (tabla Producto/Cantidad/Precio/Subtotal, 2026-07-17 — antes se abría angosto dentro de la columna Ítems). Cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado; 2026-07-17: las 3 acciones piden confirmación en un modal antes de aplicarse, y quedan auditadas vía RPC `update_order_status`, antes un `update` directo sin rastro) y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"**/**"Descargar Excel"** por fila (2026-07-17 el primero, mismo generador que el carrito del cliente; el Excel con las columnas exactas de `UploadTemplate.xls` para subirlo directo al bulk-order upload de SellerCloud); debajo, separados, **"Editar"** y **"Convertir en pedido"** — ambos **solo para cotizaciones** (`kind = 'quote'`), nunca para un pedido real, y "Editar" además solo mientras la cotización sigue `new` (ni atendida ni cancelada se edita). "Editar" (RPC auditada `update_order_items`) deja cambiar cantidad/quitar/agregar producto — cualquiera con acceso al pedido puede hacerlo (admin siempre, vendedora solo los de sus propios clientes). "Convertir en pedido" (RPC `convert_quote_to_order`) congela el precio de ese momento con la lista real del cliente (a diferencia de la cotización, que sigue mostrando el precio **vigente** vía `get_quotes_live_pricing` — ver sección 6) y deja de ajustarse a cambios de precio futuros. Arriba de la lista, **aviso rojo de los pedidos que el cliente envió y no se registraron** (2026-08-05, `order_failures`): cliente, fecha, motivo y cantidad de líneas, con un botón **"Recuperar"** que lo carga como pedido con los precios vigentes de su lista (RPC `recover_order_failure`, auditada) — antes un pedido rechazado no dejaba rastro en ninguna parte. Aparece también cuando todavía no hay ningún pedido, para que "aún no hay pedidos" no tape justo lo que hay que ver. Una vendedora solo ve (y recupera) los de sus propios clientes. |
+| **Pedidos** | **Todos los pedidos, sin tope** (2026-08-07: antes traía los últimos 200, así que el conteo del encabezado decía "200" hubiera 200 o 900 y los pedidos viejos no se podían ni ver ni marcar atendidos). Carga con `fetchAll` (páginas de 1,000 en paralelo) y se renderiza por lotes con scroll infinito; el encabezado muestra el total real y, con filtros puestos, "coinciden / total". Click en una fila expande un detalle de ancho completo (tabla Producto/Cantidad/Precio/Subtotal, 2026-07-17 — antes se abría angosto dentro de la columna Ítems). Cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado; 2026-07-17: las 3 acciones piden confirmación en un modal antes de aplicarse, y quedan auditadas vía RPC `update_order_status`, antes un `update` directo sin rastro) y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) **por términos** (2026-08-12: todos los términos tienen que aparecer, en cualquier orden y sin acentos — antes pedía una subcadena contigua y buscar "robert carlos" no encontraba a "Robert Edu Carlos Pacheco"; ver "Buscadores del panel" más abajo) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"**/**"Descargar Excel"** por fila (2026-07-17 el primero, mismo generador que el carrito del cliente; el Excel con las columnas exactas de `UploadTemplate.xls` para subirlo directo al bulk-order upload de SellerCloud); debajo, separados, **"Editar"** y **"Convertir en pedido"** — ambos **solo para cotizaciones** (`kind = 'quote'`), nunca para un pedido real, y "Editar" además solo mientras la cotización sigue `new` (ni atendida ni cancelada se edita). "Editar" (RPC auditada `update_order_items`) deja cambiar cantidad/quitar/agregar producto — cualquiera con acceso al pedido puede hacerlo (admin siempre, vendedora solo los de sus propios clientes). "Convertir en pedido" (RPC `convert_quote_to_order`) congela el precio de ese momento con la lista real del cliente (a diferencia de la cotización, que sigue mostrando el precio **vigente** vía `get_quotes_live_pricing` — ver sección 6) y deja de ajustarse a cambios de precio futuros. Arriba de la lista, **aviso rojo de los pedidos que el cliente envió y no se registraron** (2026-08-05, `order_failures`): cliente, fecha, motivo y cantidad de líneas, con un botón **"Recuperar"** que lo carga como pedido con los precios vigentes de su lista (RPC `recover_order_failure`, auditada) — antes un pedido rechazado no dejaba rastro en ninguna parte. Aparece también cuando todavía no hay ningún pedido, para que "aún no hay pedidos" no tape justo lo que hay que ver. Una vendedora solo ve (y recupera) los de sus propios clientes. |
 | **🔐 Superadmin** (2026-08-05, solo superadmin) | Lo que antes obligaba a entrar al SQL Editor o al dashboard de Auth. **Usuarios y accesos**: todos los usuarios de Supabase Auth con su rol (Superadmin/Admin/Vendedora/Sin rol), la vendedora vinculada, fecha de alta y último acceso; por fila, "Hacer admin"/"Quitar admin" (con confirmación) y **"Cambiar contraseña"** (sirve para cualquier acceso: vendedora, admin o el propio superadmin); arriba, **"+ Crear admin"** (crea el usuario de Auth con su contraseña inicial y le da el rol, en un paso). **Listas de precio y dueñas**: por lista, cuántos clientes y cuántos precios tiene, sus dueñas con la principal marcada (★), agregar/quitar dueña y cambiar cuál es la principal; si al mover dueñas quedaron clientes con una vendedora que ya no es dueña, avisa cuántos y ofrece pasarlos a la principal de una vez. También **crear** una lista nueva (código + nombre visible; el código se valida y no se puede cambiar después), **renombrar** el nombre visible y **eliminar** una lista que no sea de las base y esté completamente vacía. Todo va por RPC `sa_*` con `is_superadmin()` adentro (o por la Edge Function `superadmin-users` cuando hace falta la Admin API de Auth) y **todo queda en el Registro de movimientos**. |
 | **📈 Métricas** (2026-08-06, solo superadmin) | Los KPIs de todo el sistema en una pantalla, **en vivo** (se refresca solo cada 60 s, más un botón "↻ Actualizar" y un cartel "actualizado hace X"). Selector de rango **7 / 14 / 30 días** (default 14). Ocho tarjetas: monto capturado, pedidos, ticket promedio, cotizaciones, vendedoras activas, **tiempo promedio a atender** (horas desde que entró el pedido hasta la primera vez que se marcó Atendido; "—" con la aclaración "aún sin pedidos marcados atendidos" cuando todavía no hay ninguno), cotizaciones convertidas y cancelados; debajo, los **fallos de envío** del período y cuántos se recuperaron. Después, un **mini-gráfico de barras del monto por día** (SVG propio, sin librería de charts) y la tabla **"Adopción por vendedora"** (pedidos, monto, ticket y cotizaciones por vendedora, ordenada por monto, con fila de total del período que cuadra con las tarjetas) y su **"⬇️ Descargar Excel"**. Los pedidos sin vendedora salen agrupados en una fila "—". **Las cuentas de prueba (`SystemsPruebas` y compañía) quedan afuera de todos los números** y sus nombres se listan al pie de la tabla, para que la exclusión se vea en vez de ser invisible. Toda la data viene de **una sola RPC** `sa_metrics_overview(p_days)` con `is_superadmin()` adentro: los agregados cruzan a todas las vendedoras, así que sumarlos desde el cliente daría un número distinto según quién mira (la RLS le recorta a cada vendedora sus propios pedidos). Es la única `sa_*` que **no** audita: es de solo lectura, y una fila por refresco llenaría `admin_audit_log` con una por minuto por pestaña abierta. |
 
@@ -334,6 +357,33 @@ volver a prender lo apagado. Arreglado enteramente en `FlashSalesAdmin.jsx`,
 > inventario, no un precio con reloj. Este apartado queda como historia — ese
 > panel ya no existe. Ver el recuadro arriba de esta sección.
 
+### Buscadores del panel: por términos, no por subcadena (2026-08-12)
+
+Los buscadores de **Pedidos** y **Clientes** exigían que lo tipeado apareciera
+como **una subcadena contigua** del nombre (`name.toLowerCase().includes(q)`).
+Eso rompía con los nombres que llegan del sync: SellerCloud guarda el nombre
+completo en `Name` ("Robert Edu Carlos Pacheco") mientras el negocio usa el
+`CorporateName` ("Robert Carlos"), así que buscar al cliente por el nombre con
+el que se lo nombra devolvía **cero resultados** — y una bandeja vacía se lee
+como "sus pedidos no se registraron". Fue un incidente real de soporte.
+
+Ahora se filtra con `src/utils/search.js`: **todos los términos tienen que
+aparecer, en cualquier orden**, sin distinguir mayúsculas ni acentos ("ramon
+nunez" encuentra a "Ramón Núñez").
+
+Dos detalles que conviene no perder si se toca esto:
+
+- **Con una sola palabra el resultado es idéntico al de antes**, así que el
+  cambio no altera ninguna búsqueda que ya funcionaba.
+- Los términos **no se reparten entre campos distintos**: "juan perez" no
+  matchea un cliente llamado "Juan" cuya vendedora es "Perez". En una bandeja
+  de pedidos un falso positivo cuesta lo mismo que un falso negativo.
+
+El buscador del catálogo del cliente (`Catalog.jsx`, nombre/marca/línea) y el
+de Productos (nombre/SKU/UPC) **siguen con el `includes` de siempre**: no
+entraron en este arreglo. Son el mismo patrón, así que si aparece la misma
+queja ahí, la pieza a reutilizar ya está.
+
 ### Descuento de stock al atender un pedido (2026-08-04)
 
 El catálogo arrastra inventario viejo de una de las primeras cargas, así que
@@ -342,7 +392,8 @@ clientes no pidan la misma mercadería, **marcar un pedido como Atendido
 descuenta sus cantidades de `products.stock`** (RPC `update_order_status` →
 helper `apply_order_stock`): stock 20 de Adidas Fresh, un cliente pide 10, la
 asesora lo marca Atendido → queda 10, y si llega a 0 el producto pasa a
-Pre-Order solo (trigger `products_availability_from_stock`).
+Pre-Order solo (trigger `products_availability_from_stock`) y **sale del
+catálogo** (2026-08-12, ver "Productos" en la sección 1).
 
 Reglas, todas confirmadas con el usuario:
 
@@ -352,7 +403,9 @@ Reglas, todas confirmadas con el usuario:
   en pedido"** y marcar ESE pedido Atendido. Si no fuera así, un cliente
   bajando 5 PDF mientras mira el catálogo vaciaría el inventario solo.
 - **Reabrir o cancelar devuelve el stock** y el producto vuelve de Pre-Order a
-  Disponible si corresponde. Marcar Atendido por error se deshace.
+  Disponible si corresponde — y **vuelve al catálogo** si fue esta regla la que
+  lo había apagado (`deactivated_by_stock`). Marcar Atendido por error se
+  deshace por completo.
 - **Nunca descuenta dos veces**: la bandera `orders.stock_applied` (no el
   estado) es la que decide, así que `done → new → done` descuenta una sola vez
   por ciclo. La bandera está blindada por el trigger
@@ -400,6 +453,20 @@ consulta de Supabase. Desde 2026-07-20, `fetchAll` pide todas las páginas
 la carga de tablas grandes como la matriz de Precios ya no espera cada
 página por turno.
 
+**Ojo con el orden al paginar en paralelo** (2026-08-12): cada página es una
+consulta independiente con su propio `range`, y Postgres no garantiza ningún
+orden entre filas que **empatan** en la clave de ordenamiento. Con un empate
+justo en el borde de una página, una fila puede venir en dos páginas o **en
+ninguna** — o sea desaparecer de la tabla del admin estando en la base. No era
+hipotético: `product_prices` se paginaba ordenando solo por `product_id`, que
+tiene una fila por lista de precio, así que había empates en todos los bordes
+de sus ~20 páginas. Por eso `fetchAll` acepta **varias** columnas de orden y
+cada llamada pasa una combinación única: `['created_at', 'id']` en Pedidos y
+Registro, `['name', 'id']` en Productos/Clientes/Vendedoras y
+`['product_id', 'price_list_id']` en Precios. Si se agrega una llamada nueva,
+la regla es esa: la clave de orden tiene que identificar la fila sin empates
+(la tabla no tiene por qué tener `id` — `product_prices` no lo tiene).
+
 ---
 
 ## 3. Formatos de Excel aceptados
@@ -439,7 +506,13 @@ wholesale con membrete:
   disponibilidad**: `>= 1` → Disponible, `0` o negativo → Pre-Order — salvo
   que el producto esté marcado `flash`, que se conserva. Misma regla que el
   sync de SellerCloud (`InventoryAvailableQTY`, ver
-  `migration-2026-07-14-inventory-stock.sql`).
+  `migration-2026-07-14-inventory-stock.sql`). Desde 2026-08-12, `0` o negativo
+  **también lo saca del catálogo** (queda inactivo y vuelve solo cuando entre
+  stock). Ojo con la interacción con la columna **Activo**: si el archivo la
+  trae, es intención explícita del admin y **borra la marca de "lo apagó el
+  stock"** — un `Activo = No` deja el producto apagado incluso si después entra
+  stock; un `Activo = Sí` sobre uno en 0 lo vuelve a marcar para publicarse
+  cuando haya.
 
 Actualiza existentes por SKU y crea los nuevos. **Los campos que el archivo
 no trae no se tocan** (re-subir un export sin fotos no borra las fotos).
@@ -470,7 +543,13 @@ El archivo sube a la RPC `apply_price_list` en dos pasos:
 1. **Preview** (`p_commit: false`): sin escribir nada, muestra cuántos
    productos se van a actualizar, reactivar y **desactivar**, más SKU sin
    producto y precios inválidos (con muestra de los primeros 50 de cada
-   uno).
+   uno). Desde 2026-08-12 hay un contador aparte, **"📦 N no vuelven (stock
+   0)"**: los que traen precio y están inactivos pero **no** se van a ver con
+   esta carga porque su stock está en 0 (quedan marcados para publicarse cuando
+   entre stock). Antes se contaban como "a reactivar" y el preview prometía de
+   más. Del otro lado, lo que la carga **desactiva** por quedar fuera del
+   archivo pierde esa marca: lo saca una persona, así que no vuelve solo con el
+   próximo inventario.
 2. **Confirmar** (`p_commit: true`): recién ahí se aplica.
 
 Es una carga "reemplaza todo" por lista: un producto que **hoy tiene
@@ -561,9 +640,30 @@ apaga cuando ningún seleccionado cambiaría. Por eso hay dos motivos distintos:
 - *"No cambiaría nada: la disponibilidad la manda su stock"* — Pre-Order sobre
   productos con stock ≥ 1, o Disponible sobre productos con stock 0. No es que
   "ya estén así": es que el trigger los va a devolver a donde estaban.
+- *"Sin stock no se publica"* (2026-08-12) — Activar sobre productos con stock
+  0 que ya están marcados para volver cuando entre stock. Pedirlo de nuevo no
+  cambia ni lo que se ve ahora ni lo que va a pasar después.
 
 Con selección **mixta** los botones siguen habilitados: la acción se aplica al
 subconjunto que sí cambia, y el aviso posterior dice cuántos fueron.
+
+**Activar/Desactivar con la regla de stock 0** (2026-08-12):
+
+- **Activar** sobre un producto sin stock no lo publica, pero **no es un
+  no-op**: queda marcado (`deactivated_by_stock`) y se publica solo en cuanto
+  entre stock. El aviso separa las dos cosas — "3 activados · 5 siguen
+  inactivos por stock 0 (vuelven solos cuando entre stock)" — en vez de contar
+  como aplicados los que siguen escondidos. Desde el badge de una fila el aviso
+  es el mismo, para que nadie lo intente dos veces creyendo que falló.
+- **Desactivar** apaga además la bandera: si una persona lo apaga, no tiene que
+  volver solo. Por eso el botón sigue **habilitado sobre un producto ya
+  inactivo por stock**: es la única forma de decir "este no vuelve" (el badge de
+  la fila solo ofrece activar mientras esté inactivo), y el aviso lo dice así —
+  "2 ya no vuelven solos cuando entre stock".
+- El filtro de estado tiene **"📦 Inactivos por stock 0"**, separado de
+  "Inactivos": los primeros se arreglan solos con el próximo sync, los segundos
+  son los únicos que hay que revisar a mano. En la tabla, el badge de estado
+  lleva 📦 cuando el producto está en ese caso.
 
 ### Clientes (pestaña Clientes)
 
@@ -997,6 +1097,43 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 
 ## 7. Roadmap / pendientes
 
+> **✅ MIGRACIONES: NO QUEDA NINGUNA PENDIENTE (2026-08-12).** Todas las de
+> `supabase/` están corridas y probadas en producción, confirmado por el usuario
+> ese día. El sondeo con la anon key (sin escribir nada, ver "Auditoría del
+> estado real (2026-08-12)" en `ZIMAXX-STORE-INFO.md`) encontró que **6 de las 8
+> migraciones que este doc listaba como pendientes ya estaban corridas**, dejó
+> una sola pendiente confirmada (`migration-2026-08-12-hide-out-of-stock.sql`) y
+> 3 sin determinar (las que solo cambian el cuerpo de una función o un CHECK, que
+> no dejan huella visible desde la API); el usuario corrió la primera y confirmó
+> las otras tres el mismo día. La única que **nunca se corrió y ya no hace falta**
+> es `migration-2026-07-15-restrict-vendedora-luzmar.sql`, reemplazada por
+> `migration-2026-08-04-shared-price-lists.sql`.
+> Lo que sigue abajo en esta sección son **pendientes de producto** (SellerCloud,
+> n8n, mejoras), no de base de datos. Si algún ítem dice "pendiente: correr…",
+> es histórico — verificar contra producción antes de creerlo.
+
+- **✅ `migration-2026-08-12-hide-out-of-stock.sql` corrida** en
+  producción (2026-08-12, confirmado por el usuario). Es la que hace que un producto con `stock <= 0` quede en Pre-Order
+  **y fuera del catálogo** (ver "Productos" en la sección 1). Agrega
+  `products.deactivated_by_stock`, reescribe el trigger
+  `products_availability_from_stock`, apaga en el mismo paso los que hoy están
+  publicados con stock 0 (con la bandera puesta, así vuelven solos cuando entre
+  stock) y actualiza `apply_price_list` (contador `blocked_by_stock` + la
+  desactivación por quedar fuera del archivo borra la bandera) y
+  `compute_order_items` (`or deactivated_by_stock`, para no perder la línea de un
+  carrito ya armado). Había que correrla **junto con el deploy, no después**: sin
+  la columna el frontend nuevo funciona igual pero el filtro "📦 Inactivos por
+  stock 0" no encuentra nada, el badge 📦 nunca aparece y los `update` que la
+  mencionan fallan. El número que reportó el `raise notice` del paso 3 (cuántos
+  productos se apagaron) no quedó anotado; si se necesita, sale de
+  `select count(*) from products where deactivated_by_stock;`.
+  Probada de verdad antes de entregarla: cluster PostgreSQL 18 desechable
+  partiendo del `schema.sql` de producción, 10 bloques de assert (ciclo de stock,
+  apagado a mano que no revive, 🔥 sin stock, `stock` null, `get_catalog` en los
+  dos sentidos, línea de carrito que sobrevive, contadores y bandera de
+  `apply_price_list`, pedido atendido/reabierto, backfill), corridos también
+  re-aplicando la migración, con el `schema.sql` completo encima y en una
+  instalación desde cero.
 - **Integración SellerCloud** (analizada, no implementada): al crear una
   orden → Supabase Edge Function la crea en SellerCloud (`POST
   /rest/api/Orders/`, canal Wholesale) y la marca On Hold (`PUT
@@ -1072,11 +1209,13 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   `authenticated`, ciclo completo de dueñas incluida la promoción de la
   principal y la reasignación de clientes colgados, validación del código de
   lista, guardas del borrado, y auditoría de cada acción).
-- **Pendiente: correr `migration-2026-08-06-require-price.sql`** — un producto
+- **✅ `migration-2026-08-06-require-price.sql` corrida** (confirmado por el
+  usuario el 2026-08-12; el sondeo con la anon key no podía verla porque solo
+  reemplaza cuerpos de funciones) — un producto
   sin precio deja de salir en el catálogo. Ver "Un producto sin precio no sale en
   el catálogo" en la sección 1.
-  - **Correr el SQL ANTES de desplegar el frontend** (o al revés, da igual: no
-    hay dependencia entre los dos). El efecto del catálogo es inmediato al correr
+  - No tenía orden obligatorio respecto del frontend (no hay dependencia entre
+    los dos). El efecto del catálogo es inmediato al correr
     el SQL, porque `get_catalog` es server-side; el frontend de esta tanda solo
     cambia los contadores de la pestaña Precios para que cuenten un 0 como "sin
     precio" y digan lo mismo que el catálogo.
@@ -1097,7 +1236,7 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
     mapeando a `availability = flash`. También en instalación desde cero con
     `schema.sql` solo, re-corriendo la migración, y con el `schema.sql` completo
     encima.
-- **Pendiente: correr `migration-2026-08-06-sa-metrics.sql`** — habilita la
+- **HECHO: `migration-2026-08-06-sa-metrics.sql` está corrida** (verificado el 2026-08-12: `sa_metrics_overview` devuelve `42501 permission denied`, o sea que existe y anon no tiene `execute`). Antes decía "pendiente" — habilita la
   pestaña 📈 Métricas (RPC `sa_metrics_overview` + los dos helpers de cuentas de
   prueba + los índices `orders_created_idx` y
   `admin_audit_log_order_status_idx`). Ver la sección 6.
@@ -1123,14 +1262,18 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
     superadmin recibe el `jsonb`, **admin común y vendedora reciben
     `not authorized`**, `anon` no tiene ni `execute`, y los dos helpers no
     tienen `execute` ni para el superadmin.
-- **Pendiente y urgente: correr `migration-2026-08-05-order-capture.sql`** en
+- **HECHO: `migration-2026-08-05-order-capture.sql` está corrida** en
   producción — es el arreglo del pedido de ~10k que se envió por WhatsApp y no
   quedó registrado (ver "Si el pedido no llega a registrarse" en la sección 1).
   Sube el tope de líneas de `create_order` de 200 a 1000, crea `order_failures`
   (+ RLS + `grant select`), agrega `orders.request_id` con índice único
   parcial, suma `request_id` al trigger `orders_guard_items_edit` y crea
-  `recover_order_failure`. **Hasta que corra, el bug sigue vivo**: cualquier
-  pedido de más de 200 líneas distintas se pierde en silencio.
+  `recover_order_failure`.
+  - **Verificado el 2026-08-12** sondeando PostgREST con la anon key (sin
+    escribir nada): la tabla `order_failures` responde y
+    `recover_order_failure(p_failure_id)` existe. Este ítem decía "pendiente y
+    urgente — hasta que corra el bug sigue vivo" **por error**: no asumir que el
+    tope de 200 líneas sigue vivo ni que un rechazo no deja rastro.
   - **Correr el SQL ANTES de desplegar el frontend.** El frontend nuevo manda
     `p_request_id`, que la función vieja no acepta. Igual no se cae si el orden
     se invierte: `CartDrawer.jsx` detecta ese error y reintenta sin el
@@ -1150,45 +1293,49 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
     `authenticated` (admin ve todo, vendedora solo lo suyo, `anon` nada, y
     ninguno puede escribirla). También se midió el costo del loop para elegir
     el tope: 48 ms con 200 líneas, 651 ms con 1000, 2.4 s con 2000.
-- **Pendiente: deploy de la Edge Function
-  `supabase/functions/admin-create-vendedora-user`** (2026-07-15, ver
-  sección 6) — sin desplegarla, el botón "+ Crear acceso" de la pestaña
-  Vendedoras falla (la función no existe todavía en el proyecto de
-  Supabase). El resto del código (frontend + "Vincular acceso" con un
-  usuario ya existente) ya funciona sin esto.
-- **Pendiente: correr `migration-2026-07-15-order-status-cancelled.sql`**
-  en producción (recrea el CHECK de `orders.status` para aceptar
-  `'cancelled'` además de `'new'/'done'`). Sin esto, marcar un pedido
-  como cancelado desde `/admin/orders` falla contra la base — el
-  frontend ya está desplegable.
-- **Pendiente: correr `migration-2026-07-15-vendedora-update-price-list.sql`**
-  en producción (crea la RPC `update_client_price_list`). Sin esto, el
-  selector de lista con confirmación de la pestaña Clientes falla para
-  todos (admin incluido — ya no usa el `update` directo). Esta migración
-  requiere que `migration-2026-07-14-client-admin-actions.sql` ya haya
-  corrido antes (crea `admin_audit_log`, donde esta función también
-  audita).
-- **Pendiente: correr `migration-2026-07-17-apply-price-list.sql`** en
-  producción (crea la RPC `apply_price_list`). Sin esto, subir un Excel de
-  precios desde `/admin/prices` falla contra la base — el frontend ya
-  quedó desplegable con el flujo nuevo (una lista por archivo + preview/
-  confirmar). Reemplaza el `.upsert()` directo a `product_prices` que
+- **✅ Edge Function `supabase/functions/admin-create-vendedora-user`
+  desplegada** (2026-07-15, verificado el 2026-08-12: `POST
+  /functions/v1/admin-create-vendedora-user` devuelve `403`, o sea que existe y
+  rechaza por falta de JWT; una función no desplegada daría `404`. Ver
+  sección 6). Es la que respalda el botón "+ Crear acceso" de la pestaña
+  Vendedoras. "Vincular acceso" (usuario ya existente) no depende de ella.
+- **✅ `migration-2026-07-15-order-status-cancelled.sql` corrida**
+  en producción (confirmado por el usuario el 2026-08-12; el sondeo con la anon
+  key no podía verla porque solo recrea un CHECK). Recrea el CHECK de
+  `orders.status` para aceptar `'cancelled'` además de `'new'/'done'`; hasta que
+  corrió, marcar un pedido como cancelado desde `/admin/orders` fallaba contra
+  la base.
+- **✅ `migration-2026-07-15-vendedora-update-price-list.sql` corrida**
+  en producción (confirmado por el usuario el 2026-08-12; no se sondeó porque la
+  RPC escribe). Crea la RPC `update_client_price_list`. Hasta que corrió, el
+  selector de lista con confirmación de la pestaña Clientes fallaba para
+  todos (admin incluido — ya no usa el `update` directo). Requería
+  `migration-2026-07-14-client-admin-actions.sql` antes (crea
+  `admin_audit_log`, donde esta función también audita), que ya estaba.
+- **✅ `migration-2026-07-17-apply-price-list.sql` corrida** en
+  producción (confirmado por el usuario el 2026-08-12; lo respalda además el
+  preflight de `migration-2026-08-06-require-price.sql`, que corta si falta
+  `apply_price_list` y sin embargo corrió). Crea la RPC `apply_price_list`, sin
+  la cual subir un Excel de precios desde `/admin/prices` falla contra la base.
+  Reemplaza el `.upsert()` directo a `product_prices` que
   reventaba con "ON CONFLICT DO UPDATE command cannot affect row a second
   time" si el Excel traía un SKU repetido (pasó con el archivo real de US
   Minimum Order, SKU `ZX_PE-MA-U-599175` duplicado) — la dedup por SKU
   ahora la hace la RPC del lado del servidor.
-- **Pendiente: correr `migration-2026-07-17-orders-edit-live-quotes.sql`**
-  en producción (crea `admin_audit_log.order_id`, el trigger
+- **✅ `migration-2026-07-17-orders-edit-live-quotes.sql` corrida**
+  en producción (verificado el 2026-08-12: `get_quotes_live_pricing` responde con
+  su propio `P0001 no autorizado`, o sea que existe). Crea
+  `admin_audit_log.order_id`, el trigger
   `orders_guard_items_edit` (blinda `items`/`total`/`status`/`kind`), el
   helper `compute_order_items` y las RPC
   `update_order_items`/`update_order_status`/`convert_quote_to_order`/
-  `get_quotes_live_pricing` — ver sección 6). Sin esto: editar una
-  cotización falla, "Convertir en pedido" falla, marcar atendido/
-  cancelar/reabrir falla (ya no es un `update` directo), y las
-  cotizaciones se ven sin precio en vez de mostrar el precio vigente. El
-  frontend (OrdersAdmin, CartDrawer, AuditLogAdmin) ya está desplegable.
-- **Pendiente: correr `migration-2026-08-04-order-stock.sql`** en producción
-  (agrega `orders.stock_applied`, el trigger
+  `get_quotes_live_pricing` — ver sección 6). Hasta que corrió: editar una
+  cotización fallaba, "Convertir en pedido" fallaba, marcar atendido/
+  cancelar/reabrir fallaba (ya no es un `update` directo), y las
+  cotizaciones se veían sin precio en vez de mostrar el precio vigente.
+- **✅ `migration-2026-08-04-order-stock.sql` corrida** en producción
+  (verificado el 2026-08-12: `orders.stock_applied` existe). Agrega esa columna,
+  el trigger
   `products_availability_from_stock`, el helper `apply_order_stock`, y
   reescribe `update_order_status`/`convert_quote_to_order` para mover el
   stock — ver "Descuento de stock al atender un pedido" en la sección 2).
@@ -1198,9 +1345,7 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   existe**: `migration-2026-07-14-inventory-stock.sql` está corrida y el sync
   de n8n mantiene el inventario al día (confirmado por el usuario el
   2026-08-04 — este README y el `ZIMAXX-STORE-INFO.md` la listaban como
-  pendiente por error). O sea que el descuento tiene de dónde restar desde el
-  momento en que se corra esta migración. Sin ella, el panel de Pedidos sigue
-  funcionando pero no descuenta nada; el frontend ya está desplegable.
+  pendiente por error). O sea que el descuento tiene de dónde restar.
 - `migration-2026-07-15-fix-duplicate-client-phones.sql` corrida en
   producción (2026-07-16): limpió 315 clientes duplicados que había
   creado el sync por el bug de formato de teléfono, corrigió

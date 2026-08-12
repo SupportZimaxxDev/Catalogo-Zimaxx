@@ -16,8 +16,20 @@ export const supabase = createClient(url ?? 'http://localhost', anonKey ?? 'anon
 // del admin: esta función pagina hasta traer todo. Las páginas se piden
 // todas en paralelo (no una tras otra) — se pide el total primero para
 // saber cuántas hacen falta.
+//
+// `orderBy` acepta varias columnas (2026-08-12) y esto NO es cosmético: cada
+// página es una consulta INDEPENDIENTE con su propio `range`, y Postgres no
+// garantiza ningún orden entre filas que empatan en la clave de ordenamiento.
+// Con empates en el borde de una página, la misma fila puede salir en dos
+// páginas — o en NINGUNA, o sea desaparecer de la tabla del admin estando en
+// la base. No era hipotético: `product_prices` se paginaba ordenando solo por
+// `product_id`, que tiene una fila por lista de precio, así que había empates
+// en todos los bordes de las ~20 páginas. Hay que pasar siempre una
+// combinación única (la tabla no tiene por qué tener `id`: `product_prices`
+// se identifica por producto + lista).
 export async function fetchAll(table, columns = '*', orderBy = 'id') {
   const PAGE = 1000
+  const orderCols = Array.isArray(orderBy) ? orderBy : [orderBy]
   const { count, error: countError } = await supabase
     .from(table)
     .select(columns, { count: 'exact', head: true })
@@ -27,13 +39,11 @@ export async function fetchAll(table, columns = '*', orderBy = 'id') {
 
   const pageCount = Math.ceil(total / PAGE)
   const pages = await Promise.all(
-    Array.from({ length: pageCount }, (_, i) =>
-      supabase
-        .from(table)
-        .select(columns)
-        .order(orderBy)
-        .range(i * PAGE, i * PAGE + PAGE - 1),
-    ),
+    Array.from({ length: pageCount }, (_, i) => {
+      let q = supabase.from(table).select(columns)
+      for (const col of orderCols) q = q.order(col)
+      return q.range(i * PAGE, i * PAGE + PAGE - 1)
+    }),
   )
 
   const all = []

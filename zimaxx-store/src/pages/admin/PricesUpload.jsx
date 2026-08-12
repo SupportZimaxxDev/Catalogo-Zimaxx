@@ -87,10 +87,10 @@ export default function PricesUpload() {
         // (marca, línea, disponibilidad, ✨ nuevo, activo, stock).
         fetchAll(
           'products',
-          'id, sku, upc, name, category, product_line, availability, new_until, active, stock',
+          'id, sku, upc, name, category, product_line, availability, new_until, active, stock, deactivated_by_stock',
           'name',
         ),
-        fetchAll('product_prices', 'product_id, price_list_id, price', 'product_id'),
+        fetchAll('product_prices', 'product_id, price_list_id, price', ['product_id', 'price_list_id']),
       ])
       // 'quote' nunca usa product_prices (get_catalog la ignora por
       // completo): no tiene sentido subirle ni mostrarle precios acá.
@@ -245,7 +245,9 @@ export default function PricesUpload() {
       if (error) throw error
       setResult({
         ok: true,
-        message: `${data.to_upsert} ${t('updated')} · ${data.to_reactivate} ${t('reactivated')} · ${data.to_deactivate} ${t('deactivated')}`,
+        message: `${data.to_upsert} ${t('updated')} · ${data.to_reactivate} ${t('reactivated')} · ${data.to_deactivate} ${t('deactivated')}${
+          data.blocked_by_stock > 0 ? ` · 📦 ${data.blocked_by_stock} ${t('blockedByStockLabel')}` : ''
+        }`,
       })
       setPreview(null)
       await load()
@@ -305,6 +307,18 @@ export default function PricesUpload() {
                   <span className="rounded-full bg-secondary/15 px-3 py-1 text-secondary-dark">
                     {preview.data.to_reactivate} {t('toReactivateLabel')}
                   </span>
+                  {/* 2026-08-12: los que traen precio y están inactivos pero NO
+                      vuelven al catálogo con esta carga porque su stock está en
+                      0 — el trigger los deja marcados para publicarse cuando
+                      entre stock. Sin este chip, "a reactivar" prometía de más. */}
+                  {preview.data.blocked_by_stock > 0 && (
+                    <span
+                      className="rounded-full bg-amber-100 px-3 py-1 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300"
+                      title={t('inactiveByStockTitle')}
+                    >
+                      📦 {preview.data.blocked_by_stock} {t('blockedByStockLabel')}
+                    </span>
+                  )}
                   <span className="rounded-full bg-red-100 px-3 py-1 text-red-700 dark:bg-red-900/50 dark:text-red-300">
                     {preview.data.to_deactivate} {t('toDeactivateLabel')}
                   </span>
