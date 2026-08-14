@@ -8,6 +8,16 @@ export async function downloadOrderPdf({ t, clientName, items, total }) {
   const doc = new jsPDF()
   const pageW = doc.internal.pageSize.getWidth()
   const marginX = 14
+  // Columna UPC (2026-08-14, a pedido del usuario): el cliente y la vendedora
+  // piden por código, no solo por nombre. Va entre Producto y Cantidad, con el
+  // nombre recortado a 78mm para dejarle lugar (antes usaba 105mm). Un ítem sin
+  // UPC —producto sin cargar, o pedido guardado antes de este cambio— deja la
+  // celda vacía; la columna se dibuja igual para que la tabla no baile de
+  // ancho entre un PDF y otro. 26mm entran los 13 dígitos de un EAN-13 a
+  // cuerpo 10 sin llegar a tocar el encabezado "Cantidad" (empieza en 125mm).
+  const nameW = 78
+  const upcX = marginX + nameW + 4
+  const upcW = 26
   let y = 20
 
   doc.setFont('helvetica', 'bold')
@@ -31,6 +41,7 @@ export async function downloadOrderPdf({ t, clientName, items, total }) {
   y += 10
   doc.setFont('helvetica', 'bold')
   doc.text(t('product'), marginX, y)
+  doc.text(t('upc'), upcX, y)
   doc.text(t('quantity'), pageW - 70, y, { align: 'right' })
   if (hasPrices) {
     doc.text(t('unitPrice'), pageW - 45, y, { align: 'right' })
@@ -50,10 +61,25 @@ export async function downloadOrderPdf({ t, clientName, items, total }) {
     }
   }
 
+  // El nombre se recorta si no entra (ya era así), pero el UPC NUNCA: un código
+  // cortado a la mitad se lee como un código válido y manda a pedir otra cosa.
+  // Si un código raro no entra en la columna, baja de cuerpo hasta que entra.
+  const drawUpc = (upc) => {
+    const code = String(upc)
+    let size = 10
+    while (size > 7 && doc.getTextWidth(code) > upcW) {
+      size -= 0.5
+      doc.setFontSize(size)
+    }
+    doc.text(code, upcX, y)
+    doc.setFontSize(10)
+  }
+
   const drawRow = (i) => {
     y += 7
     ensureSpace()
-    doc.text(doc.splitTextToSize(i.name, 105)[0] ?? '', marginX, y)
+    doc.text(doc.splitTextToSize(i.name, nameW)[0] ?? '', marginX, y)
+    if (i.upc) drawUpc(i.upc)
     doc.text(String(i.qty), pageW - 70, y, { align: 'right' })
     if (i.price != null) {
       doc.text(money(i.price), pageW - 45, y, { align: 'right' })

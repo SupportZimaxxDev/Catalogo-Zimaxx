@@ -94,6 +94,12 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
 
 - El **SKU es 100% interno** (es el ProductID de SellerCloud): nunca viaja
   al navegador del cliente ni aparece en WhatsApp/PDF.
+- **El UPC sí viaja al cliente desde 2026-08-14**
+  (`migration-2026-08-14-catalog-upc.sql`, a pedido del usuario): `get_catalog`
+  lo devuelve y se ve en la tarjeta del catálogo, en el carrito y como columna
+  propia del PDF. Es el código con el que muchos clientes piden. No confundir
+  con el SKU, que sigue siendo interno. Un producto sin UPC cargado
+  simplemente no lo muestra: no se dibuja línea vacía ni placeholder.
 - **Disponibilidad**: `available`, `preorder` o `flash` (2026-07-08). Los
   pre-order se muestran con badge dorado "Pre-Order" en el catálogo y se
   pueden pedir igual; el estado viaja en el mensaje de WhatsApp. Los
@@ -161,9 +167,12 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
 
 ### Catálogo del cliente: búsqueda y cantidades
 
-- El buscador de `Catalog.jsx` matchea **nombre, categoría (marca) o
-  línea** (buscar "adidas" trae todo lo de esa marca, "arabes" trae todo
-  lo de `Perfume - Arabes`). Además de los chips de marca hay un chip de
+- El buscador de `Catalog.jsx` matchea **nombre, categoría (marca), línea o
+  UPC** (buscar "adidas" trae todo lo de esa marca, "arabes" trae todo
+  lo de `Perfume - Arabes`, y pegar un código de barras —entero o un pedazo—
+  trae ese producto; el UPC entró en la búsqueda el 2026-08-14, junto con
+  mostrarlo en la tarjeta: si se ve pero no se puede buscar, no sirve de
+  nada). Además de los chips de marca hay un chip de
   **línea** (2026-07-08: `Perfume` / `Perfume - Arabes` / lo que traiga
   `product_line`, solo si hay 2+ valores distintos) y otro de
   **disponibilidad** (Disponible / Pre-Order / 🔥 Flash Sale) — cada chip
@@ -201,7 +210,11 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
    cotización con el PDF (2026-08-04), **pero solo si el pedido quedó
    realmente registrado** (2026-08-05, ver más abajo): en lugar de la lista de
    ítems queda un acuse ("Pedido registrado" / "Cotización generada") con un
-   botón "Armar otro pedido". Además **no queda nada guardado en el
+   botón "Armar otro pedido". El acuse **dice solo eso** desde 2026-08-14 (a
+   pedido del usuario): antes debajo iba una línea explicando que se había
+   vaciado el carrito "para que no se envíe dos veces por error" — el
+   comportamiento no cambió, solo se dejó de anunciar (se fue la clave
+   `cartCleared` de `i18n.jsx`). Además **no queda nada guardado en el
    dispositivo**: `CartContext` borra la clave de `localStorage` cuando el
    carrito queda vacío, en vez de dejar un `[]` guardado — importante porque el
    link del catálogo se comparte por WhatsApp y se abre en teléfonos que a
@@ -517,9 +530,10 @@ Acepta tanto un Excel simple como el export de SellerCloud o la lista
 wholesale con membrete:
 
 - **SKU** (`sku`, `codigo`, `ProductID`) — opcional; si falta se autogenera.
-- **UPC** (`upc`, `barcode`, `ean`, 2026-07-14) — código de barras, dato
-  interno del admin (no se muestra al cliente). Se guarda y es visible en la
-  tabla de Productos; también se puede buscar por él.
+- **UPC** (`upc`, `barcode`, `ean`, 2026-07-14) — código de barras. Se guarda y
+  es visible/buscable en la tabla de Productos. **Desde 2026-08-14 también se
+  muestra al cliente** (tarjeta del catálogo, carrito y columna propia del PDF)
+  y se puede buscar por él en el catálogo — antes era dato interno del admin.
 - **Nombre** (`nombre`, `name`, `ProductName`, `Title Product`) — obligatorio.
 - **Categoría/marca** (`categoria`, `category`, `Brand`, `marca`).
 - **Línea de perfume** (`PRODUCT_CATEGORY`, `línea`, `segmento`, 2026-07-08):
@@ -852,7 +866,9 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 - Catálogo público solo vía RPC `SECURITY DEFINER`:
   - `get_catalog(p_token)` — resuelve el cliente por token; devuelve solo
     los precios de su lista. Token inválido → `null` sin explicación.
-    **No expone el SKU.** Excepción: la lista `quote` devuelve todos los
+    **No expone el SKU ni el stock**; el **UPC sí** desde 2026-08-14
+    (`migration-2026-08-14-catalog-upc.sql`, decisión del usuario: es el código
+    con el que el cliente pide). Excepción: la lista `quote` devuelve todos los
     productos activos con precio `null` (catálogo de cotización, ver
     sección 1).
   - `get_flash_sales()` — **legado, sin llamadores desde 2026-08-07**: el
@@ -1177,8 +1193,19 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 
 ## 7. Roadmap / pendientes
 
-> **⚠️ MIGRACIONES: HAY UNA PENDIENTE (2026-08-13) —
-> `migration-2026-08-13-exclude-box-skus.sql`**, la de los SKU `-BOX` fuera del
+> **⚠️ MIGRACIONES PENDIENTES AL 2026-08-14 — CUATRO.** Las tres del 2026-08-13
+> (`exclude-box-skus`, `recover-as-quote`, `dismiss-order-failures`: el detalle
+> de las dos últimas está en el encabezado de `ZIMAXX-STORE-INFO.md`) más
+> **`migration-2026-08-14-catalog-upc.sql`**, la que hace que el UPC viaje al
+> catálogo del cliente y quede guardado en los ítems del pedido (`get_catalog` +
+> `compute_order_items`, ver "Productos" en la sección 1). Las cuatro son
+> independientes entre sí y van en cualquier orden. La del UPC **no bloquea el
+> deploy del frontend**: sin ella el catálogo simplemente no muestra ningún UPC
+> (llega `undefined`, igual que un producto sin código cargado) y el PDF sale con
+> la columna vacía; nada rompe.
+>
+> Detalle de la primera:
+> `migration-2026-08-13-exclude-box-skus.sql`, la de los SKU `-BOX` fuera del
 > catálogo (ver "Los SKU `-BOX` y `-SPECIAL` no se publican nunca" en la sección
 > 3). **Correrla junto con el deploy**: el panel nuevo ya marca y bloquea los
 > `-BOX`, pero sin la migración nada los desactiva en la base, la carga de precios
@@ -1204,6 +1231,19 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 > n8n, mejoras), no de base de datos. Si algún ítem dice "pendiente: correr…",
 > es histórico — verificar contra producción antes de creerlo.
 
+- **⏳ `migration-2026-08-14-catalog-upc.sql` PENDIENTE** (2026-08-14). El UPC deja
+  de ser dato interno: `get_catalog` lo devuelve (las dos ramas, con precios y
+  `quote`) y `compute_order_items` lo guarda en cada ítem del pedido/cotización,
+  para que el PDF que descarga la vendedora desde Pedidos también lo tenga —
+  esos ítems los arma el servidor, no el carrito. Sin cambios de esquema ni de
+  permisos: mismas firmas, mismos grants, y los dos cuerpos son copia de la
+  versión viva con una sola clave nueva en el jsonb. Los pedidos ya guardados no
+  se tocan (siguen sin la clave: su PDF sale sin UPC). Probada contra un cluster
+  PostgreSQL 18 desechable: el UPC en las dos ramas del catálogo, la clave en
+  los ítems con `kind` `order` y `quote`, token inválido → `null`, el producto
+  apagado a mano que se sigue descartando y el agotado que se sigue pudiendo
+  pedir; re-aplicada (idempotente) y con el preflight fallando a propósito sin
+  `products.upc`.
 - **⏳ `migration-2026-08-13-exclude-box-skus.sql` PENDIENTE** (2026-08-13). Es la
   que deja fuera del catálogo, para siempre, a los SKU terminados en `-BOX` (el
   mismo perfume vendido por caja) y `-SPECIAL`. Crea `is_noncatalog_sku(sku)` (el
@@ -1269,9 +1309,10 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   **disponibilidad** en cada corrida del sync: `>= 1` → Disponible, `0`/
   negativo → Pre-Order, respetando `flash`. El estado **activo** ya no lo
   toca el sync (es manual). `migration-2026-07-14-product-upc.sql`
-  (2026-07-14) agrega `products.upc` (código de barras, dato interno del
-  admin) y hace que `sync_upsert_products` lo guarde (campo `upc` del
-  payload). **El workflow de n8n está armado y corriendo en producción**
+  (2026-07-14) agrega `products.upc` (código de barras; nació como dato interno
+  del admin y desde 2026-08-14 también se le muestra al cliente, ver
+  `migration-2026-08-14-catalog-upc.sql`) y hace que `sync_upsert_products` lo
+  guarde (campo `upc` del payload). **El workflow de n8n está armado y corriendo en producción**
   (confirmado por el usuario el 2026-08-04: mantiene el stock de los
   productos actualizado constantemente, además del resync completo de
   clientes dos veces al día). Se había detectado antes por evidencia
@@ -1486,7 +1527,7 @@ src/
     excel.js            Parser Excel (detección de encabezados, columna de fotos) + exports: pedido (UploadTemplate.xls), productos sin foto, registro de movimientos
     token.js            Tokens de cliente + SKU autogenerado
     whatsapp.js         Mensaje de pedido + link wa.me
-    pdf.js              PDF del pedido (jsPDF)
+    pdf.js              PDF del pedido/cotización (jsPDF; columnas Producto · UPC · Cantidad · Precio unit. · Subtotal)
     format.js           money / cleanPhone
   components/           Header, FilterBar, ProductCard, CartBar,
                         CartDrawer, ProductImage, ThemeToggle

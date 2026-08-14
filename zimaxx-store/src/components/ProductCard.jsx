@@ -60,7 +60,15 @@ function ProductCard({ product }) {
             {product.category}
           </p>
         )}
-        <h3 className="flex-1 text-sm font-medium leading-snug text-primary">{product.name}</h3>
+        <h3 className="text-sm font-medium leading-snug text-primary">{product.name}</h3>
+        {/* UPC visible para el cliente desde 2026-08-14 (a pedido del usuario):
+            varios piden por código y no por nombre. Va en mono y chico para que
+            se lea dígito a dígito sin robarle peso al nombre; `flex-1` se movió
+            acá para que el bloque nombre+UPC sea el que estira la tarjeta y las
+            de una fila queden todas con los botones a la misma altura. */}
+        <p className="flex-1 font-mono text-[10px] leading-tight tracking-wide text-primary/45">
+          {product.upc && `UPC ${product.upc}`}
+        </p>
         {product.price != null && (
           <p className="font-brand text-xl font-semibold text-primary">
             {money(product.price)}

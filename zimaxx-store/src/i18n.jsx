@@ -4,7 +4,10 @@ import { createContext, useContext, useMemo, useState } from 'react'
 const dict = {
   es: {
     // Header / general
-    search: 'Buscar por nombre o categoría...',
+    // 2026-08-14: se nombra el UPC porque desde hoy el catálogo lo muestra y lo
+    // busca; si no, el cliente lee el código en la tarjeta y no se le ocurre
+    // que puede pegarlo acá.
+    search: 'Buscar por nombre, categoría o UPC...',
     allCategories: 'Todas',
     inStock: 'Disponible',
     catalog: 'Catálogo',
@@ -45,6 +48,9 @@ const dict = {
     orderTitle: 'Pedido Zimaxx Store',
     client: 'Cliente',
     product: 'Producto',
+    // Encabezado de la columna UPC del PDF (2026-08-14). Es la misma sigla en
+    // los dos idiomas; existe como clave para no dejar texto suelto en pdf.js.
+    upc: 'UPC',
     unitPrice: 'Precio unit.',
     orderSent: 'Pedido registrado. Se abrió WhatsApp para enviarlo.',
     // 2026-08-05: cuando el registro falla, el pedido se queda en el carrito y
@@ -68,7 +74,6 @@ const dict = {
     quoteSent: 'Cotización generada. Se descargó el PDF y quedó registrada para tu asesora.',
     quoteSaveWarn:
       'Se descargó el PDF, pero no pudimos registrar la cotización en el sistema. Enviásela a tu asesora por WhatsApp para que quede constancia.',
-    cartCleared: 'Vaciamos el carrito de este dispositivo para que no se envíe dos veces por error.',
     startNewOrder: 'Armar otro pedido',
 
     // Admin
@@ -405,7 +410,7 @@ const dict = {
       'Precio en 0: cuenta como sin precio, así que el producto NO sale en el catálogo. Volvé a cargarlo con el precio real.',
   },
   en: {
-    search: 'Search by name or category...',
+    search: 'Search by name, category or UPC...',
     allCategories: 'All',
     inStock: 'In stock',
     catalog: 'Catalog',
@@ -442,6 +447,7 @@ const dict = {
     orderTitle: 'Zimaxx Store Order',
     client: 'Client',
     product: 'Product',
+    upc: 'UPC',
     unitPrice: 'Unit price',
     orderSent: 'Order saved. WhatsApp was opened to send it.',
     saveFailedTitle: 'Your order was not saved',
@@ -462,7 +468,6 @@ const dict = {
     quoteSent: 'Quote created. The PDF was downloaded and your sales rep received a copy.',
     quoteSaveWarn:
       'The PDF was downloaded, but we could not save the quote in the system. Send it to your sales rep over WhatsApp so it is on record.',
-    cartCleared: 'We emptied the cart on this device so nothing gets sent twice by mistake.',
     startNewOrder: 'Start another order',
 
     adminTitle: 'Admin panel',

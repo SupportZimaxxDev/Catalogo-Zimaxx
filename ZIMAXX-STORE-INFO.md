@@ -2,8 +2,17 @@
 
 > Documento de referencia para retomar el trabajo en cualquier sesión.
 >
-> **⚠️ ESTADO DE MIGRACIONES (2026-08-13): hay TRES pendientes** — correrlas
-> **junto con el deploy**, en cualquier orden (son independientes entre sí):
+> **⚠️ ESTADO DE MIGRACIONES (2026-08-14): hay CUATRO pendientes** — correrlas
+> **junto con el deploy**, en cualquier orden (son independientes entre sí).
+> La cuarta es la del 2026-08-14 y es la única que **no** bloquea el deploy:
+> - `migration-2026-08-14-catalog-upc.sql` (punto 61): el UPC del producto viaja
+>   al catálogo del cliente (`get_catalog`) y queda guardado en los ítems del
+>   pedido (`compute_order_items`, para el PDF que baja la vendedora desde
+>   Pedidos). Se puede desplegar el frontend antes: sin la migración llega
+>   `undefined` y no se dibuja ningún UPC, igual que un producto sin código
+>   cargado. Sin cambios de esquema ni de permisos.
+>
+> Las tres del 2026-08-13, estas sí junto con el deploy:
 > - `migration-2026-08-13-exclude-box-skus.sql` (los SKU `-BOX` fuera del
 >   catálogo, punto 57): el panel nuevo ya marca y bloquea los `-BOX`, pero sin
 >   la migración nada los desactiva en la base y la carga de precios los sigue
@@ -34,7 +43,17 @@
 > estado real (2026-08-12)" — la lista de pendientes de este doc ya se equivocó
 > en las dos direcciones antes.
 >
-> Creado: 2026-07-02. Última actualización: 2026-08-13 (**dos cambios en el
+> Creado: 2026-07-02. Última actualización: 2026-08-14 (**el UPC del producto
+> deja de ser dato interno**: se ve en la tarjeta del catálogo del cliente y en
+> el carrito, se puede buscar por él, y sale como columna propia del PDF de
+> cotización —también en el que descarga la vendedora desde Pedidos, para lo
+> cual el ítem del pedido guarda su propia copia del código. Punto 61,
+> `migration-2026-08-14-catalog-upc.sql` **pendiente de correr**, pero no
+> bloquea el deploy del frontend. Segunda tanda del mismo día, sin migración:
+> el **acuse del carrito deja de explicar que se vació el carrito** — queda
+> solo "Cotización generada…" / "Pedido registrado…" y el botón; el
+> comportamiento no cambió, se fue el anuncio).
+> Antes: 2026-08-13 (**dos cambios en el
 > banner rojo de "Pedidos que no se registraron"**, puntos 59 y 60: "Recuperar"
 > ya no crea un pedido real de una — siempre entra como cotización, para que
 > la vendedora confirme con el cliente antes de convertirla; y las filas sin
@@ -1377,6 +1396,25 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   (`recovered_order_id is null and dismissed_at is null`) queda con solo lo
   que de verdad sigue pendiente.
 
+- [ ] **El UPC llega al cliente y al PDF** (2026-08-14, punto 61):
+  `migration-2026-08-14-catalog-upc.sql` **pendiente de correr**, pero **no
+  bloquea el deploy del frontend** y se puede correr antes o después, sola o con
+  las otras tres. Sin ella el catálogo funciona igual y simplemente no muestra
+  ningún UPC (llega `undefined`, que se dibuja igual que un producto sin código
+  cargado) y el PDF sale con la columna vacía. Toca dos funciones, las dos con
+  una sola clave nueva en el jsonb: `get_catalog` (las dos ramas, con precios y
+  `quote`) y `compute_order_items` (para que el PDF que descarga la vendedora
+  desde Pedidos también lo tenga: esos ítems los arma el servidor, no el
+  carrito). Sin cambios de esquema ni de permisos. Los pedidos ya guardados no
+  se tocan: siguen sin la clave y su PDF sale sin UPC.
+  **Verificado contra un PostgreSQL 18 desechable** (esquema mínimo, sin tocar
+  producción): el UPC viaja en las dos ramas del catálogo y llega `null` —no
+  vacío ni ausente— en el producto sin código; token inválido sigue devolviendo
+  `null`; los ítems traen `upc` con `kind` `order` y `quote`; el producto
+  apagado a mano se sigue descartando y el agotado (`deactivated_by_stock`) se
+  sigue pudiendo pedir. Re-aplicada (idempotente) y con el preflight cortando a
+  propósito en una base sin `products.upc`.
+
 ---
 
 
@@ -2573,3 +2611,10 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 56. **"Las órdenes del cliente Robert Carlos Pacheco no se registraron"** (2026-08-12, incidente crítico de soporte) — **no era captura, era búsqueda.** El buscador de la bandeja de Pedidos filtraba con `name.toLowerCase().includes(q)`, o sea una **subcadena contigua**: el sync guarda el `Name` completo de SellerCloud ("Robert Edu Carlos Pacheco") y el negocio lo conoce por su `CorporateName`, que en el export real es literalmente "Robert Carlos" — así que buscarlo por el nombre con el que se lo nombra daba **cero resultados**, y una bandeja vacía se lee como "no se registró nada". Arreglado con `src/utils/search.js` (todos los términos, en cualquier orden, sin acentos), aplicado a **Pedidos** y **Clientes**; con una sola palabra se comporta igual que antes (11 consultas verificadas contra nombres reales del export, 0 diferencias), y los términos **no se reparten entre campos distintos** para no fabricar falsos positivos. En la misma revisión apareció el mismo síntoma por otra puerta: **`fetchAll` paginaba en paralelo ordenando por una clave con empates** (`product_prices` por `product_id`, que tiene una fila por lista de precio), y una fila que empata en el borde de una página puede salir en dos páginas o en **ninguna** — ahora acepta varias columnas de orden y cada call site pasa una combinación única. **Sin migración** (todo frontend). De paso quedó verificado contra producción que `migration-2026-08-05-order-capture.sql` **sí está corrida** (los docs la listaban como "pendiente y URGENTE" por error), y de paso que **6 de las 8 migraciones listadas como pendientes ya estaban aplicadas** — la única pendiente confirmada era `migration-2026-08-12-hide-out-of-stock.sql`, que el usuario corrió ese mismo día, junto con la confirmación de las tres que el sondeo no podía determinar: **al 2026-08-12 no queda ninguna migración pendiente**. Detalle completo, el truco para sondear qué hay vivo en PostgREST sin escribir nada, y qué queda por confirmar del lado de los datos, en la narrativa del principio.
 
 57. **Los SKU terminados en `-BOX` nunca se publican** (2026-08-13, a pedido del usuario: "los productos que terminen con sku -BOX automaticamente deben desactivarse, nunca se deben mostrar en el sistema") — `migration-2026-08-13-exclude-box-skus.sql`, **pendiente de correr, junto con el deploy**. Un `-BOX` es el mismo perfume que ya está en el catálogo pero vendido **por caja** (`ZX_PE-AB-M-636268-ZX-BOX` y `ZX_PE-AB-M-636268-ZX` son los dos "Blue Seduction 3.4 Oz Edt Men"); en el export real hay **77**, y como su `PRODUCT_CATEGORY` es `Perfume`/`Perfume - Arabes`, la exclusión de no-catálogo del 2026-07-13 (que mira `-SPECIAL` + categorías) **no los tapaba** y el sync los jalaba como productos normales. Se resolvió en tres capas: (1) el sufijo del SKU pasa a la función propia `is_noncatalog_sku(sku)` = `-SPECIAL` + `-BOX`, que `sync_is_noncatalog_product` ahora llama (el sync y el Excel de productos dejan de jalarlos sin reescribir `sync_upsert_products`); (2) **trigger `products_enforce_noncatalog`** que los deja `active = false` escriba quien escriba — no es redundante: `apply_price_list` escribe `active = true` para todo lo que trae precio y los Excel de precios salen del mismo export, o sea que un `-BOX` se republicaba solo cada semana; (3) backfill de los ya cargados, nunca DELETE. **El trigger mira solo el sufijo del SKU, no la regla completa**: el sufijo es estructural y la salida (si alguna vez hay que vender uno) es editarle el SKU desde el panel, mientras que `product_line` es texto libre de un export y **no** es editable en el panel — clavarla en un trigger dejaría un perfume mal categorizado imposible de activar. `deactivated_by_stock` queda en **false** (esa bandera significa "vuelve cuando entre stock", y a un `-BOX` lo apaga su SKU). Trampa de permisos verificada: `is_noncatalog_sku` **no** lleva `revoke execute from public` y sí un `grant execute` explícito a `authenticated, anon, service_role` — el EXECUTE de lo que se llama dentro de un trigger se chequea contra el rol que hace el UPDATE (`authenticated`), así que sin ese permiso se cae cualquier edición de producto. En el panel: contador/filtro/badge **🚫 No-catálogo (-BOX/-SPECIAL)**, "Activar" que avisa en vez de mandar un PATCH que la base revierte, y en Precios el contador `blocked_noncatalog` (chip "🚫 N no se publican"). Efecto avisado y no automatizado: si un pedido sin atender tiene una línea `-BOX`, `compute_order_items` la descarta al recalcular — el backfill **reporta cuántos pedidos así hay** con un `raise notice`, para revisarlos con la asesora. Detalle completo y la verificación (7 bloques de assert en PostgreSQL 18 desde el estado real de producción + 18 aserciones en navegador real, incluida la carga del `119389.xlsx`) en la narrativa del principio.
+
+61. **El UPC del producto se le muestra al cliente y sale en el PDF** (2026-08-14, a pedido del usuario: "agrega tanto a la vista del cliente como al pdf de cotizacion el upc de los productos") — `migration-2026-08-14-catalog-upc.sql`, **pendiente de correr**, pero es la única de las cuatro pendientes que **no bloquea el deploy**: sin ella el catálogo anda igual y simplemente no muestra ningún UPC. `products.upc` existía desde el 2026-07-14 pero era **dato interno del panel**; ahora `get_catalog` lo devuelve (las dos ramas, con precios y `quote`) y se ve en la **tarjeta del catálogo** (mono, chico, debajo del nombre), en el **carrito** y como **columna propia del PDF** entre Producto y Cantidad. Tres decisiones que vale la pena recordar: (1) **`compute_order_items` también lo guarda en cada ítem** — sin eso, el PDF que descarga la vendedora desde Pedidos salía con la columna vacía, porque esos ítems los arma el servidor y no vienen del carrito; se guarda una copia (igual que `sku` y `name`) en vez de resolverlo al vuelo, porque el ítem de un pedido es un recibo de lo que se pidió ese día. (2) **El buscador del catálogo pasa a matchear por UPC** (y el placeholder lo dice): mostrar un código que después no se puede buscar no sirve de nada. (3) **En el PDF el nombre se recorta y el UPC nunca** — el nombre bajó de 105mm a 78mm para hacerle lugar a la columna, y si un código raro no entra, `drawUpc` le baja el cuerpo hasta 7pt en vez de cortarlo: un UPC cortado a la mitad se lee como un código válido y manda a pedir otra cosa. El SKU sigue siendo 100% interno. Verificado: migración contra un PostgreSQL 18 desechable (catálogo en las dos ramas, `upc` en los ítems con `kind` `order` y `quote`, token inválido → `null`, producto apagado que se sigue descartando, agotado que se sigue pudiendo pedir, re-aplicación idempotente y preflight que corta sin `products.upc`); PDF generado de verdad con jsPDF y medido operador por operador (la columna UPC arranca en 96mm y el código más largo probado termina en 123.6mm, contra los 125mm donde empieza "Cantidad"); y catálogo + carrito en Chromium real con `get_catalog` interceptado (8 aserciones: UPC en la tarjeta, producto sin UPC que no dibuja nada, búsqueda por código entero y por un pedazo, UPC en el carrito).
+
+    **Segunda tanda del mismo día, a pedido del usuario** ("el anuncio del final cuando se genera una cotizacion... quitalo, solo con que diga que se envio la cotizacion y ya es suficiente"): el acuse del carrito (el ✓ que reemplaza a la lista de ítems una vez que el pedido/cotización quedó registrado) **deja de explicar que se vació el carrito**. Se fue la línea "Vaciamos el carrito de este dispositivo para que no se envíe dos veces por error" y con ella la clave `cartCleared` de los dos idiomas; queda el título ("Cotización generada…" / "Pedido registrado…") y el botón "Armar otro pedido". **El comportamiento no cambió**: el carrito se sigue vaciando solo cuando el pedido quedó realmente guardado, y `CartContext` sigue borrando la clave de `localStorage` — lo único que se fue es el anuncio. Nota: la línea era una sola para los dos casos, así que también deja de aparecer en el acuse de un **pedido** por WhatsApp. Sin migración. Verificado en Chromium real generando una cotización de verdad (4 aserciones: se llamó a `create_order` una vez, el acuse dice que la cotización se generó, la línea del carrito vaciado ya no aparece, y el botón sigue estando).
+
+    Los puntos 58, 59 y 60 (carrito que podía quedar congelado, "Recuperar" que ahora crea una cotización, y descartar fallos sin cliente/ítems) quedaron descritos solo en la narrativa del principio de este documento.
+

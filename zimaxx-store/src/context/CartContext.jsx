@@ -48,6 +48,12 @@ function makeItem(product, price, qty, flash) {
   return {
     id: product.id,
     name: product.name,
+    // 2026-08-14: el UPC viaja con el ítem para poder imprimirlo en el PDF de
+    // cotización sin volver a pedir el producto. Puede ser null (producto sin
+    // UPC cargado) o undefined (carrito guardado por una versión anterior, o
+    // catálogo servido por un get_catalog todavía sin la clave): las dos cosas
+    // se dibujan igual, sin línea de UPC.
+    upc: product.upc ?? null,
     price,
     qty,
     flash,

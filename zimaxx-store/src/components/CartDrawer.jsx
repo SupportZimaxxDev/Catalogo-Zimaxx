@@ -208,10 +208,13 @@ export default function CartDrawer({ token, client }) {
               <span className="flex h-14 w-14 items-center justify-center rounded-full bg-gold-pale text-2xl font-bold text-secondary-dark">
                 ✓
               </span>
+              {/* Solo el acuse: alcanza con decir que salió (2026-08-14, a
+                  pedido del usuario). Antes debajo iba una línea explicando que
+                  se había vaciado el carrito "para que no se envíe dos veces";
+                  el carrito se sigue vaciando igual, no hace falta contarlo. */}
               <p className="font-brand text-base font-semibold">
                 {sent === 'quote' ? t('quoteSent') : t('orderSent')}
               </p>
-              <p className="text-xs leading-relaxed text-primary/50">{t('cartCleared')}</p>
               <button
                 onClick={close}
                 className="mt-2 rounded-xl border-2 border-primary px-5 py-2 text-sm font-semibold transition-colors hover:bg-ink hover:text-secondary"
@@ -273,6 +276,15 @@ export default function CartDrawer({ token, client }) {
                         {i.flash && <span className="mr-1 text-secondary-dark">⚡</span>}
                         {i.name}
                       </p>
+                      {/* Mismo UPC que muestra la tarjeta del catálogo
+                          (2026-08-14): el carrito es lo último que el cliente
+                          revisa antes de mandar el pedido. Un carrito guardado
+                          antes de este cambio no lo trae y no pasa nada. */}
+                      {i.upc && (
+                        <p className="truncate font-mono text-[10px] tracking-wide text-primary/40">
+                          UPC {i.upc}
+                        </p>
+                      )}
                       <p className="text-xs text-primary/50">
                         {i.price != null && <>{money(i.price)} c/u</>}
                         {i.preorder && (

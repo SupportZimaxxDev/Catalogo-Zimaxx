@@ -95,7 +95,10 @@ export default function Catalog() {
         (!q ||
           p.name.toLowerCase().includes(q) ||
           (p.category ?? '').toLowerCase().includes(q) ||
-          (p.product_line ?? '').toLowerCase().includes(q)),
+          (p.product_line ?? '').toLowerCase().includes(q) ||
+          // 2026-08-14: desde que el UPC se ve en la tarjeta, tiene que poder
+          // buscarse — si no, el cliente lo lee en el catálogo y no lo puede usar.
+          (p.upc ?? '').toLowerCase().includes(q)),
     )
   }, [products, search, category, line, availability, onlyNew])
 
