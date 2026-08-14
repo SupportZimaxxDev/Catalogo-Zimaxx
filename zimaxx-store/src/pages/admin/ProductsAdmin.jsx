@@ -8,6 +8,7 @@ import {
   UploadZone,
   ProductFilters,
   isNewProduct as isNew,
+  isNonCatalogSku,
   productMatchesFilters,
   inputCls,
   useInfiniteRows,
@@ -98,10 +99,11 @@ const JUNK_PATTERN = /skustack|support-cost-test|support-s-\d+|client credit dis
 // vía (2026-07-13, a pedido del usuario). Misma regla que el lado SQL en
 // migration-2026-07-13-exclude-noncatalog.sql (sync_is_noncatalog_product);
 // si se cambia una lista, cambiar también la otra.
-//   * SKU terminado en -SPECIAL (variante interna de SellerCloud).
+//   * SKU terminado en -SPECIAL (variante interna de SellerCloud) o en -BOX
+//     (el mismo perfume vendido por caja, 2026-08-13) → isNonCatalogSku, en
+//     ui.jsx porque también lo usan la tabla y los filtros.
 //   * PRODUCT_CATEGORY (COLS.line → product_line) igual a una de estas.
 //     Se compara normalizado (minúsculas, sin espacios de más).
-const SPECIAL_SKU_PATTERN = /-special$/i
 const EXCLUDED_LINES = new Set([
   'test',
   'electronics',
@@ -111,7 +113,7 @@ const EXCLUDED_LINES = new Set([
 ])
 const normLine = (v) => String(v ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
 const isNonCatalog = (skuRaw, lineRaw) =>
-  SPECIAL_SKU_PATTERN.test(String(skuRaw ?? '').trim()) || EXCLUDED_LINES.has(normLine(lineRaw))
+  isNonCatalogSku(skuRaw) || EXCLUDED_LINES.has(normLine(lineRaw))
 
 // Links a paneles administrativos de inventario (ej. SellerCloud) que
 // vimos colados en exports como si fueran la foto del producto. Nunca
@@ -315,8 +317,8 @@ export default function ProductsAdmin() {
           junk++
           continue
         }
-        // No-catálogo: SKU -SPECIAL o categoría excluida (beauty, electronics,
-        // support, packing and shipping supplies, test). No se jala.
+        // No-catálogo: SKU -SPECIAL/-BOX o categoría excluida (beauty,
+        // electronics, support, packing and shipping supplies, test). No se jala.
         if (isNonCatalog(skuRaw, pick(row, COLS.line))) {
           excluded++
           continue
@@ -581,6 +583,13 @@ export default function ProductsAdmin() {
   const toggleActive = async (p) => {
     const value = !p.active
     setBulkNotice(null)
+    // Un SKU -BOX/-SPECIAL no se publica nunca (trigger
+    // products_enforce_noncatalog): pedir "Activar" sobre él no es un update que
+    // falla, es uno que la base revierte. Mejor decirlo que mandarlo.
+    if (value && isNonCatalogSku(p.sku)) {
+      setBulkNotice({ ok: true, message: t('activateBlockedNonCatalog') })
+      return
+    }
     const { error: err } = await supabase
       .from('products')
       .update(value ? { active: true } : { active: false, deactivated_by_stock: false })
@@ -640,13 +649,26 @@ export default function ProductsAdmin() {
   }
   const activeBlocked = (value) => {
     if (value) {
-      if (!selectedProducts.some((p) => !p.active)) return t('bulkAlreadyThat')
-      // "Activar" sobre productos sin stock que YA están marcados para volver no
-      // cambia nada: ni se publican ahora ni cambia lo que va a pasar cuando
-      // entre stock. Si alguno todavía no está marcado, el botón sirve.
-      if (selectedProducts.every((p) => p.active || (stockKeepsOff(p) && p.deactivated_by_stock)))
-        return t('activateBlockedByStock')
-      return null
+      const pending = selectedProducts.filter((p) => !p.active)
+      if (pending.length === 0) return t('bulkAlreadyThat')
+      // Dos motivos por los que un inactivo no se va a publicar igual:
+      //   * -BOX/-SPECIAL: no se publican nunca (2026-08-13).
+      //   * sin stock y YA marcados para volver: activarlos no cambia nada, ni
+      //     ahora ni cuando entre stock (2026-08-12). Si alguno todavía no está
+      //     marcado, el botón sí sirve.
+      // Si todos los inactivos caen en alguno de los dos, el botón se apaga con
+      // los motivos que apliquen — mezclados los dos, se dicen los dos.
+      const noCatalog = pending.filter((p) => isNonCatalogSku(p.sku))
+      const stockHeld = pending.filter(
+        (p) => !isNonCatalogSku(p.sku) && stockKeepsOff(p) && p.deactivated_by_stock,
+      )
+      if (noCatalog.length + stockHeld.length < pending.length) return null
+      return [
+        noCatalog.length ? t('activateBlockedNonCatalog') : '',
+        stockHeld.length ? t('activateBlockedByStock') : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
     }
     // "Desactivar" sirve también sobre un producto que YA está inactivo si lo
     // apagó la regla de stock (2026-08-12): apagarlo a mano cancela ese regreso
@@ -705,11 +727,22 @@ export default function ProductsAdmin() {
     }
     const byId = new Map(res.fresh.map((p) => [p.id, p]))
     if (value) {
-      const applied = res.ids.filter((id) => byId.get(id)?.active).length
-      const keptOff = res.ids.length - applied
+      // Los que no quedaron activos tienen dos motivos distintos y no da lo mismo
+      // cuál: sin stock vuelven solos cuando entre mercadería, los -BOX/-SPECIAL
+      // no vuelven nunca.
+      const notApplied = res.ids.filter((id) => !byId.get(id)?.active)
+      const applied = res.ids.length - notApplied.length
+      const nonCatalog = notApplied.filter((id) => isNonCatalogSku(byId.get(id)?.sku)).length
+      const keptOff = notApplied.length - nonCatalog
       setBulkNotice({
         ok: true,
-        message: `${applied} ${label}${keptOff > 0 ? ` · ${keptOff} ${t('bulkStockKeptOff')}` : ''}`,
+        message: [
+          `${applied} ${label}`,
+          keptOff > 0 ? `${keptOff} ${t('bulkStockKeptOff')}` : '',
+          nonCatalog > 0 ? `🚫 ${nonCatalog} ${t('bulkNonCatalogKeptOff')}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · '),
       })
       return
     }
@@ -764,6 +797,7 @@ export default function ProductsAdmin() {
   const preorderCount = products.filter((p) => p.availability === 'preorder').length
   const flashCount = products.filter((p) => p.availability === 'flash').length
   const newCount = products.filter(isNew).length
+  const nonCatalogCount = products.filter((p) => isNonCatalogSku(p.sku)).length
 
   return (
     <div className="space-y-4">
@@ -826,6 +860,22 @@ export default function ProductsAdmin() {
               title={t('newTag')}
             >
               ✨ {newCount} {t('newTag')}
+            </button>
+          )}
+          {/* 2026-08-13: los -BOX/-SPECIAL están inactivos para siempre. El
+              contador es para poder mirarlos (son ~190) sin que se mezclen con
+              los inactivos que sí hay que revisar. */}
+          {nonCatalogCount > 0 && (
+            <button
+              onClick={() => setStatusFilter(statusFilter === 'noncatalog' ? '' : 'noncatalog')}
+              className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                statusFilter === 'noncatalog'
+                  ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                  : 'bg-primary/10 text-primary/60 hover:bg-primary/20'
+              }`}
+              title={t('nonCatalogSkuTitle')}
+            >
+              🚫 {nonCatalogCount} {t('nonCatalogSku')}
             </button>
           )}
           {flashCount > 0 && (
@@ -1033,12 +1083,21 @@ export default function ProductsAdmin() {
             </label>
             {/* Tildar Activo con stock 0 no publica nada (trigger
                 products_availability_from_stock, 2026-08-12): mejor decirlo acá
-                que dejar al admin guardando dos veces sin entender. */}
-            {form.active && stockKeepsOff({ stock: parseStock(form.stock) }) && (
+                que dejar al admin guardando dos veces sin entender. Lo mismo con
+                un SKU -BOX/-SPECIAL (trigger products_enforce_noncatalog,
+                2026-08-13), que además no vuelve nunca. */}
+            {form.active && isNonCatalogSku(form.sku) && (
               <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-                {t('activeBlockedByStockHint')}
+                {t('activeBlockedNonCatalogHint')}
               </p>
             )}
+            {form.active &&
+              !isNonCatalogSku(form.sku) &&
+              stockKeepsOff({ stock: parseStock(form.stock) }) && (
+                <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                  {t('activeBlockedByStockHint')}
+                </p>
+              )}
           </div>
           {error && <p className="text-sm text-red-600 dark:text-red-400 md:col-span-2">{error}</p>}
           <div className="flex gap-2 md:col-span-2">
@@ -1254,6 +1313,16 @@ export default function ProductsAdmin() {
                       ✨ {t('newTag')}
                     </span>
                   )}
+                  {/* 2026-08-13: si no se dice acá, un -BOX se lee como un
+                      producto normal que alguien apagó por error. */}
+                  {isNonCatalogSku(p.sku) && (
+                    <span
+                      className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary/60"
+                      title={t('nonCatalogSkuTitle')}
+                    >
+                      🚫 {t('nonCatalogSku')}
+                    </span>
+                  )}
                 </td>
                 <td className="p-3 text-primary/60">
                   {p.category}
@@ -1284,9 +1353,11 @@ export default function ProductsAdmin() {
                     <button
                       onClick={() => toggleActive(p)}
                       title={
-                        p.deactivated_by_stock
-                          ? `${t('inactiveByStockTitle')} ${t('inactiveByStockCancelHint')}`
-                          : undefined
+                        isNonCatalogSku(p.sku)
+                          ? t('nonCatalogSkuTitle')
+                          : p.deactivated_by_stock
+                            ? `${t('inactiveByStockTitle')} ${t('inactiveByStockCancelHint')}`
+                            : undefined
                       }
                       className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
                         p.active
@@ -1299,7 +1370,13 @@ export default function ProductsAdmin() {
                     </button>
                   ) : (
                     <span
-                      title={p.deactivated_by_stock ? t('inactiveByStockTitle') : undefined}
+                      title={
+                        isNonCatalogSku(p.sku)
+                          ? t('nonCatalogSkuTitle')
+                          : p.deactivated_by_stock
+                            ? t('inactiveByStockTitle')
+                            : undefined
+                      }
                       className={`rounded-full px-3 py-1 text-xs font-semibold ${
                         p.active
                           ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300'

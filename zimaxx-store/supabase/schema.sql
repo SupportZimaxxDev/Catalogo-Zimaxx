@@ -291,6 +291,69 @@ create trigger products_availability_from_stock
   before insert or update on public.products
   for each row execute function public.products_availability_from_stock();
 
+-- Variantes internas de SellerCloud que no se publican nunca (2026-08-13,
+-- migration-2026-08-13-exclude-box-skus.sql). Dos sufijos de SKU:
+--
+--   -SPECIAL → variante interna (2026-07-13, migration-2026-07-13-exclude-noncatalog.sql)
+--   -BOX     → el mismo perfume vendido por caja (2026-08-13). Ojo: su
+--              PRODUCT_CATEGORY es Perfume/Perfume - Arabes, así que la mitad
+--              "por categoría" de sync_is_noncatalog_product no los tapaba.
+--
+-- No lleva `revoke execute from public` (a diferencia de las funciones del sync):
+-- se llama dentro de un trigger, y el privilegio EXECUTE de lo que se invoca en el
+-- cuerpo de un trigger se chequea contra el usuario que hace el UPDATE (el rol
+-- `authenticated` del panel). Si se queda sin EXECUTE, **cualquier** edición de
+-- producto se cae con "permission denied for function is_noncatalog_sku". No
+-- expone nada: es un regex sobre el texto que le pasan.
+create or replace function public.is_noncatalog_sku(p_sku text)
+returns boolean
+language sql
+immutable
+as $$
+  select coalesce(trim(p_sku) ~* '-(special|box)$', false);
+$$;
+
+-- Explícito, no por el default de PUBLIC: si el proyecto alguna vez endurece los
+-- privilegios por defecto, el trigger tiene que seguir funcionando.
+grant execute on function public.is_noncatalog_sku(text) to authenticated, anon, service_role;
+
+comment on function public.is_noncatalog_sku(text) is
+  'SKU de variante interna de SellerCloud que nunca se publica: -SPECIAL (2026-07-13) o -BOX (venta por caja, 2026-08-13). El trigger products_enforce_noncatalog lo mantiene inactivo.';
+
+-- Que un -BOX/-SPECIAL no pueda quedar publicado, escriba quien escriba (mismo
+-- criterio que el trigger de stock: la invariante vive en la tabla, no en cada
+-- camino de escritura). Hacía falta además del filtro de la carga: la carga de
+-- precios escribe `active = true` para todo lo que trae precio en el archivo, y
+-- esos Excel salen del mismo export de SellerCloud, así que un -BOX se
+-- republicaba solo cada semana.
+--
+-- `deactivated_by_stock := false` a propósito: esa bandera significa "vuelve solo
+-- cuando entre stock", y a un -BOX lo apaga su SKU, no el inventario — no vuelve
+-- nunca (la salida, si alguna vez hay que venderlo, es cambiarle el SKU).
+--
+-- ORDEN DE LOS TRIGGERS (importa): los BEFORE ... FOR EACH ROW se disparan por
+-- orden alfabético de nombre y cada uno recibe el NEW del anterior.
+-- `products_availability_from_stock` < `products_enforce_noncatalog`, así que este
+-- tiene la última palabra sobre `active` — necesario, porque el de stock prende el
+-- producto cuando entra inventario. Si se renombra alguno, mantener ese orden.
+create or replace function public.products_enforce_noncatalog()
+returns trigger
+language plpgsql
+as $$
+begin
+  if public.is_noncatalog_sku(new.sku) then
+    new.active               := false;
+    new.deactivated_by_stock := false;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists products_enforce_noncatalog on public.products;
+create trigger products_enforce_noncatalog
+  before insert or update on public.products
+  for each row execute function public.products_enforce_noncatalog();
+
 create table if not exists public.product_prices (
   product_id    uuid not null references public.products (id) on delete cascade,
   price_list_id uuid not null references public.price_lists (id) on delete cascade,
@@ -810,15 +873,16 @@ security definer
 set search_path = public
 as $$
 declare
-  v_list              public.price_lists%rowtype;
-  v_to_upsert         int;
-  v_to_reactivate     int;
-  v_blocked_by_stock  int;   -- 2026-08-12
-  v_to_deactivate     int;
-  v_unknown_skus      int;
-  v_invalid_prices    int;
-  v_deactivate_sample jsonb;
-  v_unknown_sample    jsonb;
+  v_list                public.price_lists%rowtype;
+  v_to_upsert           int;
+  v_to_reactivate       int;
+  v_blocked_by_stock    int;   -- 2026-08-12
+  v_blocked_noncatalog  int;   -- 2026-08-13
+  v_to_deactivate       int;
+  v_unknown_skus        int;
+  v_invalid_prices      int;
+  v_deactivate_sample   jsonb;
+  v_unknown_sample      jsonb;
 begin
   if not public.is_admin() then
     raise exception 'no tenés permiso para aplicar listas de precio';
@@ -872,7 +936,9 @@ begin
     p.active as was_active,
     -- 2026-08-12: hace falta para saber a quién va a dejar apagado el trigger
     -- por no tener stock (ver los contadores más abajo).
-    p.stock  as product_stock
+    p.stock  as product_stock,
+    -- 2026-08-13: los -BOX/-SPECIAL nunca se publican, pase lo que pase.
+    public.is_noncatalog_sku(d.sku) as noncatalog
   from dedup d
   left join public.products p on lower(trim(p.sku)) = lower(d.sku);
 
@@ -891,15 +957,24 @@ begin
   -- "A reactivar" = los que van a volver a verse DE VERDAD (2026-08-12). Los
   -- inactivos con stock <= 0 no vuelven con esta carga: el trigger los deja
   -- apagados y marcados para publicarse cuando entre stock, así que van a un
-  -- contador propio en vez de inflar la promesa del preview.
+  -- contador propio en vez de inflar la promesa del preview. Los no-catálogo
+  -- (-BOX/-SPECIAL, 2026-08-13) tampoco vuelven nunca: mismo criterio, contador
+  -- propio, así los tres números no se pisan.
   select count(*) into v_to_reactivate
     from tmp_price_rows
     where product_id is not null and price is not null and was_active = false
+      and not noncatalog
       and (product_stock is null or product_stock >= 1);
   select count(*) into v_blocked_by_stock
     from tmp_price_rows
     where product_id is not null and price is not null and was_active = false
+      and not noncatalog
       and product_stock is not null and product_stock <= 0;
+  -- Acá no se filtra por was_active: el dato útil es cuántas filas del archivo son
+  -- variantes internas que no se publican, estén como estén hoy.
+  select count(*) into v_blocked_noncatalog
+    from tmp_price_rows
+    where product_id is not null and price is not null and noncatalog;
   select count(*) into v_unknown_skus
     from tmp_price_rows where product_id is null;
   select count(*) into v_invalid_prices
@@ -924,12 +999,16 @@ begin
     -- active = true a propósito, aunque el trigger apague lo que no tenga stock
     -- (2026-08-12): el archivo de precios dice "este producto se publica", y el
     -- trigger lo deja marcado para publicarse solo cuando entre stock.
+    -- Los no-catálogo quedan fuera del UPDATE (2026-08-13): el trigger
+    -- products_enforce_noncatalog revertiría el active = true igual, y así tampoco
+    -- se les pisa la etiqueta con la del archivo.
     update public.products p
     set active = true,
         availability = t.availability
     from tmp_price_rows t
     where t.product_id = p.id
-      and t.price is not null;
+      and t.price is not null
+      and not t.noncatalog;
 
     delete from public.product_prices pp
     using tmp_deactivate d
@@ -949,16 +1028,17 @@ begin
   end if;
 
   return jsonb_build_object(
-    'committed',          p_commit,
-    'list',               jsonb_build_object('code', v_list.code, 'label', v_list.label),
-    'to_upsert',          v_to_upsert,
-    'to_reactivate',      v_to_reactivate,
-    'blocked_by_stock',   v_blocked_by_stock,
-    'to_deactivate',      v_to_deactivate,
-    'unknown_skus',       v_unknown_skus,
-    'invalid_prices',     v_invalid_prices,
-    'deactivate_sample',  v_deactivate_sample,
-    'unknown_sample',     v_unknown_sample
+    'committed',           p_commit,
+    'list',                jsonb_build_object('code', v_list.code, 'label', v_list.label),
+    'to_upsert',           v_to_upsert,
+    'to_reactivate',       v_to_reactivate,
+    'blocked_by_stock',    v_blocked_by_stock,
+    'blocked_noncatalog',  v_blocked_noncatalog,
+    'to_deactivate',       v_to_deactivate,
+    'unknown_skus',        v_unknown_skus,
+    'invalid_prices',      v_invalid_prices,
+    'deactivate_sample',   v_deactivate_sample,
+    'unknown_sample',      v_unknown_sample
   );
 end;
 $$;
@@ -1971,6 +2051,15 @@ grant execute on function public.convert_quote_to_order(uuid) to authenticated;
 -- ese mismo cliente. Los precios se recalculan con la lista VIGENTE (via
 -- compute_order_items), no con los que veía cuando lo armó.
 --
+-- Siempre entra como COTIZACIÓN (2026-08-13, migration-2026-08-13-recover-as-quote.sql),
+-- sin importar si el intento original era un pedido o una cotización: entre
+-- que el cliente lo armó y se rescata pudo pasar cualquier cosa con
+-- precios/stock/disponibilidad, y la vendedora tiene que confirmarlo con el
+-- cliente antes de que cuente como pedido real — se convierte a mano con
+-- convert_quote_to_order, igual que cualquier otra cotización. El motivo
+-- original (`order_failures.kind`, lo que el cliente intentó de verdad) no
+-- se pierde: queda en admin_audit_log como `original_kind`.
+--
 -- Mismos permisos y auditoría que el resto de las acciones del panel: admin
 -- cualquiera, vendedora solo los de sus clientes, y queda en admin_audit_log.
 create or replace function public.recover_order_failure(p_failure_id uuid)
@@ -1982,7 +2071,6 @@ as $$
 declare
   v_fail    public.order_failures%rowtype;
   v_client  public.clients%rowtype;
-  v_kind    text;
   v_result  jsonb;
   v_items   jsonb;
   v_order   uuid;
@@ -2022,8 +2110,8 @@ begin
     raise exception 'el pedido tiene % líneas: hay que partirlo en dos', jsonb_array_length(v_fail.items);
   end if;
 
-  v_kind   := case when v_fail.kind = 'quote' then 'quote' else 'order' end;
-  v_result := public.compute_order_items(v_client.id, v_fail.items, v_kind);
+  -- Siempre 'quote': ver el comentario de arriba.
+  v_result := public.compute_order_items(v_client.id, v_fail.items, 'quote');
   v_items  := v_result->'items';
 
   if jsonb_array_length(v_items) = 0 then
@@ -2031,7 +2119,7 @@ begin
   end if;
 
   insert into public.orders (client_id, items, total, kind)
-  values (v_client.id, v_items, (v_result->>'total')::numeric, v_kind)
+  values (v_client.id, v_items, (v_result->>'total')::numeric, 'quote')
   returning id into v_order;
 
   update public.order_failures set recovered_order_id = v_order where id = p_failure_id;
@@ -2043,11 +2131,12 @@ begin
   values
     ('recover_order_failure', auth.uid(), v_email, v_client.id, v_client.name, v_order,
      jsonb_build_object(
-       'failure_id', p_failure_id,
-       'reason',     v_fail.reason,
-       'kind',       v_kind,
-       'items',      v_items,
-       'total',      v_result->'total'
+       'failure_id',    p_failure_id,
+       'reason',        v_fail.reason,
+       'kind',          'quote',
+       'original_kind', coalesce(v_fail.kind, 'order'),
+       'items',         v_items,
+       'total',         v_result->'total'
      ));
 
   return jsonb_build_object('ok', true, 'order_id', v_order, 'total', v_result->'total',
@@ -2057,6 +2146,78 @@ $$;
 
 revoke execute on function public.recover_order_failure(uuid) from public;
 grant execute on function public.recover_order_failure(uuid) to authenticated;
+
+-- Marca cuándo se descartó un fallo que nunca se va a poder recuperar (sin
+-- cliente o sin ítems válidos), para que deje de aparecer en el banner rojo
+-- de Pedidos sin borrar la fila (2026-08-13,
+-- migration-2026-08-13-dismiss-order-failures.sql).
+alter table public.order_failures
+  add column if not exists dismissed_at timestamptz;
+
+-- ---------- RPC: dismiss_order_failure ----------
+-- Mismos permisos que recover_order_failure: admin cualquiera, vendedora
+-- solo los de sus propios clientes. Una fila sin client_id (token inválido)
+-- solo la ve un admin (la policy de vendedora ya la excluye), así que en la
+-- práctica solo un admin puede descartar esas.
+create or replace function public.dismiss_order_failure(p_failure_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_fail   public.order_failures%rowtype;
+  v_client public.clients%rowtype;
+  v_email  text;
+begin
+  if not (public.is_admin() or public.is_vendedora()) then
+    raise exception 'no autorizado';
+  end if;
+
+  select * into v_fail from public.order_failures where id = p_failure_id;
+  if not found then
+    raise exception 'registro no encontrado';
+  end if;
+
+  if v_fail.recovered_order_id is not null then
+    raise exception 'este pedido ya fue recuperado, no hace falta descartarlo';
+  end if;
+
+  if v_fail.dismissed_at is not null then
+    raise exception 'ya estaba descartado';
+  end if;
+
+  if not public.is_admin() then
+    if v_fail.client_id is null then
+      raise exception 'no tenés permiso para descartar este registro';
+    end if;
+    select * into v_client from public.clients where id = v_fail.client_id;
+    if not found or v_client.vendedora_id is distinct from public.current_vendedora_id() then
+      raise exception 'no tenés permiso para descartar este registro';
+    end if;
+  end if;
+
+  update public.order_failures set dismissed_at = now() where id = p_failure_id;
+
+  select email into v_email from auth.users where id = auth.uid();
+
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, client_id, detail)
+  values
+    ('dismiss_order_failure', auth.uid(), v_email, v_fail.client_id,
+     jsonb_build_object(
+       'failure_id', p_failure_id,
+       'reason',     v_fail.reason,
+       'token_hint', v_fail.token_hint,
+       'kind',       v_fail.kind
+     ));
+
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+revoke execute on function public.dismiss_order_failure(uuid) from public;
+grant execute on function public.dismiss_order_failure(uuid) to authenticated;
 
 -- ---------- RPC: get_quotes_live_pricing ----------
 -- Una cotización (kind = 'quote') nunca guarda precio congelado (ver

@@ -118,16 +118,28 @@ export default function CartDrawer({ token, client }) {
     const total = cart.total
     const requestId = cart.requestId
     setBusy(true)
-    const first = await saveOrder(items, total, 'order', requestId)
-    // WhatsApp se abre igual si el registro falló: la asesora recibe la lista
-    // y el pedido no se pierde del todo. Va antes de los reintentos para que
-    // el navegador siga tratando la ventana como consecuencia del click.
-    const msg = buildOrderMessage({ t, clientName, items, total })
-    window.open(whatsappUrl(client?.vendedora_phone, msg), '_blank')
-    const res =
-      first === 'error' ? await saveWithRetry(items, total, 'order', requestId, 2) : first
-    settle('order', res)
-    setBusy(false)
+    // try/finally: sin esto, una excepción no prevista (ej. buildOrderMessage
+    // o window.open) deja `busy` en true para siempre y los tres botones del
+    // drawer (comparten el mismo estado) quedan deshabilitados sin ningún
+    // aviso — un cliente reportó justo esto (2026-08-13): no podía ni pedir
+    // por WhatsApp ni descargar el PDF.
+    try {
+      const first = await saveOrder(items, total, 'order', requestId)
+      // WhatsApp se abre igual si el registro falló: la asesora recibe la
+      // lista y el pedido no se pierde del todo. Va antes de los reintentos
+      // para que el navegador siga tratando la ventana como consecuencia del
+      // click.
+      const msg = buildOrderMessage({ t, clientName, items, total })
+      window.open(whatsappUrl(client?.vendedora_phone, msg), '_blank')
+      const res =
+        first === 'error' ? await saveWithRetry(items, total, 'order', requestId, 2) : first
+      settle('order', res)
+    } catch (e) {
+      console.warn('Checkout falló de forma inesperada:', e)
+      settle('order', 'error')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const handlePdf = async () => {
@@ -136,12 +148,21 @@ export default function CartDrawer({ token, client }) {
     const total = cart.total
     const requestId = cart.requestId
     setBusy(true)
-    await downloadOrderPdf({ t, clientName, items, total })
-    // Registrarlo como cotización en el panel (2026-07-17, a pedido del
-    // usuario). El PDF ya se descargó, nada bloquea al cliente.
-    const res = await saveWithRetry(items, total, 'quote', requestId, 3)
-    settle('quote', res)
-    setBusy(false)
+    try {
+      await downloadOrderPdf({ t, clientName, items, total })
+      // Registrarlo como cotización en el panel (2026-07-17, a pedido del
+      // usuario). El PDF ya se descargó, nada bloquea al cliente.
+      const res = await saveWithRetry(items, total, 'quote', requestId, 3)
+      settle('quote', res)
+    } catch (e) {
+      // Si downloadOrderPdf tira (jsPDF sin poder cargarse con mala señal,
+      // nombre de producto con algo que rompe el render) esto evita que el
+      // cliente se quede con el carrito congelado sin saber por qué.
+      console.warn('No se pudo generar/registrar la cotización:', e)
+      settle('quote', 'error')
+    } finally {
+      setBusy(false)
+    }
   }
 
   // Reintento a mano desde el aviso, con el carrito tal como está ahora. No
@@ -149,9 +170,14 @@ export default function CartDrawer({ token, client }) {
   const handleRetrySave = async () => {
     if (cart.items.length === 0 || busy) return
     setBusy(true)
-    const res = await saveWithRetry(cart.items, cart.total, failed, cart.requestId, 3)
-    settle(failed, res)
-    setBusy(false)
+    try {
+      const res = await saveWithRetry(cart.items, cart.total, failed, cart.requestId, 3)
+      settle(failed, res)
+    } catch (e) {
+      console.warn('Reintento falló de forma inesperada:', e)
+    } finally {
+      setBusy(false)
+    }
   }
 
   // El acuse reemplaza al carrito vacío recién enviado; si el cliente agrega

@@ -79,6 +79,12 @@ export default function OrdersAdmin() {
   const [failures, setFailures] = useState([])
   const [recovering, setRecovering] = useState(null) // id del que se está rescatando
   const [recoverError, setRecoverError] = useState(null) // { id, message }
+  // Un fallo sin cliente (token inválido) o sin ítems no tiene a quién
+  // asignárselo — "Recuperar" ni aparece — y antes se quedaba en el banner
+  // para siempre sin ninguna acción posible (2026-08-13, reportado por el
+  // usuario). "Descartar" lo saca de la lista sin borrar la fila.
+  const [dismissing, setDismissing] = useState(null)
+  const [dismissError, setDismissError] = useState(null) // { id, message }
 
   const loadLivePricing = async (list) => {
     const quoteIds = list.filter((o) => o.kind === 'quote').map((o) => o.id)
@@ -112,6 +118,7 @@ export default function OrdersAdmin() {
       .from('order_failures')
       .select('*, clients(name, phone)')
       .is('recovered_order_id', null)
+      .is('dismissed_at', null)
       .order('created_at', { ascending: false })
       .limit(50)
       .then(({ data }) => setFailures(data ?? []))
@@ -124,8 +131,10 @@ export default function OrdersAdmin() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Rescata el pedido perdido: lo crea como pedido de ese cliente con los
-  // precios vigentes y marca el fallo como recuperado.
+  // Rescata el pedido perdido: lo crea SIEMPRE como cotización de ese
+  // cliente (2026-08-13, con precios vigentes) y marca el fallo como
+  // recuperado — la vendedora confirma con el cliente y recién ahí lo
+  // convierte en pedido real ("Convertir en pedido", ya existente).
   const recover = async (id) => {
     setRecoverError(null)
     setRecovering(id)
@@ -138,6 +147,20 @@ export default function OrdersAdmin() {
     // Recargar las dos listas: el pedido nuevo tiene que aparecer arriba y el
     // aviso desaparecer.
     await loadOrders().catch(() => {})
+    loadFailures()
+  }
+
+  // Descarta un fallo que nunca se va a poder recuperar (sin cliente o sin
+  // ítems): no borra la fila, solo la saca del banner (dismissed_at).
+  const dismiss = async (id) => {
+    setDismissError(null)
+    setDismissing(id)
+    const { data, error } = await supabase.rpc('dismiss_order_failure', { p_failure_id: id })
+    setDismissing(null)
+    if (error || !data?.ok) {
+      setDismissError({ id, message: error?.message ?? t('dismissFailed') })
+      return
+    }
     loadFailures()
   }
 
@@ -324,7 +347,12 @@ export default function OrdersAdmin() {
         {t('failedOrdersBody')}
       </p>
       <ul className="mt-3 space-y-2">
-        {failures.map((f) => (
+        {failures.map((f) => {
+          // Sin cliente (token inválido) o sin ítems: no hay a quién
+          // asignárselo, "Recuperar" no tiene sentido — la única salida es
+          // descartarlo (2026-08-13).
+          const canRecover = !!f.client_id && Array.isArray(f.items) && f.items.length > 0
+          return (
           <li key={f.id} className="rounded-lg bg-surface p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0">
@@ -334,13 +362,21 @@ export default function OrdersAdmin() {
                   {f.line_count != null && ` · ${f.line_count} ${t('failureLines')}`}
                 </p>
               </div>
-              {f.client_id && f.items && (
+              {canRecover ? (
                 <button
                   onClick={() => recover(f.id)}
                   disabled={recovering === f.id}
                   className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {recovering === f.id ? t('recovering') : t('recoverOrder')}
+                </button>
+              ) : (
+                <button
+                  onClick={() => dismiss(f.id)}
+                  disabled={dismissing === f.id}
+                  className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-bold text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/40"
+                >
+                  {dismissing === f.id ? t('dismissing') : t('dismissFailure')}
                 </button>
               )}
             </div>
@@ -349,8 +385,14 @@ export default function OrdersAdmin() {
                 {recoverError.message}
               </p>
             )}
+            {dismissError?.id === f.id && (
+              <p className="mt-2 text-xs font-medium text-red-700 dark:text-red-300">
+                {dismissError.message}
+              </p>
+            )}
           </li>
-        ))}
+          )
+        })}
       </ul>
     </div>
   )

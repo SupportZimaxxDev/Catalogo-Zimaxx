@@ -247,6 +247,10 @@ export default function PricesUpload() {
         ok: true,
         message: `${data.to_upsert} ${t('updated')} · ${data.to_reactivate} ${t('reactivated')} · ${data.to_deactivate} ${t('deactivated')}${
           data.blocked_by_stock > 0 ? ` · 📦 ${data.blocked_by_stock} ${t('blockedByStockLabel')}` : ''
+        }${
+          data.blocked_noncatalog > 0
+            ? ` · 🚫 ${data.blocked_noncatalog} ${t('blockedNonCatalogLabel')}`
+            : ''
         }`,
       })
       setPreview(null)
@@ -317,6 +321,17 @@ export default function PricesUpload() {
                       title={t('inactiveByStockTitle')}
                     >
                       📦 {preview.data.blocked_by_stock} {t('blockedByStockLabel')}
+                    </span>
+                  )}
+                  {/* 2026-08-13: las filas -BOX/-SPECIAL del archivo. Se les
+                      guarda el precio, pero no se publican nunca — sin este chip
+                      contaban como "a reactivar" y no volvía ninguna. */}
+                  {preview.data.blocked_noncatalog > 0 && (
+                    <span
+                      className="rounded-full bg-primary/10 px-3 py-1 text-primary/60"
+                      title={t('nonCatalogSkuTitle')}
+                    >
+                      🚫 {preview.data.blocked_noncatalog} {t('blockedNonCatalogLabel')}
                     </span>
                   )}
                   <span className="rounded-full bg-red-100 px-3 py-1 text-red-700 dark:bg-red-900/50 dark:text-red-300">

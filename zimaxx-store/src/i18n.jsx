@@ -108,7 +108,7 @@ const dict = {
     updated: 'actualizados',
     skipped: 'omitidos',
     junkExcluded: 'filas internas excluidas (pruebas/soporte)',
-    nonCatalogExcluded: 'no-catálogo excluidos (beauty/electronics/support/-SPECIAL)',
+    nonCatalogExcluded: 'no-catálogo excluidos (beauty/electronics/support/-SPECIAL/-BOX)',
     notMatched: 'sin producto coincidente',
     invalidImageLink: 'links inválidos ignorados (apuntan a un panel admin, no a una foto)',
     inactiveExcluded: 'clientes inactivos excluidos',
@@ -184,10 +184,13 @@ const dict = {
     // Pedidos que el cliente envió y no entraron (2026-08-05, order_failures)
     failedOrders: 'Pedidos que no se registraron',
     failedOrdersBody:
-      'El cliente los envió por WhatsApp pero no entraron al sistema. "Recuperar" los carga como pedido con los precios vigentes de su lista.',
+      'El cliente los envió por WhatsApp pero no entraron al sistema. "Recuperar" los carga como cotización (precio vigente de su lista) — confirmá con el cliente antes de convertirla en pedido. Los que no tienen cliente o ítems no se pueden recuperar; solo se pueden descartar.',
     recoverOrder: 'Recuperar',
     recovering: 'Recuperando…',
     recoverFailed: 'No se pudo recuperar el pedido.',
+    dismissFailure: 'Descartar',
+    dismissing: 'Descartando…',
+    dismissFailed: 'No se pudo descartar.',
     failureLines: 'líneas',
     unknownClient: 'Cliente no identificado',
     actionRecoverOrder: 'Pedido recuperado',
@@ -295,6 +298,16 @@ const dict = {
     inactiveByStockCancelHint: 'Si no querés que vuelva, seleccionalo y usá "Desactivar".',
     bulkStockReturnCancelled: 'ya no vuelven solos cuando entre stock',
     blockedByStockLabel: 'no vuelven (stock 0)',
+    // ---------- SKU -BOX / -SPECIAL fuera del catálogo (2026-08-13) ----------
+    nonCatalogSku: 'No-catálogo (-BOX/-SPECIAL)',
+    nonCatalogSkuTitle:
+      'SKU terminado en -BOX (el mismo perfume vendido por caja) o en -SPECIAL: es una variante interna de SellerCloud y nunca se publica en el catálogo. La base lo deja inactivo siempre. Si alguna vez hay que venderlo, hay que cambiarle el SKU.',
+    activateBlockedNonCatalog:
+      'Los SKU -BOX y -SPECIAL no se publican nunca: la base los deja inactivos, aunque se pida activarlos.',
+    activeBlockedNonCatalogHint:
+      'Un SKU terminado en -BOX o -SPECIAL se guarda inactivo siempre (no sale en el catálogo). Para poder venderlo hay que cambiarle el SKU.',
+    bulkNonCatalogKeptOff: 'siguen inactivos por ser -BOX/-SPECIAL',
+    blockedNonCatalogLabel: 'no se publican (-BOX/-SPECIAL)',
     newTag: 'Nuevo',
     newUntil: 'Nuevo hasta',
     newUntilHint:
@@ -488,7 +501,7 @@ const dict = {
     updated: 'updated',
     skipped: 'skipped',
     junkExcluded: 'internal rows excluded (test/support)',
-    nonCatalogExcluded: 'non-catalog excluded (beauty/electronics/support/-SPECIAL)',
+    nonCatalogExcluded: 'non-catalog excluded (beauty/electronics/support/-SPECIAL/-BOX)',
     notMatched: 'no matching product',
     invalidImageLink: 'invalid links ignored (point to an admin panel, not a photo)',
     inactiveExcluded: 'inactive clients excluded',
@@ -560,10 +573,13 @@ const dict = {
     orderNeedsItem: 'The order must have at least one product.',
     failedOrders: 'Orders that were not saved',
     failedOrdersBody:
-      'The client sent these over WhatsApp but they never reached the system. "Recover" loads them as an order using the current prices of their list.',
+      'The client sent these over WhatsApp but they never reached the system. "Recover" loads them as a quote (current list price) — confirm with the client before converting it to an order. Ones with no client or items can\'t be recovered; they can only be dismissed.',
     recoverOrder: 'Recover',
     recovering: 'Recovering…',
     recoverFailed: 'The order could not be recovered.',
+    dismissFailure: 'Dismiss',
+    dismissing: 'Dismissing…',
+    dismissFailed: 'Could not dismiss it.',
     failureLines: 'lines',
     unknownClient: 'Unidentified client',
     actionRecoverOrder: 'Order recovered',
@@ -671,6 +687,16 @@ const dict = {
     inactiveByStockCancelHint: 'If you do not want it back, select it and hit "Deactivate".',
     bulkStockReturnCancelled: 'no longer come back on their own when stock arrives',
     blockedByStockLabel: "won't return (stock 0)",
+    // ---------- -BOX / -SPECIAL SKUs kept out of the catalog (2026-08-13) ----------
+    nonCatalogSku: 'Non-catalog (-BOX/-SPECIAL)',
+    nonCatalogSkuTitle:
+      'SKU ending in -BOX (the same perfume sold by the box) or -SPECIAL: an internal SellerCloud variant that is never published in the catalog. The database keeps it inactive at all times. If it ever has to be sold, its SKU must be changed.',
+    activateBlockedNonCatalog:
+      'SKUs ending in -BOX or -SPECIAL are never published: the database keeps them inactive even if you activate them.',
+    activeBlockedNonCatalogHint:
+      'A SKU ending in -BOX or -SPECIAL is always saved as inactive (hidden from the catalog). To sell it, change its SKU.',
+    bulkNonCatalogKeptOff: 'stay inactive (-BOX/-SPECIAL)',
+    blockedNonCatalogLabel: 'not published (-BOX/-SPECIAL)',
     newTag: 'New',
     newUntil: 'New until',
     newUntilHint:

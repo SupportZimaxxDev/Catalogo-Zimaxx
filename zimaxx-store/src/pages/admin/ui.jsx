@@ -33,6 +33,15 @@ export const inputCls =
 // La etiqueta ✨ Nuevo es una fecha, no un booleano: vence sola.
 export const isNewProduct = (p) => !!p.new_until && new Date(p.new_until).getTime() > Date.now()
 
+// Variantes internas de SellerCloud que no se publican nunca, se reconocen por el
+// sufijo del SKU: `-SPECIAL` (2026-07-13) y `-BOX` (el mismo perfume vendido por
+// caja, 2026-08-13). Espejo de `is_noncatalog_sku` en la base, que es quien de
+// verdad los mantiene inactivos (trigger `products_enforce_noncatalog`) — acá solo
+// sirve para explicarlo en el panel y para no jalarlos en la carga por Excel. Si
+// se cambia un sufijo, cambiarlo en los dos lados.
+export const NONCATALOG_SKU_PATTERN = /-(special|box)$/i
+export const isNonCatalogSku = (sku) => NONCATALOG_SKU_PATTERN.test(String(sku ?? '').trim())
+
 // Estados disponibles en el select. `photo: true` = solo tiene sentido donde
 // se cargó image_url (Productos); Precios no lo pide y lo omite.
 const STATUS_OPTIONS = [
@@ -42,6 +51,10 @@ const STATUS_OPTIONS = [
   // stock), separados de los que apagó una persona — que son los únicos que hay
   // que revisar a mano.
   { value: 'inactivebystock', key: 'inactiveByStock', icon: '📦' },
+  // 2026-08-13: los -BOX/-SPECIAL, que están inactivos para siempre. Separados
+  // también, porque son la mayoría de los inactivos y tapan a los que sí hay que
+  // revisar.
+  { value: 'noncatalog', key: 'nonCatalogSku', icon: '🚫' },
   { value: 'instock', key: 'withStock' },
   { value: 'nostock', key: 'outOfStock' },
   { value: 'noimage', key: 'noImage', photo: true },
@@ -61,6 +74,8 @@ export function productMatchesStatus(p, statusFilter) {
       return !p.active
     case 'inactivebystock':
       return !p.active && !!p.deactivated_by_stock
+    case 'noncatalog':
+      return isNonCatalogSku(p.sku)
     case 'instock':
       return p.stock >= 1
     case 'nostock':

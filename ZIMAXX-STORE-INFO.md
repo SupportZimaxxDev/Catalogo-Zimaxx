@@ -2,8 +2,23 @@
 
 > Documento de referencia para retomar el trabajo en cualquier sesión.
 >
-> **✅ ESTADO DE MIGRACIONES (2026-08-12): no queda ninguna pendiente.**
-> Todas las migraciones de `supabase/` están **corridas y probadas en
+> **⚠️ ESTADO DE MIGRACIONES (2026-08-13): hay TRES pendientes** — correrlas
+> **junto con el deploy**, en cualquier orden (son independientes entre sí):
+> - `migration-2026-08-13-exclude-box-skus.sql` (los SKU `-BOX` fuera del
+>   catálogo, punto 57): el panel nuevo ya marca y bloquea los `-BOX`, pero sin
+>   la migración nada los desactiva en la base y la carga de precios los sigue
+>   republicando (y `apply_price_list` devolvería `blocked_noncatalog` vacío,
+>   con lo que el chip 🚫 del preview de Precios no aparece nunca).
+> - `migration-2026-08-13-recover-as-quote.sql` (punto 59): sin ella,
+>   "Recuperar" en el panel sigue creando un pedido real de una — el frontend
+>   no cambió nada de este lado, es 100% lógica del servidor.
+> - `migration-2026-08-13-dismiss-order-failures.sql` (punto 60): **esta sí
+>   rompe la pestaña Pedidos si se despliega el frontend sin ella antes** —
+>   `loadFailures()` ya filtra por `dismissed_at`, columna que sin la
+>   migración no existe (`42703`).
+>
+> **✅ ESTADO DE MIGRACIONES (2026-08-12): no quedaba ninguna pendiente.**
+> Todas las migraciones de `supabase/` anteriores a esa fecha están **corridas y probadas en
 > producción** (confirmado por el usuario el 2026-08-12), incluidas la única que
 > la auditoría de ese día había verificado como pendiente
 > (`migration-2026-08-12-hide-out-of-stock.sql`) y las tres que no se podían
@@ -19,7 +34,27 @@
 > estado real (2026-08-12)" — la lista de pendientes de este doc ya se equivocó
 > en las dos direcciones antes.
 >
-> Creado: 2026-07-02. Última actualización: 2026-08-12 (**incidente: "las
+> Creado: 2026-07-02. Última actualización: 2026-08-13 (**dos cambios en el
+> banner rojo de "Pedidos que no se registraron"**, puntos 59 y 60: "Recuperar"
+> ya no crea un pedido real de una — siempre entra como cotización, para que
+> la vendedora confirme con el cliente antes de convertirla; y las filas sin
+> cliente/ítems que antes se quedaban ahí para siempre (reportado por el
+> usuario) ahora se pueden **descartar** con un botón nuevo. Dos migraciones
+> pendientes de correr, la segunda **junto con el deploy** porque el frontend
+> ya asume la columna nueva).
+> Antes: 2026-08-13 (**el carrito del
+> catálogo podía quedar congelado sin ningún aviso**: `handleCheckout` y
+> `handlePdf` en `CartDrawer.jsx` no soltaban `busy` si tiraban una excepción
+> no prevista — ej. el import dinámico de jsPDF fallando por mala señal de
+> noche —, y los tres botones del drawer comparten ese estado. Reportado como
+> "el cliente no podía ni pedir por WhatsApp ni descargar el PDF"; ver punto
+> 58. Ahora los tres handlers van en `try/finally`, sin migración).
+> Antes: 2026-08-13 (**los SKU terminados en
+> `-BOX` no se publican nunca**: son el mismo perfume vendido por caja, entraban
+> por el sync como productos normales y ahora quedan inactivos siempre —
+> `is_noncatalog_sku` + trigger `products_enforce_noncatalog`, punto 57,
+> `migration-2026-08-13-exclude-box-skus.sql` **pendiente de correr**).
+> Antes: 2026-08-12 (**incidente: "las
 > órdenes de un cliente no se registraron"** — los pedidos estaban guardados,
 > lo que falló fue **encontrarlos**: el buscador del panel pedía una subcadena
 > contigua, así que buscar "robert carlos" no encontraba a "Robert Edu Carlos
@@ -713,6 +748,171 @@
 > eso se responde con `supabase/diagnostico-2026-08-12-pedidos-no-registrados.sql`
 > (lo escribió otra sesión el mismo día), que lista los pedidos y los
 > `order_failures` de ese cliente.
+>
+> 2026-08-13, **punto 57: los SKU terminados en `-BOX` nunca se publican**. Pedido
+> del usuario: *"los productos que terminen con sku -BOX automaticamente deben
+> desactivarse, nunca se deben mostrar en el sistema"*. **Qué es un `-BOX` y por
+> qué no lo tapaba nada**: en el export real (`119389.xlsx`) hay **77** SKU así, y
+> son el MISMO perfume que ya está en el catálogo pero vendido por caja
+> (`ZX_PE-AB-M-636268-ZX-BOX` y `ZX_PE-AB-M-636268-ZX` son los dos "Blue Seduction
+> 3.4 Oz Edt Men"). A diferencia de los `-SPECIAL` del 2026-07-13, su
+> `PRODUCT_CATEGORY` es `Perfume`/`Perfume - Arabes`, así que la mitad "por
+> categoría" de `sync_is_noncatalog_product` no los alcanzaba y el sync los venía
+> jalando como productos normales.
+> **Tres capas, porque desactivarlos una vez no es "nunca se muestran"**: (1) la
+> regla del sufijo pasa a una función propia `is_noncatalog_sku(sku)`
+> (`-SPECIAL` + `-BOX`), que `sync_is_noncatalog_product` ahora usa — con eso el
+> sync y el Excel de productos dejan de jalarlos sin tocar
+> `sync_upsert_products`; (2) **trigger nuevo `products_enforce_noncatalog`** que
+> los deja `active = false` escriba quien escriba; (3) backfill de los que ya
+> estaban cargados (nunca DELETE, igual que en 2026-07-13).
+> **La capa 2 no es cinturón y tirantes, hacía falta**: `apply_price_list` escribe
+> `active = true` para todo lo que trae precio en el archivo, y los Excel de
+> precios salen del mismo export de SellerCloud — o sea que un `-BOX` se
+> republicaba solo en la carga semanal. Lo mismo el botón Activar del panel.
+> **Dos decisiones que conviene no re-litigar**:
+> · El trigger mira **solo el sufijo del SKU**, no la regla completa de
+> no-catálogo. El sufijo es un dato estructural de SellerCloud que nadie tipea, y
+> si algún día hay que vender un `-BOX` alcanza con **editarle el SKU** desde el
+> panel; la otra mitad (`product_line` = beauty/electronics/support/packing/test)
+> es texto libre de un export y **no es editable desde el panel**, así que
+> clavarla en un trigger dejaría un perfume mal categorizado imposible de activar
+> sin salida por la UI. Esa mitad sigue como estaba (no entra por el sync ni por
+> el Excel) y el backfill la re-aplica.
+> · `deactivated_by_stock` se pone en **false**, no en true: esa bandera
+> significa "vuelve solo cuando entre stock", y a un `-BOX` lo apaga su SKU, no el
+> inventario.
+> **Trampa de permisos que no se ve leyendo el SQL**: a `is_noncatalog_sku`
+> **no** hay que ponerle `revoke execute from public` como a las funciones del
+> sync — al contrario, lleva un `grant execute` explícito a
+> `authenticated, anon, service_role`. El privilegio EXECUTE de lo que se llama
+> dentro de un trigger se chequea contra **el usuario que hace el UPDATE** (el rol
+> `authenticated` del panel), así que si se queda sin EXECUTE **cualquier**
+> edición de producto se cae con `permission denied for function
+> is_noncatalog_sku`. Verificado a propósito en el cluster de prueba, los cuatro
+> casos: edita bien; sigue editando bien tras un `revoke ... from public` (porque
+> el grant a `authenticated` es explícito); se rompe si además se le revoca a
+> `authenticated`; y vuelve a andar con el grant. No expone nada: es un regex
+> sobre el texto que le pasan.
+> **En el panel** (Productos): contador/filtro **🚫 No-catálogo (-BOX/-SPECIAL)**
+> —son ~190 filas y tapaban a los inactivos que sí hay que revisar—, badge en la
+> fila, "Activar" de a uno que **avisa en vez de mandar un PATCH que la base va a
+> revertir**, botón de bloque apagado con su motivo (y si la selección mezcla
+> `-BOX` con inactivos sin stock, dice **los dos** motivos), aviso de bloque que
+> separa "1 activados · 🚫 2 siguen inactivos por ser -BOX/-SPECIAL", y aviso en
+> el formulario al tildar Activo con un SKU `-BOX`. En **Precios**, contador nuevo
+> `blocked_noncatalog` con chip "🚫 N no se publican (-BOX/-SPECIAL)": antes esas
+> filas contaban como "a reactivar" y no volvía ninguna — el mismo problema que el
+> 2026-08-12 arregló para el stock 0. El precio del `-BOX` **sí** se sigue
+> guardando (es un dato inerte; no escribirlo lo mandaría al lote de "sacar de la
+> lista" e inflaría el contador de desactivados).
+> **Efecto conocido, avisado y no automatizado**: si un pedido sin atender tiene
+> una línea `-BOX`, `compute_order_items` la descarta al recalcular (busca
+> `active or deactivated_by_stock`). El backfill **reporta cuántos pedidos así
+> hay** con un `raise notice` en vez de tocarlos — hay que revisarlos con la
+> asesora, no arreglarlos por SQL.
+> **Verificado de verdad**: `npm run build` limpio; la migración contra un
+> **PostgreSQL 18 desechable** partiendo del `schema.sql` de HEAD + las
+> migraciones del sync (o sea el estado real de producción), con 7 bloques de
+> assert — predicado (mayúsculas, espacios, `-BOXES`/`BOX-` que **no** matchean),
+> backfill (incluido que el perfume normal con el mismo nombre no se toca), el
+> trigger (insert pidiendo activo, activar a mano, entrar y salir stock, **orden
+> de los dos triggers** forzado en un solo UPDATE, y renombrar el SKU como salida),
+> el sync (`skipped`, y que no pise un `-BOX` ya cargado), `apply_price_list`
+> (preview + commit + que el precio sí se guarde), `get_catalog` y
+> `compute_order_items` —, corridos tres veces: tras la migración, re-aplicándola
+> y en una instalación desde cero; más el `schema.sql` completo encima. Y el panel
+> **en navegador real** (receta del 2026-08-07): **18 aserciones**, incluida la
+> carga del `119389.xlsx` real, que reporta **3371 creados · 282 no-catálogo
+> excluidos** (= 77 `-BOX` + 111 `-SPECIAL` + 94 por categoría; los otros 4 de
+> categoría los atrapa antes `JUNK_PATTERN`) y **ningún** SKU `-BOX` viajando en
+> el upsert.
+>
+> 2026-08-13, **punto 58: dos cotizaciones de una noche que no llegaron al
+> sistema — diagnóstico y un bug real encontrado en el camino**. El usuario
+> reportó 2-3 cotizaciones de la noche anterior que nunca aparecieron; en un
+> caso el cliente **sí** llegó a descargar el PDF, en el otro el sistema **no
+> lo dejaba seleccionar ninguna opción** (ni WhatsApp ni PDF).
+> **Caso 1 (PDF sí bajó)**: `handlePdf` en `CartDrawer.jsx` hace dos pasos
+> independientes — primero `await downloadOrderPdf(...)` (jsPDF, `doc.save()`
+> es prácticamente instantáneo), después `await saveWithRetry(...)` que recién
+> ahí llama `create_order`. Un cliente que ve el PDF aparecer y cierra la
+> pestaña de inmediato (algo normal: "ya tengo lo que quería") corta el
+> segundo paso a mitad de camino, antes de que el RPC llegue a ejecutarse. Como
+> nada se escribe en la base hasta que `create_order` corre de verdad, **no
+> queda ningún rastro posible** en `order_failures` ni en `orders` — no es un
+> bug de este código, es una carrera contra el cierre de la pestaña que de
+> noche (conexión de teléfono más floja) es más fácil de perder. No se le
+> encontró arreglo de fondo (no hay forma de mantener un `fetch` vivo después
+> de que la pestaña se cierra); queda documentado como limitación conocida.
+> **Caso 2 (nada respondía — el bug real)**: `handleCheckout` y `handlePdf` NO
+> tenían `try/finally` alrededor de `setBusy`. `busy` es un solo estado
+> compartido por los tres botones del drawer (Checkout, Descargar PDF,
+> Reintentar). Si algo entre `setBusy(true)` y `setBusy(false)` tiraba una
+> excepción no prevista — el sospechoso principal: el `import('jspdf')`
+> dinámico de `downloadOrderPdf` rechazando por una red mala esa noche — la
+> función se detenía ahí mismo y `setBusy(false)` nunca corría. `busy` quedaba
+> en `true` para siempre (hasta recargar la página) y **los tres botones se
+> veían pero deshabilitados, sin ningún aviso**: exactamente "no me deja
+> seleccionar nada".
+> **El fix**: `handleCheckout`, `handlePdf` y `handleRetrySave` envuelven su
+> cuerpo en `try/finally` — `setBusy(false)` corre siempre en el `finally`, y
+> el `catch` de los dos primeros llama `settle(kind, 'error')`, la misma ruta
+> que ya existía para un fallo de red: aviso rojo + botón "Reintentar" +
+> carrito conservado, en vez de un congelamiento silencioso. Solo frontend
+> (`src/components/CartDrawer.jsx`), **sin migración**.
+> **Verificado con Playwright real** (misma receta que el panel admin): Chromium
+> con **todas** las rutas de `supabase.co` interceptadas (`get_catalog` devuelve
+> un cliente y un producto mockeados; `create_order` devuelve un uuid fijo) más
+> el chunk JS de `jspdf.es.min-*.js` **abortado a propósito** para reproducir el
+> rechazo del import dinámico. 7 aserciones: camino feliz (agrega al carrito,
+> descarga PDF, `create_order` se llama una vez, aparece el acuse ✓) y el camino
+> con jsPDF roto (con el código viejo esto dejaba los botones disabled para
+> siempre; con el fix, Descargar PDF y Checkout vuelven a estar habilitados,
+> aparece el aviso rojo de "no se guardó" y `create_order` nunca llega a
+> llamarse).
+> **De paso**, diagnóstico general para la próxima vez que se pierda una
+> cotización: `supabase/diagnostico-2026-08-13-cotizaciones-no-registradas.sql`
+> (solo lectura) — mira `order_failures` y `orders` en una ventana de horas, y
+> el volumen por hora de los últimos 5 días para distinguir un hueco puntual de
+> uno sistémico. Si ambas consultas salen vacías para la ventana reportada, la
+> pérdida fue client-side (caso 1 o 2 de arriba) y no hay nada más para buscar
+> en la base.
+>
+> 2026-08-13, **punto 59: "Recuperar" ya no crea un pedido real de una**. A
+> pedido del usuario, en la misma conversación del punto 58: entre que el
+> cliente armó un pedido y alguien lo rescata puede pasar cualquier cosa con
+> precios/stock/disponibilidad, así que `recover_order_failure` ya no respeta
+> el `kind` del intento original (`order_failures.kind`) — **siempre** crea
+> una cotización, sin precio congelado, con el mismo flujo de "Editar"/
+> "Convertir en pedido" que cualquier otra. El intento original no se pierde:
+> queda en `admin_audit_log.detail->>'original_kind'`. Cambio de una sola
+> línea de lógica (`v_kind := 'quote'` en vez de mirar `v_fail.kind`), pero se
+> escribió como migración (`migration-2026-08-13-recover-as-quote.sql`) por
+> las dudas, no a mano en el SQL Editor.
+>
+> 2026-08-13, **punto 60: fallas sin cliente se quedaban en el banner rojo
+> para siempre**. Reportado por el usuario: una fila sin nombre lleva "un par
+> de días" ahí y no había ninguna acción posible. Causa: el botón "Recuperar"
+> solo aparece con `{f.client_id && f.items}` — correcto, porque un
+> `client_id` null (token inválido) no tiene a quién asignarle el pedido —
+> pero no existía ninguna otra salida. Se agregó `order_failures.dismissed_at`
+> + RPC `dismiss_order_failure` (mismo esquema de permisos que
+> `recover_order_failure`) y un botón "Descartar" que aparece exactamente
+> cuando "Recuperar" no aparecería (`!client_id || !items?.length`). No borra
+> la fila — la marca y sale del banner (`loadFailures` ahora filtra
+> `dismissed_at is null`), auditada en `admin_audit_log`.
+> **Verificado contra un PostgreSQL 18 desechable** (esquema mínimo + stubs de
+> `is_admin()`/`is_vendedora()`/`current_vendedora_id()`/`auth.uid()` vía GUCs
+> de sesión — sin Supabase, sin tocar producción): 10 escenarios sobre los
+> puntos 59 y 60 juntos — recuperar un fallo con intento original `order`
+> queda como `quote` (con `original_kind` en el audit log); recuperarlo de
+> nuevo falla; recuperar uno sin cliente/ítems falla con el mensaje correcto;
+> descartarlo como admin funciona; descartarlo de nuevo falla ("ya estaba
+> descartado"); descartar uno ya recuperado falla; una vendedora no puede
+> descartar el fallo de un cliente ajeno pero la dueña sí; una vendedora nunca
+> puede descartar uno sin cliente; y la lista final que vería el panel queda
+> solo con lo que de verdad sigue pendiente. `npm run build` limpio.
 
 ---
 
@@ -1123,6 +1323,60 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   etiquetas en Productos, y filtros por grupo de producto en Precios (todo
   frontend, sin SQL).
 
+- [ ] **SKU `-BOX` fuera del catálogo** (2026-08-13, punto 57):
+  `migration-2026-08-13-exclude-box-skus.sql` **pendiente de correr**, y hay que
+  hacerlo **junto con el deploy** — el panel nuevo ya marca y bloquea los `-BOX`,
+  pero sin la migración nada los desactiva en la base, la carga de precios los
+  sigue republicando y el chip 🚫 del preview de Precios no aparece nunca
+  (`apply_price_list` todavía no devuelve `blocked_noncatalog`). Anotar los
+  números que reportan los tres `raise notice` del backfill (cuántos `-BOX`
+  estaban publicados, cuántos no-catálogo por categoría habían vuelto, y cuántos
+  pedidos sin atender tienen una línea `-BOX`).
+
+- [ ] **Recuperar un pedido perdido siempre crea una cotización** (2026-08-13,
+  punto 59): `migration-2026-08-13-recover-as-quote.sql` **pendiente de
+  correr**. Antes, `recover_order_failure` recreaba el `kind` original del
+  intento fallido — si era un pedido real (`kind='order'`), lo recuperaba
+  directo como pedido, con precio congelado, sin que nadie lo revisara. Ahora
+  **siempre** entra como cotización (sin precio congelado, con el precio
+  vigente vía `get_quotes_live_pricing` como cualquier otra cotización) — la
+  vendedora confirma con el cliente y recién ahí usa "Convertir en pedido"
+  (`convert_quote_to_order`, ya existente) si corresponde. El motivo original
+  no se pierde: queda en `admin_audit_log.detail->>'original_kind'`. Solo
+  cambia el cuerpo de la función (`create or replace`); no requiere backfill
+  de pedidos ya recuperados antes de esta migración (esos quedan como estaban).
+
+- [ ] **Fallos sin cliente/ítems se pueden descartar** (2026-08-13, punto 60):
+  `migration-2026-08-13-dismiss-order-failures.sql` **pendiente de correr**,
+  y hay que correrla **junto con el deploy** — el frontend nuevo ya filtra por
+  `dismissed_at is null` en `loadFailures()`, así que sin la columna la
+  pestaña Pedidos se rompe entera (`42703 column does not exist`). Reportado
+  por el usuario: una fila del banner rojo sin nombre de cliente lleva varios
+  días ahí porque "Recuperar" nunca aparece para un fallo con `client_id`
+  null (token inválido) o sin ítems — no hay a quién asignárselo, y antes no
+  había ninguna otra acción posible. Agrega `order_failures.dismissed_at` +
+  RPC `dismiss_order_failure` (mismo esquema de permisos que
+  `recover_order_failure`: admin cualquiera, vendedora solo sus propios
+  clientes — una fila sin cliente en la práctica solo la puede descartar un
+  admin, porque la policy de vendedora ya la excluye de lo que ve). No borra
+  la fila: la marca y sale del banner; queda auditada en `admin_audit_log`
+  como `dismiss_order_failure`. Botón "Descartar" en el panel aparece
+  exactamente cuando "Recuperar" no aparecería (sin cliente, sin ítems, o
+  ítems vacíos).
+  **Verificado contra un PostgreSQL 18 desechable** (esquema mínimo +
+  stubs de `is_admin()`/`is_vendedora()`/`current_vendedora_id()`/`auth.uid()`
+  vía GUCs de sesión, sin tocar producción): 10 escenarios — recuperar un
+  fallo cuyo intento original era `order` queda como `quote` (con
+  `original_kind` guardado en el audit log); recuperar dos veces el mismo
+  falla; recuperar uno sin cliente/ítems falla con el mensaje correcto;
+  descartar ese mismo como admin funciona; descartarlo de nuevo falla ("ya
+  estaba descartado"); descartar uno ya recuperado falla; una vendedora no
+  puede descartar el fallo de un cliente ajeno; la vendedora dueña sí puede;
+  una vendedora nunca puede descartar un fallo sin cliente (ni falta que
+  haga, RLS ya lo esconde); y la lista final que vería el panel
+  (`recovered_order_id is null and dismissed_at is null`) queda con solo lo
+  que de verdad sigue pendiente.
+
 ---
 
 
@@ -1182,12 +1436,16 @@ migración (`schema.sql` y `diagnostico-2026-08-12-*.sql` no cuentan).
 | `migration-2026-08-06-sa-metrics.sql` | ✅ corrida | `sa_metrics_overview` → `42501` (existe, anon sin `execute`) |
 | `migration-2026-08-06-require-price.sql` | ✅ corrida | confirmado por el usuario (2026-08-12). Desde la API no se veía: solo reemplaza cuerpos de funciones |
 | `migration-2026-08-12-hide-out-of-stock.sql` | ✅ corrida | el sondeo de la mañana dio `products.deactivated_by_stock` → `42703`; el usuario la corrió ese mismo día y lo confirmó |
+| `migration-2026-08-13-exclude-box-skus.sql` | ⏳ **pendiente** (2026-08-13) | escrita hoy (punto 57). Cuando corra: `is_noncatalog_sku('X-BOX')` → `true` y el trigger `products_enforce_noncatalog` en `pg_trigger`. **Correr junto con el deploy** |
 
 **✅ Cierre (2026-08-12): no queda ninguna migración pendiente.** El sondeo con
 la anon key dejó una sola pendiente confirmada
 (`migration-2026-08-12-hide-out-of-stock.sql`) y tres sin determinar; el usuario
 corrió la primera y confirmó las otras tres el mismo día. La única que sigue sin
 correr es `restrict-vendedora-luzmar`, y está bien así: quedó reemplazada.
+
+La tabla vale hasta el 2026-08-12; la fila del 2026-08-13 es la única posterior y
+sigue pendiente (ver el aviso del principio del documento).
 
 Si en el futuro hay que volver a verificar los tres que la API no muestra, es en
 el SQL Editor:
@@ -1296,7 +1554,7 @@ negro+dorado es idéntico en ambos modos).
 | `price_list_owners` | Dueñas de una lista de precio (2026-08-04, `migration-2026-08-04-shared-price-lists.sql` — **reemplaza** a la columna `price_lists.owner_vendedora_id` de 2026-07-09, que se dropeó). PK `(price_list_id, vendedora_id)`, así que una lista puede tener **varias** dueñas: sin filas = lista general (la usa cualquier vendedora), una fila = lista personal (comportamiento idéntico al de antes), varias = lista **compartida** (solo esas vendedoras la ven, y cada cliente queda con una de ellas). `is_primary` (índice único parcial: una sola por lista) marca la dueña por defecto — la que se asigna cuando un cliente entra a la lista con una vendedora que no es dueña. RLS: admin todo; una vendedora solo lee las filas de las listas que puede usar, y desde 2026-08-05 la escritura es **solo del superadmin** (antes era `admin_all`), desde la pestaña 🔐 Superadmin |
 | `clients` | Clientes con token único, lista asignada y `vendedora_id` (FK a `vendedores`). Desde la v2 del sync (2026-07-10): `sellercloud_id` (integer unique nullable, el General.ID de SellerCloud — llave del sync automático; null en clientes cargados a mano/Excel) y `price_list_id` pasó a ser **nullable** (los clientes nuevos del sync entran sin lista; un cliente sin lista ve catálogo vacío y no puede pedir hasta que se la asignen a mano) |
 | `vendedores` | Nombre + teléfono de cada vendedora (2026-07-06; antes texto libre en `clients`). Desde el rol vendedora (2026-07-06): `user_id` (FK a `auth.users`, nullable, único) + `login_email` (solo display) para vincular su login |
-| `products` | Catálogo de productos (`availability`: 'available' \| 'preorder' \| 'flash', este último desde 2026-07-08 — etiqueta "Flash Sale" del Excel de inventario, sin relación con la tabla `flash_sales`). `product_line` (2026-07-08, texto libre, nullable): tipo real del perfume desde `PRODUCT_CATEGORY` del export SellerCloud (`Perfume` / `Perfume - Arabes`), **distinto** de `category` que acá guarda la marca/Brand. `new_until` (2026-07-09, timestamptz nullable): mientras `now() < new_until` el producto lleva la etiqueta ✨ Nuevo en catálogo y admin; se setea automático (+10 días) al crear el producto y es editable en el formulario. `stock` (2026-07-14, int nullable, `migration-2026-07-14-inventory-stock.sql`): InventoryAvailableQTY de SellerCloud — **no** se expone en el catálogo del cliente (`get_catalog` no lo incluye), solo visible en el admin. Decide la disponibilidad en cada carga/sync (`>= 1` available, `0`/negativo preorder, respetando flash); NO toca `active`. null = "todavía no se sabe el stock" (distinto de 0 = sin stock). **Desde 2026-08-04 esa regla vive en un trigger de la tabla** (`products_availability_from_stock`, `migration-2026-08-04-order-stock.sql`) y no solo en cada camino de escritura: cualquier insert/update con `stock` no-null y `availability <> 'flash'` deja `availability` derivada del stock, venga del sync, del Excel, del bulk, del formulario, del descuento de un pedido atendido o de un request directo. Eso además tapó un agujero real: `apply_price_list` ponía `availability = 'available'` a todos los productos de un Excel de precios sin columna `Type`, con stock 0 incluido. El `stock` también **baja solo** al marcar un pedido Atendido (ver `apply_order_stock`) y es editable a mano en el formulario de la pestaña Productos. `deactivated_by_stock` (2026-08-12, boolean not null default false, `migration-2026-08-12-hide-out-of-stock.sql`): desde esa fecha el trigger no solo pone la etiqueta, también **despublica** — `stock <= 0` deja el producto en `preorder` **y** `active = false`, así que sale del catálogo (revierte a propósito media decisión del 2026-07-14: "stock 0 se muestra como pre-order, ocultarlo es manual"). La columna **no** es "está sin stock" (eso ya lo dice `stock`) sino "esta regla fue la que lo apagó", y es lo único que permite reactivarlo solo cuando entre stock sin resucitar de paso lo que apagó una persona ni la exclusión de no-catálogo (SKU `-SPECIAL`, beauty/electronics/support/packing/test), que tienen stock de sobra. Invariante: `true` = inactivo por falta de stock, vuelve solo con `stock >= 1`; `false` = si está inactivo lo apagó una persona y solo una persona lo reactiva. Un producto `flash` con stock 0 conserva la etiqueta 🔥 pero **también** se despublica (la etiqueta no publica nada). Quién borra la bandera a propósito, porque es decisión humana: el botón Desactivar (fila o selección) del panel, la columna `Activo` del Excel de productos, y el UPDATE de `apply_price_list` que desactiva lo que quedó fuera del archivo. `upc` (2026-07-14, text nullable, `migration-2026-07-14-product-upc.sql`): código de barras, dato interno del admin (**no** lo expone `get_catalog`), visible/editable en la pestaña Productos y buscable |
+| `products` | Catálogo de productos (`availability`: 'available' \| 'preorder' \| 'flash', este último desde 2026-07-08 — etiqueta "Flash Sale" del Excel de inventario, sin relación con la tabla `flash_sales`). `product_line` (2026-07-08, texto libre, nullable): tipo real del perfume desde `PRODUCT_CATEGORY` del export SellerCloud (`Perfume` / `Perfume - Arabes`), **distinto** de `category` que acá guarda la marca/Brand. `new_until` (2026-07-09, timestamptz nullable): mientras `now() < new_until` el producto lleva la etiqueta ✨ Nuevo en catálogo y admin; se setea automático (+10 días) al crear el producto y es editable en el formulario. `stock` (2026-07-14, int nullable, `migration-2026-07-14-inventory-stock.sql`): InventoryAvailableQTY de SellerCloud — **no** se expone en el catálogo del cliente (`get_catalog` no lo incluye), solo visible en el admin. Decide la disponibilidad en cada carga/sync (`>= 1` available, `0`/negativo preorder, respetando flash); NO toca `active`. null = "todavía no se sabe el stock" (distinto de 0 = sin stock). **Desde 2026-08-04 esa regla vive en un trigger de la tabla** (`products_availability_from_stock`, `migration-2026-08-04-order-stock.sql`) y no solo en cada camino de escritura: cualquier insert/update con `stock` no-null y `availability <> 'flash'` deja `availability` derivada del stock, venga del sync, del Excel, del bulk, del formulario, del descuento de un pedido atendido o de un request directo. Eso además tapó un agujero real: `apply_price_list` ponía `availability = 'available'` a todos los productos de un Excel de precios sin columna `Type`, con stock 0 incluido. El `stock` también **baja solo** al marcar un pedido Atendido (ver `apply_order_stock`) y es editable a mano en el formulario de la pestaña Productos. `deactivated_by_stock` (2026-08-12, boolean not null default false, `migration-2026-08-12-hide-out-of-stock.sql`): desde esa fecha el trigger no solo pone la etiqueta, también **despublica** — `stock <= 0` deja el producto en `preorder` **y** `active = false`, así que sale del catálogo (revierte a propósito media decisión del 2026-07-14: "stock 0 se muestra como pre-order, ocultarlo es manual"). La columna **no** es "está sin stock" (eso ya lo dice `stock`) sino "esta regla fue la que lo apagó", y es lo único que permite reactivarlo solo cuando entre stock sin resucitar de paso lo que apagó una persona ni la exclusión de no-catálogo (SKU `-SPECIAL`, beauty/electronics/support/packing/test), que tienen stock de sobra. Invariante: `true` = inactivo por falta de stock, vuelve solo con `stock >= 1`; `false` = si está inactivo lo apagó una persona y solo una persona lo reactiva. Un producto `flash` con stock 0 conserva la etiqueta 🔥 pero **también** se despublica (la etiqueta no publica nada). Quién borra la bandera a propósito, porque es decisión humana: el botón Desactivar (fila o selección) del panel, la columna `Activo` del Excel de productos, y el UPDATE de `apply_price_list` que desactiva lo que quedó fuera del archivo. `upc` (2026-07-14, text nullable, `migration-2026-07-14-product-upc.sql`): código de barras, dato interno del admin (**no** lo expone `get_catalog`), visible/editable en la pestaña Productos y buscable. **Desde 2026-08-13** (`migration-2026-08-13-exclude-box-skus.sql`) hay una segunda invariante de publicación, independiente del stock: un SKU terminado en `-SPECIAL` o `-BOX` (`is_noncatalog_sku`) queda `active = false` en todo insert/update, vía el trigger `products_enforce_noncatalog` — son variantes internas de SellerCloud (`-BOX` = el mismo perfume vendido por caja) y no se publican nunca; la única forma de vender uno es cambiarle el `sku` |
 | `product_prices` | Precio por producto+lista (clave compuesta) |
 | `flash_sales` | **LEGADO desde 2026-08-07**: ofertas con precio promo + fecha de expiración. La app ya no la lee (se eliminó la pestaña Flash Sales y la sección del catálogo). No se borró nada: la tabla y sus datos siguen ahí, sin migración de por medio, así que volver atrás es reponer código. `compute_order_items` todavía la consulta para revalorizar una línea vieja marcada `flash` de un pedido anterior — sin ofertas vigentes cae al precio de lista, que es lo correcto |
 | `orders` | Pedidos del checkout — fuente de verdad (precios recalculados en el servidor) con `status` 'new' \| 'done' \| 'cancelled'. `stock_applied` (2026-08-04, boolean not null default false, `migration-2026-08-04-order-stock.sql`): ¿este pedido ya descontó su stock? Marcar Atendido descuenta las cantidades de `products.stock`, reabrir/cancelar las devuelve, y esta bandera — **no** el estado — es la que evita el doble descuento (un pedido puede ir done → new → done varias veces). `request_id` (2026-08-05, uuid nullable + índice único **parcial** `where request_id is not null`, `migration-2026-08-05-order-capture.sql`): identifica al **carrito**, no al envío — `CartContext` lo genera una vez y lo rota al vaciar el carrito, así reintentar un envío que falló devuelve el pedido ya guardado en vez de duplicarlo. Null en los pedidos previos al cambio y en los que llegan de un frontend sin actualizar (de ahí que el índice sea parcial). Las dos columnas están blindadas por el trigger `orders_guard_items_edit` igual que `items`/`total`/`status`/`kind` |
@@ -1730,8 +1988,14 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
   PRODUCT_CATEGORY del export, **no** `category`/marca) en beauty/
   electronics/support/packing and shipping supplies/test. Misma regla
   replicada en la carga manual por Excel (`ProductsAdmin.jsx`,
-  `EXCLUDED_LINES`/`SPECIAL_SKU_PATTERN`) — cambiar una lista implica
-  cambiar la otra. **Desde 2026-07-14
+  `EXCLUDED_LINES` + `isNonCatalogSku` de `ui.jsx`) — cambiar una lista implica
+  cambiar la otra. **Desde 2026-08-13
+  (`migration-2026-08-13-exclude-box-skus.sql`)** el sufijo del SKU vive en su
+  propia función `is_noncatalog_sku(sku)` (`-SPECIAL` **+ `-BOX`**, el mismo
+  perfume vendido por caja) y `sync_is_noncatalog_product` la llama, así que el
+  cuerpo de `sync_upsert_products` no cambió. Esa función es además la que usan el
+  trigger `products_enforce_noncatalog` (los deja `active = false` siempre) y
+  `apply_price_list` (contador `blocked_noncatalog`). **Desde 2026-07-14
   (`migration-2026-07-14-inventory-stock.sql`)** el inventario del payload
   (`inventory` o `inventory_available_qty`, mapeado de
   `InventoryAvailableQTY`) se guarda en `products.stock` y controla la
@@ -1829,6 +2093,7 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
 - **Trigger `clients_enforce_owner_vendedora`** (2026-07-09; reescrito 2026-08-04 para listas compartidas): antes de cualquier `insert`/`update` en `clients`, si la lista elegida tiene dueñas en `price_list_owners` (ej. `'luzmar'`), el cliente tiene que quedar con **una de ellas** — si la vendedora que viene ya es dueña se respeta (así se reparten los clientes de una lista compartida), y si no se pisa con la dueña principal, sin importar qué mande el caller. Con una sola dueña el comportamiento es idéntico al original. Corre ANTES de evaluar las policies RLS de arriba, así que a una vendedora que no sea dueña ni siquiera le sirve saltarse la UI e insertar directo: el trigger fuerza `vendedora_id` a la principal, y `vendedora_insert_own_clients` (`vendedora_id = current_vendedora_id()`) rechaza la fila igual porque ya no coincide con su propio id. **Corre en TODO insert/update a propósito** (una versión intermedia se salteaba los updates que no tocaban `price_list_id`/`vendedora_id`, y se descartó porque dejaba huérfanas para siempre las filas de una dueña que se quitó de la lista: son estas escrituras las que las enderezan). Ojo al probar: como la regla respeta a cualquier dueña, un `update` que no cambia nada relevante tampoco cambia la asignación.
 - **Trigger `orders_guard_items_edit`** (2026-07-17, ampliado el mismo día; 2026-08-04 suma `stock_applied`): antes de cualquier `update` en `orders`, si cambian `items`, `total`, `status`, `kind` o `stock_applied` y no está prendida la bandera de sesión `app.allow_order_edit` (transacción-local, la prenden `update_order_items`/`update_order_status`/`convert_quote_to_order`, cada una antes de escribir), tira excepción. La policy `vendedora_update_own_orders` le da a una vendedora `update` crudo sobre sus propios pedidos (pensada solo para cambiar `status` desde `OrdersAdmin.jsx`); sin este trigger, esa misma policy le hubiera permitido reescribir cualquiera de esas columnas a mano, sin pasar por ninguna RPC ni quedar auditado — incluida `stock_applied`, con lo que podría saltearse o duplicar el descuento de stock de un pedido. Ojo al probarlo: el trigger compara con `is distinct from`, así que un `update` que escribe el **mismo** valor que ya estaba no cuenta como cambio y pasa (no es un agujero: no cambia nada).
 - **Trigger `products_availability_from_stock`** (2026-08-04; ampliado 2026-08-12): antes de cualquier `insert`/`update` en `products`, si `stock` no es null y `availability` no es `'flash'`, pisa `availability` con `stock >= 1 ? 'available' : 'preorder'`. **Desde 2026-08-12 también decide la publicación**: `stock <= 0` pone `active = false` + `deactivated_by_stock = true` (solo si venía activo, para no pisar la bandera de lo que ya estaba apagado), y `stock >= 1` reactiva **únicamente** lo que tenga la bandera puesta. Por eso un producto en 0 no puede quedar publicado venga la escritura de donde venga, y "Activar" a mano sobre uno sin stock no lo publica: lo deja marcado para publicarse cuando haya. Convierte en invariante de la tabla la regla que antes vivía repetida en cada camino de escritura (`sync_upsert_products` en SQL, `resolveAvailability()` en `ProductsAdmin.jsx`) y que `apply_price_list` rompía sin querer. No es seguridad sino consistencia de datos, pero el criterio es el mismo que `clients_enforce_owner_vendedora`: la garantía vive en la base, no en la UI.
+- **Trigger `products_enforce_noncatalog`** (2026-08-13, `migration-2026-08-13-exclude-box-skus.sql`): antes de cualquier `insert`/`update` en `products`, si `is_noncatalog_sku(sku)` (SKU terminado en `-SPECIAL` o `-BOX`) fuerza `active = false` y `deactivated_by_stock = false`. Es lo que hace que "nunca se muestran" sea cierto y no solo un backfill: `apply_price_list` escribe `active = true` para todo lo que trae precio, y los Excel de precios salen del mismo export de SellerCloud. **El orden importa**: los BEFORE ... FOR EACH ROW se disparan por orden alfabético de nombre y cada uno recibe el NEW del anterior, así que `products_availability_from_stock` corre primero (puede prender el producto cuando entra stock) y este tiene la última palabra. Si se renombra alguno de los dos, mantener ese orden. La bandera va en `false` a propósito: significa "vuelve cuando entre stock", y a un `-BOX` lo apaga su SKU. **`is_noncatalog_sku` no lleva `revoke execute from public`** (a diferencia de las funciones del sync) y sí un `grant execute` explícito a `authenticated, anon, service_role`: el privilegio EXECUTE de lo que se llama dentro de un trigger se chequea contra el usuario que hace el UPDATE — el rol `authenticated` del panel —, así que sin ese permiso cualquier edición de producto se cae con `permission denied for function`.
 - **Headers** (meta en `index.html` + `netlify.toml`): `Referrer-Policy:
   no-referrer` — crítico porque el token viaja en la URL (`?c=<token>`) y
   las imágenes de producto se cargan de dominios externos; sin esto el token
@@ -1932,6 +2197,21 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
   Precios), separado de "Inactivos": los primeros se arreglan solos con el
   próximo sync, los segundos son los únicos que hay que revisar a mano. El badge
   de estado de la tabla lleva 📦 en ese caso, con el porqué en el tooltip.
+- **SKU `-BOX`/`-SPECIAL`: inactivos para siempre** (2026-08-13). Son variantes
+  internas de SellerCloud (`-BOX` = el mismo perfume vendido por caja) y la base
+  las deja `active = false` escriba quien escriba (trigger
+  `products_enforce_noncatalog`). En el panel: contador/filtro **🚫 No-catálogo
+  (-BOX/-SPECIAL)** —son ~190 filas, y sin separarlas tapan a los inactivos que
+  sí hay que revisar—, badge 🚫 en la fila, y "Activar" que **avisa en vez de
+  mandar un PATCH que la base va a revertir** (de a uno no se manda nada; en
+  bloque el botón queda apagado con su motivo, y si la selección mezcla `-BOX`
+  con inactivos sin stock dice **los dos** motivos). El aviso del bulk separa
+  "1 activados · 🚫 2 siguen inactivos por ser -BOX/-SPECIAL", y el formulario
+  avisa al tildar Activo con un SKU así. **La salida, si alguna vez hay que
+  vender uno: cambiarle el SKU** (es editable en el formulario). La carga por
+  Excel tampoco los jala: `isNonCatalogSku` en `pages/admin/ui.jsx` es el espejo
+  de `is_noncatalog_sku` en la base — cambiar un sufijo implica cambiarlo en los
+  dos lados.
 
 ### Precios (Excel/CSV) — 2026-07-17: una lista por archivo + preview/confirmar
 - Elegir arriba a qué lista corresponde el archivo (selector con
@@ -1959,6 +2239,15 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
   cuándo. Del otro lado, el UPDATE que desactiva lo que quedó **fuera** del
   archivo apaga también `deactivated_by_stock`: lo saca una persona, así que no
   puede volver solo con el próximo inventario.
+- **Contador `blocked_noncatalog`** (2026-08-13,
+  `migration-2026-08-13-exclude-box-skus.sql`): las filas del archivo con SKU
+  `-BOX`/`-SPECIAL`, que **no se publican nunca**. Mismo problema que el de
+  arriba: contaban como "a reactivar" y no volvía ninguna. Chip "🚫 N no se
+  publican (-BOX/-SPECIAL)". Esas filas quedan fuera del UPDATE que pone
+  `active = true` (el trigger lo revertiría igual, y así tampoco se les pisa la
+  etiqueta), pero **el precio sí se guarda**: es un dato inerte, y no escribirlo
+  las mandaría al lote de "sacar de la lista", inflando el contador de
+  desactivados con productos que ya están apagados.
 - La RPC deduplica por SKU del lado del servidor (última fila del archivo
   gana): un SKU repetido ya no revienta el upsert con "ON CONFLICT DO
   UPDATE command cannot affect row a second time" (pasaba con el archivo
@@ -2282,3 +2571,5 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 55. **Un producto con stock 0 sale del catálogo (sigue en Pre-Order, pero desactivado)** (2026-08-12, a pedido del usuario: "cuando un producto quede con stock 0 en la base de datos, que se siga poniendo en pre-order pero que se desactive, es decir, que no salga en el catálogo") — `migration-2026-08-12-hide-out-of-stock.sql`, **corrida en producción el 2026-08-12** (confirmado por el usuario; había que correrla junto con el deploy, no después: sin la columna nueva el filtro no encuentra nada y los `update` que la mencionan fallan). Revierte a propósito media decisión del 2026-07-14: la etiqueta sigue siendo `preorder`, lo que cambia es la publicación. Columna nueva `products.deactivated_by_stock` = "esta regla fue la que lo apagó", que es lo único que permite reactivar solo por stock sin resucitar lo que apagó una persona ni la exclusión de no-catálogo. Un 🔥 con stock 0 también se despublica; `compute_order_items` pasa a buscar con `(active or deactivated_by_stock)` para no perder en silencio la línea de un carrito ya armado; `apply_price_list` gana el contador `blocked_by_stock` y su desactivación por quedar fuera del archivo borra la bandera. Detalle completo, los porqués y la verificación (10 bloques de assert en PostgreSQL 18 + 15 aserciones en navegador real) en la narrativa del principio.
 
 56. **"Las órdenes del cliente Robert Carlos Pacheco no se registraron"** (2026-08-12, incidente crítico de soporte) — **no era captura, era búsqueda.** El buscador de la bandeja de Pedidos filtraba con `name.toLowerCase().includes(q)`, o sea una **subcadena contigua**: el sync guarda el `Name` completo de SellerCloud ("Robert Edu Carlos Pacheco") y el negocio lo conoce por su `CorporateName`, que en el export real es literalmente "Robert Carlos" — así que buscarlo por el nombre con el que se lo nombra daba **cero resultados**, y una bandeja vacía se lee como "no se registró nada". Arreglado con `src/utils/search.js` (todos los términos, en cualquier orden, sin acentos), aplicado a **Pedidos** y **Clientes**; con una sola palabra se comporta igual que antes (11 consultas verificadas contra nombres reales del export, 0 diferencias), y los términos **no se reparten entre campos distintos** para no fabricar falsos positivos. En la misma revisión apareció el mismo síntoma por otra puerta: **`fetchAll` paginaba en paralelo ordenando por una clave con empates** (`product_prices` por `product_id`, que tiene una fila por lista de precio), y una fila que empata en el borde de una página puede salir en dos páginas o en **ninguna** — ahora acepta varias columnas de orden y cada call site pasa una combinación única. **Sin migración** (todo frontend). De paso quedó verificado contra producción que `migration-2026-08-05-order-capture.sql` **sí está corrida** (los docs la listaban como "pendiente y URGENTE" por error), y de paso que **6 de las 8 migraciones listadas como pendientes ya estaban aplicadas** — la única pendiente confirmada era `migration-2026-08-12-hide-out-of-stock.sql`, que el usuario corrió ese mismo día, junto con la confirmación de las tres que el sondeo no podía determinar: **al 2026-08-12 no queda ninguna migración pendiente**. Detalle completo, el truco para sondear qué hay vivo en PostgREST sin escribir nada, y qué queda por confirmar del lado de los datos, en la narrativa del principio.
+
+57. **Los SKU terminados en `-BOX` nunca se publican** (2026-08-13, a pedido del usuario: "los productos que terminen con sku -BOX automaticamente deben desactivarse, nunca se deben mostrar en el sistema") — `migration-2026-08-13-exclude-box-skus.sql`, **pendiente de correr, junto con el deploy**. Un `-BOX` es el mismo perfume que ya está en el catálogo pero vendido **por caja** (`ZX_PE-AB-M-636268-ZX-BOX` y `ZX_PE-AB-M-636268-ZX` son los dos "Blue Seduction 3.4 Oz Edt Men"); en el export real hay **77**, y como su `PRODUCT_CATEGORY` es `Perfume`/`Perfume - Arabes`, la exclusión de no-catálogo del 2026-07-13 (que mira `-SPECIAL` + categorías) **no los tapaba** y el sync los jalaba como productos normales. Se resolvió en tres capas: (1) el sufijo del SKU pasa a la función propia `is_noncatalog_sku(sku)` = `-SPECIAL` + `-BOX`, que `sync_is_noncatalog_product` ahora llama (el sync y el Excel de productos dejan de jalarlos sin reescribir `sync_upsert_products`); (2) **trigger `products_enforce_noncatalog`** que los deja `active = false` escriba quien escriba — no es redundante: `apply_price_list` escribe `active = true` para todo lo que trae precio y los Excel de precios salen del mismo export, o sea que un `-BOX` se republicaba solo cada semana; (3) backfill de los ya cargados, nunca DELETE. **El trigger mira solo el sufijo del SKU, no la regla completa**: el sufijo es estructural y la salida (si alguna vez hay que vender uno) es editarle el SKU desde el panel, mientras que `product_line` es texto libre de un export y **no** es editable en el panel — clavarla en un trigger dejaría un perfume mal categorizado imposible de activar. `deactivated_by_stock` queda en **false** (esa bandera significa "vuelve cuando entre stock", y a un `-BOX` lo apaga su SKU). Trampa de permisos verificada: `is_noncatalog_sku` **no** lleva `revoke execute from public` y sí un `grant execute` explícito a `authenticated, anon, service_role` — el EXECUTE de lo que se llama dentro de un trigger se chequea contra el rol que hace el UPDATE (`authenticated`), así que sin ese permiso se cae cualquier edición de producto. En el panel: contador/filtro/badge **🚫 No-catálogo (-BOX/-SPECIAL)**, "Activar" que avisa en vez de mandar un PATCH que la base revierte, y en Precios el contador `blocked_noncatalog` (chip "🚫 N no se publican"). Efecto avisado y no automatizado: si un pedido sin atender tiene una línea `-BOX`, `compute_order_items` la descarta al recalcular — el backfill **reporta cuántos pedidos así hay** con un `raise notice`, para revisarlos con la asesora. Detalle completo y la verificación (7 bloques de assert en PostgreSQL 18 desde el estado real de producción + 18 aserciones en navegador real, incluida la carga del `119389.xlsx`) en la narrativa del principio.
