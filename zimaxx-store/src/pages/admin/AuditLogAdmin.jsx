@@ -25,6 +25,8 @@ const ACTION_STYLES = {
   update_order_status: 'bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300',
   convert_quote_to_order: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
   recover_order_failure: 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300',
+  create_manual_order: 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300',
+  push_order_sellercloud: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
   set_admin: 'bg-ink text-secondary',
   create_admin_user: 'bg-ink text-secondary',
   set_user_password: 'bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300',
@@ -47,6 +49,8 @@ const ACTION_LABELS = {
   update_order_status: 'actionUpdateOrderStatus',
   convert_quote_to_order: 'actionConvertQuote',
   recover_order_failure: 'actionRecoverOrder',
+  create_manual_order: 'actionManualOrder',
+  push_order_sellercloud: 'actionPushSellerCloud',
   set_admin: 'actionSetAdmin',
   create_admin_user: 'actionCreateAdmin',
   set_user_password: 'actionSetPassword',
@@ -70,6 +74,8 @@ const ACTION_FILTERS = [
   ['update_order_status', 'actionUpdateOrderStatus'],
   ['convert_quote_to_order', 'actionConvertQuote'],
   ['recover_order_failure', 'actionRecoverOrder'],
+  ['create_manual_order', 'actionManualOrder'],
+  ['push_order_sellercloud', 'actionPushSellerCloud'],
   ['set_admin,create_admin_user', 'actionSetAdmin'],
   ['set_user_password', 'actionSetPassword'],
   ['add_price_list_owner,remove_price_list_owner,set_primary_price_list_owner', 'actionListOwner'],
@@ -147,6 +153,20 @@ export default function AuditLogAdmin() {
       ]
         .filter(Boolean)
         .join(' · ')
+    }
+    // Pedido cargado a mano desde el mensaje de WhatsApp (2026-08-17). El
+    // mensaje original está en detail.source_message; acá va lo que importa
+    // de un vistazo.
+    if (a.action === 'create_manual_order') {
+      const total = a.detail?.total != null ? money(a.detail.total) : '—'
+      const kind = a.detail?.kind === 'quote' ? t('quote') : t('order')
+      return `${kind} · ${a.detail?.line_count ?? 0} ${t('items')} · ${total}`
+    }
+    // Orden mandada a SellerCloud (2026-08-17): el número de allá es lo que
+    // permite cruzar los dos sistemas cuando algo no cuadra.
+    if (a.action === 'push_order_sellercloud') {
+      const total = a.detail?.total != null ? money(a.detail.total) : '—'
+      return `#${a.detail?.sellercloud_order_id ?? '—'} · On Hold · ${a.detail?.line_count ?? 0} ${t('items')} · ${total}`
     }
     if (a.action === 'convert_quote_to_order') {
       const total = a.detail?.total != null ? money(a.detail.total) : '—'

@@ -19,6 +19,11 @@ export default function VendedoresAdmin() {
   const [editingId, setEditingId] = useState(null)
   const [editPhone, setEditPhone] = useState('')
   const [phoneError, setPhoneError] = useState('')
+  // ID de empleado en SellerCloud (2026-08-18): viaja como Sales Rep en la
+  // orden que crea "Enviar a SellerCloud". Se edita acá porque es un dato de
+  // la vendedora, no del pedido.
+  const [editingRepId, setEditingRepId] = useState(null)
+  const [editRep, setEditRep] = useState('')
   const [linkEmail, setLinkEmail] = useState({}) // id -> valor del input de email
   const [linkBusyId, setLinkBusyId] = useState(null)
   const [linkError, setLinkError] = useState({}) // id -> mensaje de error
@@ -99,6 +104,26 @@ export default function VendedoresAdmin() {
       setVendedoras((prev) => prev.map((v) => (v.id === id ? { ...v, phone } : v)))
     }
     setEditingId(null)
+  }
+
+  // El input vacío guarda null (la orden entra sin Sales Rep, con aviso).
+  // Cualquier cosa que no sea un entero positivo no se guarda: un ID
+  // inventado es peor que ninguno, porque SellerCloud rechazaría la orden.
+  const saveRep = async (id) => {
+    const raw = editRep.trim()
+    const parsed = raw === '' ? null : Number(raw)
+    if (parsed !== null && (!Number.isInteger(parsed) || parsed <= 0)) {
+      setEditingRepId(null)
+      return
+    }
+    const { error } = await supabase
+      .from('vendedores')
+      .update({ sellercloud_rep_id: parsed })
+      .eq('id', id)
+    if (!error) {
+      setVendedoras((prev) => prev.map((v) => (v.id === id ? { ...v, sellercloud_rep_id: parsed } : v)))
+    }
+    setEditingRepId(null)
   }
 
   const remove = async (id) => {
@@ -243,6 +268,9 @@ export default function VendedoresAdmin() {
             <tr className="border-b border-line text-left text-[11px] uppercase tracking-wider text-primary/45">
               <th className="p-3">{t('name')}</th>
               <th className="p-3">{t('phone')}</th>
+              <th className="p-3" title={t('scRepIdHint')}>
+                {t('scRepId')}
+              </th>
               <th className="p-3">{t('assignedClients')}</th>
               <th className="p-3">{t('access')}</th>
               <th className="p-3" />
@@ -280,6 +308,33 @@ export default function VendedoresAdmin() {
                         <span title={t('phoneNeedsCountryCode')} className="text-red-600 dark:text-red-400">
                           ⚠️
                         </span>
+                      )}
+                    </button>
+                  )}
+                </td>
+                <td className="p-3 font-mono text-xs">
+                  {editingRepId === v.id ? (
+                    <input
+                      autoFocus
+                      value={editRep}
+                      onChange={(e) => setEditRep(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && saveRep(v.id)}
+                      onBlur={() => saveRep(v.id)}
+                      placeholder="123"
+                      inputMode="numeric"
+                      className="w-20 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
+                    />
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setEditingRepId(v.id)
+                        setEditRep(v.sellercloud_rep_id != null ? String(v.sellercloud_rep_id) : '')
+                      }}
+                      title={t('scRepIdHint')}
+                      className="inline-flex items-center gap-1 text-primary/70 hover:text-secondary-dark hover:underline"
+                    >
+                      {v.sellercloud_rep_id ?? (
+                        <span className="italic text-primary/35">{t('scRepIdMissing')}</span>
                       )}
                     </button>
                   )}

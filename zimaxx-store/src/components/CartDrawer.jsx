@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n'
 import { useCart } from '../context/CartContext'
 import { money } from '../utils/format'
 import { buildOrderMessage, whatsappUrl } from '../utils/whatsapp'
 import { downloadOrderPdf } from '../utils/pdf'
-import { supabase } from '../lib/supabase'
+import { clearPending, flushPending, loadPending, postWithRetry, savePending } from '../utils/orderOutbox'
 
 // Pedido mínimo del negocio: no se puede enviar una orden por debajo de
 // este monto.
@@ -18,14 +18,70 @@ export default function CartDrawer({ token, client }) {
   // el carrito se vacía (2026-08-04, a pedido del usuario), así que este
   // estado es lo que se muestra en lugar de "tu carrito está vacío".
   const [sent, setSent] = useState(null)
-  // Mismo par de valores, pero para el camino que falló: el pedido salió por
-  // WhatsApp y NO quedó registrado. A diferencia de `sent`, acá el carrito se
-  // conserva a propósito (2026-08-05) — es lo único que queda del pedido, y
-  // adivinar que se guardó bien es justamente lo que hizo que un pedido de
-  // ~10k se perdiera sin que nadie se enterara.
+  // El camino que falló: el pedido salió por WhatsApp y NO quedó registrado.
+  // A diferencia de `sent`, acá el carrito se conserva a propósito
+  // (2026-08-05) — es lo único que queda del pedido, y adivinar que se guardó
+  // bien es justamente lo que hizo que un pedido de ~10k se perdiera sin que
+  // nadie se enterara.
+  //
+  // `{ kind, reason }` desde 2026-08-17: no es lo mismo que no se haya podido
+  // hablar con la base ('error', se reintenta) que un rechazo del servidor
+  // ('rejected'). Un rechazo es determinista: reintentarlo falla igual siempre
+  // y cada intento suma una fila a `order_failures`. El pedido ahí no está
+  // perdido —quedó registrado con su payload y la asesora lo rescata desde el
+  // panel—, así que el aviso lo dice y no ofrece reintentar.
   const [failed, setFailed] = useState(null)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
+  // El efecto de reintento vive desde el montaje y lee el carrito de AHORA, no
+  // el del render en que se creó: entre que el pedido quedó pendiente y el
+  // cliente vuelve, puede haber empezado otro carrito.
+  const cartRef = useRef(cart)
+  cartRef.current = cart
+
+  // Reintenta el pedido que quedó sin registrar (2026-08-17). Corre al abrir
+  // el catálogo y cada vez que la pestaña vuelve a primer plano — que es
+  // exactamente cuando el cliente regresa de mandar el WhatsApp. Es seguro
+  // porque create_order es idempotente por request_id: si el intento anterior
+  // sí había entrado, esto devuelve ese mismo pedido, no otro.
+  //
+  // Va antes del `return null` de abajo a propósito: el drawer cerrado
+  // devuelve null pero sigue montado, así que este efecto corre igual aunque
+  // el cliente nunca abra el carrito.
+  useEffect(() => {
+    if (!token) return
+    let cancelled = false
+
+    const flush = async () => {
+      const pending = loadPending()
+      if (!pending) return
+      const res = await flushPending(token)
+      if (cancelled || res === null) return
+      if (res === 'error') {
+        // Sigue sin entrar: el aviso tiene que estar visible aunque el estado
+        // de React se haya perdido en una recarga o al cerrar el navegador.
+        setFailed({ kind: pending.kind, reason: 'error' })
+        return
+      }
+      setFailed(res === 'rejected' ? { kind: pending.kind, reason: 'rejected' } : null)
+      // El carrito se vacía solo si lo que acaba de registrarse es ESTE
+      // carrito. Si el cliente ya armó otro pedido, el suyo no se toca.
+      if (res === 'ok' && pending.requestId === cartRef.current.requestId) {
+        setSent(pending.kind)
+        cartRef.current.clear()
+      }
+    }
+
+    flush()
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') flush()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [token])
 
   if (!cart.open) return null
 
@@ -40,73 +96,32 @@ export default function CartDrawer({ token, client }) {
     setSent(null)
   }
 
-  // Registra el pedido/cotización. Devuelve:
-  //   'ok'       → quedó guardado
-  //   'rejected' → el RPC lo rechazó (token, tope de líneas, ítems inválidos).
-  //                Reintentar da lo mismo siempre; el motivo ya quedó en
-  //                order_failures, que es donde hay que mirar.
-  //   'error'    → no se pudo hablar con la base (red, timeout, 5xx). Esto sí
-  //                se reintenta.
-  const saveOrder = async (items, total, kind, requestId) => {
-    const args = {
-      p_token: token,
-      p_items: items,
-      p_total: total,
-      p_kind: kind,
-      p_request_id: requestId,
-    }
-    try {
-      const { data, error } = await supabase.rpc('create_order', args)
-      if (!error) return data ? 'ok' : 'rejected'
-      // Base sin migration-2026-08-05-order-capture.sql: la función de 5
-      // argumentos no existe y PostgREST no la encuentra (PGRST202). Se
-      // reintenta sin p_request_id para no dejar el checkout caído si el
-      // frontend se despliega antes de correr el SQL.
-      //
-      // La condición mira el CÓDIGO, no el texto: con un match laxo, cualquier
-      // error que mencionara la función mandaría por el camino sin idempotencia
-      // y un intento que sí se guardó podría terminar duplicado. Acá no puede
-      // pasar: si la firma de 5 argumentos no existe, el primer intento no
-      // guardó nada.
-      const notFound =
-        error.code === 'PGRST202' ||
-        /could not find the function/i.test(error.message ?? '')
-      if (notFound) {
-        const { p_request_id, ...legacy } = args
-        const retry = await supabase.rpc('create_order', legacy)
-        if (!retry.error) return retry.data ? 'ok' : 'rejected'
-      }
-      console.warn('No se pudo registrar la orden:', error)
-      return 'error'
-    } catch (e) {
-      console.warn('No se pudo registrar la orden:', e)
-      return 'error'
-    }
-  }
-
-  // Reintenta solo los fallos de transporte. Es seguro porque create_order es
-  // idempotente por request_id: si el intento anterior sí llegó y lo único que
-  // se perdió fue la respuesta, esto devuelve ese mismo pedido, no otro.
-  const saveWithRetry = async (items, total, kind, requestId, tries) => {
-    let res = 'error'
-    for (let n = 0; n < tries; n++) {
-      res = await saveOrder(items, total, kind, requestId)
-      if (res !== 'error') return res
-      if (n < tries - 1) await new Promise((r) => setTimeout(r, 700 * (n + 1)))
-    }
-    return res
-  }
+  // Registra el pedido/cotización. Los tres estados que devuelve ('ok',
+  // 'rejected', 'error') y el porqué del fetch directo con keepalive en vez de
+  // supabase.rpc están explicados en src/utils/orderOutbox.js.
+  const save = (items, total, kind, requestId, tries = 1) =>
+    postWithRetry({ token, items, total, kind, requestId }, tries)
 
   // Cierra el envío según cómo terminó el registro. El carrito se vacía solo
   // cuando el pedido está realmente guardado.
   const settle = (kind, res) => {
     if (res === 'ok') {
+      clearPending()
       setFailed(null)
       setSent(kind)
       cart.clear()
-    } else {
+    } else if (res === 'rejected') {
+      // El servidor lo recibió y lo rechazó: ya quedó en order_failures con su
+      // payload y la asesora lo rescata desde el panel. Insistir no cambia el
+      // resultado y cada intento suma otra fila, así que sale de pendientes.
+      clearPending()
       setSent(null)
-      setFailed(kind)
+      setFailed({ kind, reason: 'rejected' })
+    } else {
+      // Queda pendiente en el almacenamiento del teléfono: lo reintenta el
+      // efecto de arriba en esta misma visita o en la siguiente.
+      setSent(null)
+      setFailed({ kind, reason: 'error' })
     }
   }
 
@@ -124,15 +139,18 @@ export default function CartDrawer({ token, client }) {
     // aviso — un cliente reportó justo esto (2026-08-13): no podía ni pedir
     // por WhatsApp ni descargar el PDF.
     try {
-      const first = await saveOrder(items, total, 'order', requestId)
+      // El intento se graba en el teléfono ANTES de mandarlo: si el navegador
+      // descarta la pestaña al saltar a WhatsApp, esto es lo único que queda
+      // del pedido y es lo que permite reintentarlo después.
+      savePending({ requestId, token, items, total, kind: 'order' })
+      const first = await save(items, total, 'order', requestId)
       // WhatsApp se abre igual si el registro falló: la asesora recibe la
       // lista y el pedido no se pierde del todo. Va antes de los reintentos
       // para que el navegador siga tratando la ventana como consecuencia del
       // click.
       const msg = buildOrderMessage({ t, clientName, items, total })
       window.open(whatsappUrl(client?.vendedora_phone, msg), '_blank')
-      const res =
-        first === 'error' ? await saveWithRetry(items, total, 'order', requestId, 2) : first
+      const res = first === 'error' ? await save(items, total, 'order', requestId, 2) : first
       settle('order', res)
     } catch (e) {
       console.warn('Checkout falló de forma inesperada:', e)
@@ -152,7 +170,8 @@ export default function CartDrawer({ token, client }) {
       await downloadOrderPdf({ t, clientName, items, total })
       // Registrarlo como cotización en el panel (2026-07-17, a pedido del
       // usuario). El PDF ya se descargó, nada bloquea al cliente.
-      const res = await saveWithRetry(items, total, 'quote', requestId, 3)
+      savePending({ requestId, token, items, total, kind: 'quote' })
+      const res = await save(items, total, 'quote', requestId, 3)
       settle('quote', res)
     } catch (e) {
       // Si downloadOrderPdf tira (jsPDF sin poder cargarse con mala señal,
@@ -169,10 +188,15 @@ export default function CartDrawer({ token, client }) {
   // vuelve a abrir WhatsApp ni a bajar el PDF: eso ya salió.
   const handleRetrySave = async () => {
     if (cart.items.length === 0 || busy) return
+    const kind = failed?.kind ?? 'order'
     setBusy(true)
     try {
-      const res = await saveWithRetry(cart.items, cart.total, failed, cart.requestId, 3)
-      settle(failed, res)
+      // El cliente pudo haber tocado el carrito desde el intento fallido: se
+      // regraba el pendiente con lo que hay ahora, con el MISMO request_id
+      // (sigue siendo el mismo pedido, no uno nuevo).
+      savePending({ requestId: cart.requestId, token, items: cart.items, total: cart.total, kind })
+      const res = await save(cart.items, cart.total, kind, cart.requestId, 3)
+      settle(kind, res)
     } catch (e) {
       console.warn('Reintento falló de forma inesperada:', e)
     } finally {
@@ -230,23 +254,39 @@ export default function CartDrawer({ token, client }) {
                   (2026-08-05). Va arriba de todo y en rojo porque antes esto
                   era una línea ámbar dentro del acuse de ✓ con el carrito ya
                   vacío: nadie lo leía y el pedido se perdía. */}
-              {failed && (
-                <div className="mb-3 rounded-xl border-2 border-red-500 bg-red-50 p-3">
-                  <p className="text-xs font-bold uppercase tracking-wide text-red-700">
-                    ⚠️ {t('saveFailedTitle')}
+              {failed?.reason === 'rejected' ? (
+                // El pedido SÍ llegó: quedó en order_failures con su payload y
+                // el panel de la asesora lo muestra en rojo con un botón para
+                // rescatarlo. No es el mismo problema que "no se pudo guardar"
+                // y no lleva botón de reintentar: el rechazo es determinista,
+                // insistir falla igual y solo agrega filas al panel.
+                <div className="mb-3 rounded-xl border-2 border-secondary bg-gold-pale/60 p-3">
+                  <p className="text-xs font-bold uppercase tracking-wide text-secondary-dark">
+                    ⚠️ {t('saveRejectedTitle')}
                   </p>
-                  <p className="mt-1.5 text-xs leading-relaxed text-red-900/80">
-                    {failed === 'quote' ? t('quoteSaveWarn') : t('orderSaveFailed')}
+                  <p className="mt-1.5 text-xs leading-relaxed text-primary/80">
+                    {t('orderRejected')}
                   </p>
-                  <p className="mt-1.5 text-xs leading-relaxed text-red-900/80">{t('cartKept')}</p>
-                  <button
-                    onClick={handleRetrySave}
-                    disabled={busy}
-                    className="mt-2.5 w-full rounded-lg bg-red-600 py-2 text-xs font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {busy ? t('retrying') : t('retrySave')}
-                  </button>
                 </div>
+              ) : (
+                failed && (
+                  <div className="mb-3 rounded-xl border-2 border-red-500 bg-red-50 p-3">
+                    <p className="text-xs font-bold uppercase tracking-wide text-red-700">
+                      ⚠️ {t('saveFailedTitle')}
+                    </p>
+                    <p className="mt-1.5 text-xs leading-relaxed text-red-900/80">
+                      {failed.kind === 'quote' ? t('quoteSaveWarn') : t('orderSaveFailed')}
+                    </p>
+                    <p className="mt-1.5 text-xs leading-relaxed text-red-900/80">{t('cartKept')}</p>
+                    <button
+                      onClick={handleRetrySave}
+                      disabled={busy}
+                      className="mt-2.5 w-full rounded-lg bg-red-600 py-2 text-xs font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {busy ? t('retrying') : t('retrySave')}
+                    </button>
+                  </div>
+                )
               )}
 
               {/* Disponibilidad/precio sujetos a cambio (2026-08-04, a pedido
@@ -347,7 +387,7 @@ export default function CartDrawer({ token, client }) {
               <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
                 <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.52.149-.174.198-.298.297-.497.1-.198.05-.371-.025-.52-.074-.149-.668-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z" />
               </svg>
-              {t('checkout')}
+              {busy ? t('retrying') : t('checkout')}
             </button>
             <div className="flex gap-2">
               <button

@@ -7,6 +7,7 @@ import { searchTerms, matchesTerms } from '../../utils/search'
 import { downloadOrderExcel } from '../../utils/excel'
 import { downloadOrderPdf } from '../../utils/pdf'
 import { SearchIcon, inputCls, useInfiniteRows } from './ui'
+import ManualOrderModal from './ManualOrderModal'
 
 // Estilos de badge por estado (2026-07-15 agrega 'cancelled': un pedido
 // se arma y confirma, pero a veces el cliente lo cancela después).
@@ -79,6 +80,9 @@ export default function OrdersAdmin() {
   const [failures, setFailures] = useState([])
   const [recovering, setRecovering] = useState(null) // id del que se está rescatando
   const [recoverError, setRecoverError] = useState(null) // { id, message }
+  const [manualOpen, setManualOpen] = useState(false)
+  const [pushing, setPushing] = useState(null) // id del pedido que se está mandando
+  const [pushError, setPushError] = useState(null) // { id, message }
   // Un fallo sin cliente (token inválido) o sin ítems no tiene a quién
   // asignárselo — "Recuperar" ni aparece — y antes se quedaba en el banner
   // para siempre sin ninguna acción posible (2026-08-13, reportado por el
@@ -111,6 +115,46 @@ export default function OrdersAdmin() {
     setOrders(list)
     loadLivePricing(list)
     return list
+  }
+
+  // Manda el pedido a SellerCloud como orden On Hold (2026-08-17). El trabajo
+  // real lo hace la Edge Function `sellercloud-push-order`: el usuario y la
+  // contraseña de la API no pueden vivir en el navegador. Acá solo se dispara
+  // y se muestra el resultado.
+  const pushToSellerCloud = async (order) => {
+    if (pushing) return
+    setPushError(null)
+    setPushing(order.id)
+    try {
+      const { data, error } = await supabase.functions.invoke('sellercloud-push-order', {
+        body: { order_id: order.id },
+      })
+      if (error) {
+        // supabase-js devuelve un mensaje genérico ante un no-2xx ("Edge
+        // Function returned a non-2xx status code"): el motivo real que arma
+        // la función viene en el cuerpo, hay que leerlo de error.context.
+        // Mismo caso que admin-create-vendedora-user.
+        let message = error.message
+        try {
+          const detail = await error.context?.json?.()
+          if (detail?.error) message = detail.error
+        } catch {
+          /* se queda el genérico */
+        }
+        setPushError({ id: order.id, message })
+      } else if (data?.warning) {
+        // La orden entró pero le faltó un dato (Sales Rep o Marketing
+        // Source): se corrige para la próxima, y eso no se puede tragar en
+        // silencio.
+        setPushError({ id: order.id, message: data.warning })
+      }
+    } catch (e) {
+      setPushError({ id: order.id, message: e.message })
+    }
+    setPushing(null)
+    // Se recargan los pedidos igual que después de cualquier otra acción: si
+    // salió bien, la fila pasa a mostrar el número de orden de SellerCloud.
+    loadOrders().catch(() => {})
   }
 
   const loadFailures = () =>
@@ -397,11 +441,45 @@ export default function OrdersAdmin() {
     </div>
   )
 
+  // Cargar a mano el pedido que llegó por WhatsApp y no al sistema
+  // (2026-08-17). Va acá, en la misma pantalla donde se ve el aviso rojo de
+  // los que sí dejaron rastro: es el mismo problema visto desde el otro lado.
+  // Desde 2026-08-18 el mismo modal también lee el PDF de una cotización
+  // (generado por la app) y lo convierte en pedido: dos botones, un modal —
+  // manualOpen guarda con qué pestaña abrir ('text' | 'pdf').
+  const manualBlock = (
+    <>
+      <span className="inline-flex flex-wrap gap-2">
+        <button
+          onClick={() => setManualOpen('text')}
+          className="rounded-xl border-2 border-primary px-4 py-2 text-sm font-semibold transition-colors hover:bg-ink hover:text-secondary"
+        >
+          {t('manualOrderButton')}
+        </button>
+        <button
+          onClick={() => setManualOpen('pdf')}
+          className="rounded-xl border-2 border-primary px-4 py-2 text-sm font-semibold transition-colors hover:bg-ink hover:text-secondary"
+        >
+          {t('pdfOrderButton')}
+        </button>
+      </span>
+      <ManualOrderModal
+        open={!!manualOpen}
+        initialTab={manualOpen === 'pdf' ? 'pdf' : 'text'}
+        onClose={() => setManualOpen(false)}
+        onCreated={() => {
+          loadOrders().catch(() => {})
+        }}
+      />
+    </>
+  )
+
   if (orders.length === 0) {
     return (
       <div className="space-y-4">
         <h2 className="text-xl font-bold">{t('orders')}</h2>
         {failuresNotice}
+        {manualBlock}
         <p className="text-primary/60">{t('noOrders')}</p>
       </div>
     )
@@ -443,6 +521,8 @@ export default function OrdersAdmin() {
       )}
 
       {failuresNotice}
+
+      <div>{manualBlock}</div>
 
       <div className="flex flex-col gap-2 md:flex-row">
         <div className="relative flex-1">
@@ -630,6 +710,38 @@ export default function OrdersAdmin() {
                         {t('downloadExcel')}
                       </button>
                     </span>
+                    {/* SellerCloud (2026-08-17; modalidad 2026-08-18): solo
+                        pedidos reales, una sola vez — mientras haya número de
+                        orden allá, en vez del botón se muestra ese número
+                        (duplicar una orden en SellerCloud obliga a ir a
+                        cancelarla a mano) — y solo pedidos ATENDIDOS: el envío
+                        ya no pone On Hold allá, así que la revisión humana es
+                        marcarlo Atendido acá. Hasta entonces el botón se ve
+                        deshabilitado con la explicación en el tooltip, en vez
+                        de esconderse: un botón que aparece "de la nada" al
+                        atender es más difícil de descubrir. La función igual
+                        lo exige del lado del servidor. */}
+                    {o.kind === 'order' && o.status !== 'cancelled' && (
+                      <span className="inline-flex items-center gap-1.5">
+                        {o.sellercloud_order_id ? (
+                          <span className="whitespace-nowrap rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">
+                            {t('scPushed', { id: o.sellercloud_order_id })}
+                          </span>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (o.status === 'done') pushToSellerCloud(o)
+                            }}
+                            disabled={pushing === o.id || o.status !== 'done'}
+                            title={o.status !== 'done' ? t('scPushNeedsDone') : undefined}
+                            className="whitespace-nowrap rounded-full border border-indigo-400 px-2.5 py-1 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
+                          >
+                            {pushing === o.id ? t('scPushing') : t('scPush')}
+                          </button>
+                        )}
+                      </span>
+                    )}
                     {(canEdit || canConvert) && (
                       <span className="inline-flex gap-1.5">
                         {canEdit && (
@@ -659,6 +771,22 @@ export default function OrdersAdmin() {
                     {convertError?.id === o.id && (
                       <p className="max-w-[12rem] text-right text-[11px] font-medium text-red-600 dark:text-red-400">
                         {convertError.message}
+                      </p>
+                    )}
+                    {/* El motivo por el que no entró queda guardado en el
+                        pedido (`sellercloud_error`), así se sigue viendo al
+                        recargar y no solo en el momento de apretar. Los
+                        motivos que vienen de la API traen la URL y el cuerpo
+                        de la respuesta —largos a propósito, es lo único con
+                        lo que se puede arreglar el secret—, así que el bloque
+                        recorta por alto y scrollea en vez de estirar la
+                        fila. */}
+                    {(pushError?.id === o.id || o.sellercloud_error) && !o.sellercloud_order_id && (
+                      <p
+                        title={pushError?.id === o.id ? pushError.message : o.sellercloud_error}
+                        className="ml-auto max-h-24 max-w-[16rem] select-text overflow-y-auto whitespace-pre-wrap break-words text-left text-[11px] font-medium text-red-600 dark:text-red-400"
+                      >
+                        {pushError?.id === o.id ? pushError.message : o.sellercloud_error}
                       </p>
                     )}
                   </div>

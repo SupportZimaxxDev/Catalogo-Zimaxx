@@ -314,6 +314,21 @@ export default function MetricsAdmin() {
             />
             <Kpi label={t('metricsConverted')} value={data.cotizaciones_convertidas} />
             <Kpi label={t('metricsCancelled')} value={totals.cancelados} />
+            {/* Pedidos que salieron directo a SellerCloud (2026-08-18). "—" y
+                no 0 cuando la RPC es la vieja (sin la migración de hoy): un
+                cero diría "no se envió ninguno" y no es eso lo que se sabe.
+                El histórico va en la leyenda porque el KPI grande respeta el
+                período elegido, como todos los demás. */}
+            <Kpi
+              label={t('metricsSellerCloud')}
+              value={totals.sellercloud_enviados ?? '—'}
+              muted={totals.sellercloud_enviados === undefined}
+              hint={
+                data.sellercloud_total !== undefined
+                  ? t('metricsSellerCloudTotal', { n: data.sellercloud_total })
+                  : undefined
+              }
+            />
           </div>
 
           <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-primary/50">

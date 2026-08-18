@@ -1415,6 +1415,316 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   sigue pudiendo pedir. Re-aplicada (idempotente) y con el preflight cortando a
   propósito en una base sin `products.upc`.
 
+- [ ] **Carga de Excel equivocada en Productos** (2026-08-17): un admin subió
+  `124758.xlsx` —el export **general** de SellerCloud, 8,272 filas— en vez del
+  archivo de catálogo, y se crearon del orden de 3,000 productos que no van.
+  El filtro de no-catálogo descartó 1,643 filas y dejó pasar 6,616, de las
+  cuales **1,518 no eran perfume**: 1,182 con la categoría corrupta del export
+  (`855696`/`855824`/`856208`), 255 `Beauty and Health` (la lista
+  `EXCLUDED_LINES` tiene `beauty` y compara por igualdad exacta), 55
+  `Office Supply`, 16 sin categoría y 10 entre `Home`/`Party`/`Toys`.
+  **Impacto real acotado**: la carga de productos no toca precios y desde
+  `migration-2026-08-06-require-price.sql` un producto sin precio `> 0` no sale
+  en el catálogo, así que ensuciaron el panel admin sin llegar al cliente.
+  **Limpieza**: `supabase/cleanup-2026-08-17-carga-excel-erronea.sql`
+  (**pendiente de correr**) — no es una migración, es un script de una sola vez
+  para el SQL Editor: identifica la tanda por `created_at`, la congela en una
+  tabla de respaldo con RLS y una columna `a_borrar` que gobierna tanto el
+  apagado como el borrado, apaga primero (reversible) y borra después, con un
+  paso de deshacer que reinserta con los mismos `id`. Probado en un PostgreSQL
+  18 desechable con réplica del esquema, en los dos escenarios (borrar toda la
+  tanda / perdonar los perfumes nuevos): el catálogo viejo queda intacto, el
+  producto apagado a mano no se toca, uno apagado por stock que se decidió
+  conservar **no** se borra, el cascade se lleva `product_prices`/`flash_sales`
+  y el pedido que incluía uno de los borrados sigue legible (snapshot jsonb).
+  Lo que el script **no** recupera: los SKU que ya existían y el archivo pisó
+  (nombre, categoría, foto, activo, stock, upc) — eso es backup/PITR.
+  **Pendiente aparte**: tapar el agujero del filtro (comparación exacta contra
+  una lista que solo nombra lo conocido) en los dos lados a la vez —
+  `EXCLUDED_LINES` en `ProductsAdmin.jsx` y `sync_is_noncatalog_product` en SQL.
+
+- [x] **Pedidos que salen por WhatsApp y no llegan a la base** (2026-08-17, a
+  pedido del usuario). Lo de 2026-08-05 (`order_failures`) solo ve el pedido que
+  **llega y el servidor rechaza**; faltaba el que **nunca llega**, que no deja
+  rastro en ninguna parte. Cuatro agujeros en `CartDrawer.jsx`: los reintentos
+  corrían **después** de abrir WhatsApp, con la pestaña ya en segundo plano,
+  donde los navegadores móviles congelan los `setTimeout`; el POST de
+  `supabase.rpc` no lleva `keepalive`, así que moría si la pestaña se
+  descargaba; no había timeout, así que con mala señal el fetch quedaba colgado;
+  y el aviso de "no quedó registrado" era estado de React, o sea que una recarga
+  lo borraba y el cliente veía su carrito lleno sin advertencia. **Arreglo**
+  (solo frontend, sin migración, `src/utils/orderOutbox.js` nuevo): POST directo
+  a PostgREST con `keepalive` y timeout de 5 s; el intento se graba en
+  `localStorage` antes de mandarse y se reintenta al abrir el catálogo y en cada
+  `visibilitychange` —seguro por el `request_id`, que ya hacía idempotente a
+  `create_order`—; el payload se adelgaza a `{id, qty, flash}`, lo único que lee
+  `compute_order_items`; y un pendiente se descarta si es de otro cliente
+  (`tokenHint`) o tiene más de 24 h. Además el drawer ahora distingue el rechazo
+  del servidor (aviso ámbar, sin botón de reintentar, porque el rechazo es
+  determinista y cada intento sumaba una fila a `order_failures`) del fallo de
+  red (aviso rojo con "Reintentar", como antes). **Verificado con Playwright
+  contra el build real** con toda la red interceptada: 17 comprobaciones, entre
+  ellas que WhatsApp se sigue abriendo aunque el registro falle y que el
+  reintento automático reusa el mismo `request_id`.
+  **Pendiente decidir**: un código de referencia del pedido en el mensaje de
+  WhatsApp + buscador por ref en el panel, para que la vendedora pueda verificar
+  si lo que recibió en el chat existe en el sistema.
+
+- [x] **Pedido → SellerCloud como orden On Hold** (2026-08-17, a pedido del
+  usuario; `migration-2026-08-17-sellercloud-push.sql` **corrida** y la Edge
+  Function **desplegada** — ambas comprobadas en producción el 2026-08-18 con la
+  anon key y con `supabase secrets list`). Botón **"📦 Enviar a
+  SellerCloud"** por fila en la bandeja de Pedidos: crea la orden allá y la deja
+  **On Hold** para que la vendedora la confirme desde SellerCloud. Reemplaza el
+  paso manual de bajar el Excel de `UploadTemplate.xls` y subirlo al bulk-order
+  upload. **No es automático a propósito** (decisión del usuario): se revisa
+  antes de mandar. Piezas: `supabase/functions/sellercloud-push-order/`
+  (`sellercloud.ts`, el cliente de la API, escrito sin nada de Deno para poder
+  probarlo desde Node; `index.ts`, el envoltorio) y la migración, que agrega
+  `orders.sellercloud_order_id` / `sellercloud_pushed_at` / `sellercloud_error`
+  y la RPC `mark_order_sellercloud`. Decisiones: los datos del cliente (email y
+  direcciones, obligatorios para crear la orden) se leen de SellerCloud en el
+  momento del envío con el `clients.sellercloud_id` que ya llenaba el sync — no
+  se copian a nuestra base; el SKU ya es el `ProductID` de SellerCloud; el
+  precio que viaja es el nuestro; una sola vez por pedido (índice único sobre
+  el id de la orden); si el On Hold falla pero la orden se creó, se devuelve el
+  número con el aviso en vez de decir "no se mandó"; el motivo del fallo se
+  guarda en el pedido para que se vea al recargar; solo `kind='order'`; y el
+  permiso y la auditoría viven en la RPC, llamada con el JWT de quien apretó el
+  botón (la función nunca usa service_role). **Verificado con 48
+  comprobaciones**: 26 del cliente de la API contra un SellerCloud falso, 14 de
+  la RPC contra un PostgreSQL 18 desechable y 8 de la pantalla con Playwright.
+  **No se pudo probar contra la API real** (hacen falta credenciales y tocar
+  producción): por eso la respuesta de `Customers/{id}` se lee de forma
+  defensiva y los errores dicen qué campo faltó.
+  **Los 5 secrets ya están cargados** (`SELLERCLOUD_BASE_URL / USERNAME /
+  PASSWORD / COMPANY_ID / WAREHOUSE_ID`, vistos en `supabase secrets list`;
+  `COMPANY_ID` = 172, igual que el sync). **Sin pendientes de deploy.**
+
+  - **2026-08-18 — el "Unexpected token '<', \"<!doctype \"... is not valid
+    JSON" al probar con un cliente de prueba.** No era un bug de datos: la API
+    de SellerCloud contestó un **200 con una página HTML** (login/portal, no
+    JSON) y el `res.json()` sin guarda lo escupía crudo, sin decir en qué paso
+    ni contra qué URL. Reproducido idéntico carácter por carácter en Node
+    contra un server falso. Se endureció `sellercloud.ts`: **una sola lectura
+    del cuerpo como texto + `JSON.parse` a mano** (`readJson`), y el error
+    ahora trae **paso + status + Content-Type + URL + primeros 300 bytes**; si
+    el cuerpo parece HTML agrega la pista de que casi seguro **`SELLERCLOUD_BASE_URL`
+    apunta al sitio/portal y no a `https://<servidor>.api.sellercloud.com`**.
+    Además: `normalizeBaseUrl` recorta `/rest/api`, `/rest`, `/api` y barras
+    finales del secret (el error de tipeo que deja la URL en
+    `…/rest/api/rest/api/token`), `index.ts` valida que empiece con `https://`
+    con un mensaje claro, y `setOnHold` prueba las dos rutas documentadas
+    (`/api/Orders/StatusCode` y su variante `/rest/api/...`) solo ante 404/405,
+    nunca ante 401/403/500 para no tapar el motivo real. La fila del panel
+    ahora muestra el motivo largo con scroll (`max-h-24`, `whitespace-pre-wrap`)
+    en vez de estirarse. **Verificado con 80 comprobaciones** (server HTTP
+    falso, incluye el caso reportado, credenciales 401, cuerpo vacío, HTML en
+    cada paso, hold por ruta alternativa, `normalizeBaseUrl`) y build del
+    front OK. **Resuelto el mismo día en dos pasos**, guiados por el mensaje
+    nuevo de cada intento:
+    1. El secret apuntaba al **portal web** (`https://fc2.delta.sellercloud.com`
+       → devolvía la página de Login). El host correcto de la API para esta
+       cuenta es **`https://fc2.api.sellercloud.com`** (patrón: portal
+       `<srv>.delta.` → API `<srv>.api.`; se confirmó con un POST de prueba a
+       `/rest/api/token` de los candidatos: solo ese contesta JSON). El usuario
+       corrió el `supabase secrets set` — el classifier bloquea escribir
+       secrets de producción desde acá, y está bien que así sea.
+    2. Con el host bueno cayó el segundo bug, este sí nuestro: `readJson`
+       parseaba el cuerpo **recortado a 2 KB** (el límite era para mensajes de
+       error, no para parsear) y la respuesta real de `Customers/{id}` lo pasa
+       de sobra → "la respuesta no es JSON" sobre JSON válido. `readBody` ahora
+       devuelve el cuerpo entero y el recorte quedó solo en `failure()`, que es
+       quien arma el mensaje. De paso, como la respuesta real anida todo bajo
+       `General`, `addressesOf` también busca `General.ShippingAddress` /
+       `General.BillingAddress`, y si no encuentra dirección el error **lista
+       las claves recibidas** para ajustar el mapeo sin adivinar.
+    3. Ese listado de claves reveló el tercer y último ajuste: la respuesta
+       real **no trae `ShippingAddress`/`BillingAddress` sueltas** — las
+       claves de nivel superior son `General, Internal, OrderOptions,
+       Personal, Addresses, WholesaleOptions, CustomerGroups, CreditCards,
+       CustomColumns, NotesCount, IsModified` — sino una **lista `Addresses`**.
+       `fromAddressList` elige de ahí: la entrada marcada como envío o
+       facturación por cualquier bandera booleana en true que nombre
+       ship/bill (`IsDefaultShipping`...) o una clave `...Type...` cuyo valor
+       lo nombre (`AddressType: "Shipping"`), y si ninguna está marcada, la
+       primera (el mayorista típico tiene una sola). `Addresses` vacía da un
+       error distinto a propósito ("cargásela allá") porque se arregla en
+       SellerCloud, no en el código. Cubierto con la respuesta real (>2 KB,
+       anidada bajo `General`, direcciones en lista, ID 1789292):
+       **80 comprobaciones** en total. Redesplegada el 2026-08-18.
+
+- [x] **Subir el PDF de una cotización y convertirlo en pedido** (2026-08-18,
+  a pedido del usuario; sin migración — reusa las RPC del alta manual). La
+  cotización que el catálogo genera en PDF (jsPDF, `src/utils/pdf.js`) ahora
+  puede volver al sistema: botón **"📄 Cargar cotización desde PDF"** en la
+  pestaña Pedidos, que abre el mismo modal del alta por WhatsApp
+  (`ManualOrderModal.jsx`) en una **segunda pestaña** — pegás el mensaje o
+  subís el PDF, y de ahí en adelante el camino es idéntico (cliente, revisión
+  línea por línea, `preview_manual_order`, `create_manual_order`); si la lista
+  del cliente es de cotización nace como cotización y se convierte en pedido
+  con el botón de siempre. Piezas y decisiones:
+  * `src/utils/quotePdf.js` (nuevo): `parseQuotePdf` lee el PDF con
+    **pdfjs-dist** (dependencia nueva, 6.2, cargada bajo demanda como jspdf y
+    xlsx — el worker viaja como asset del bundle vía `?url`; en Node usa el
+    build `legacy`, con la ruta en una variable + `@vite-ignore` porque con el
+    string inline Vite empaquetaba 535 KB de chunk muerto). Como el formato lo
+    dibuja nuestra propia app, no se adivina con regex: cada texto se
+    clasifica por la **coordenada X** de su columna (nombre / UPC / cantidad /
+    plata), agrupando por renglón (misma Y). Saca cliente, total impreso,
+    líneas y lo ilegible a `unparsed`.
+  * **El cruce es por UPC primero**: el PDF recorta los nombres largos a
+    78mm, pero imprime el UPC entero justamente para esto. Después nombre
+    exacto, y último recurso `ilike 'nombre%'` (el texto recortado ES un
+    prefijo del nombre real), con tope de 12 consultas. Lo que no se resuelve
+    queda en rojo con el buscador manual de siempre.
+  * **`normalize('NFC')` en el parser no es opcional**: pdfjs puede devolver
+    acentos como carácter combinante (NFD) y `products.name` está en NFC — se
+    ven iguales y no matchean ni con `in()` ni con `ilike`.
+  * El **total impreso en el PDF se muestra al lado del recalculado** (y se
+    resalta si difieren): la cotización puede ser de ayer y los precios
+    haberse movido; el que vale es siempre el del servidor. La **nota del
+    pedido** guarda de qué PDF salió y con qué total impreso, para auditar
+    diferencias después. Las líneas de un PDF van sin bandera flash (el PDF
+    no la imprime): si había precio flash, el recalculo lo pierde — se ve en
+    la comparación de totales.
+  **Verificado con 24 comprobaciones en Node** (PDF generado con el mismo
+  dibujo que la app: acentos, nombre recortado con UPC intacto, sin precios,
+  50 líneas multipágina, un PDF ajeno que no revienta) **y 18 con Playwright
+  contra el build real** (browser de verdad, pdfjs + worker del bundle, mock
+  de Supabase: el flujo entero hasta `create_manual_order` con los 4 ids,
+  cantidades y nota correctos). Gotcha del mock que NO es bug de la app: el
+  `+` del query string es espacio — `decodeURIComponent` no lo convierte, hay
+  que pasarlo a `%20` antes.
+
+- [x] **Cambio de modalidad del envío a SellerCloud** (2026-08-18, segunda
+  tanda del día, a pedido del usuario; función redesplegada,
+  `migration-2026-08-18-sa-metrics-sellercloud.sql` **pendiente de correr**).
+  Cuatro cambios sobre lo de la mañana:
+  1. **Sin On Hold**: la orden se crea y queda tal cual. El control humano
+     pasó a estar ANTES (punto 2), así que el hold era un paso de más. Se
+     borraron `setOnHold`/`HOLD_PATHS`/`STATUS_ON_HOLD` de `sellercloud.ts`
+     y el campo `on_hold` de la respuesta.
+  2. **Candado de Atendido**: solo un pedido con `status = 'done'` se puede
+     enviar. Lo exige la Edge Function (400 "marcá el pedido como Atendido
+     antes...") y el panel muestra el botón deshabilitado con la explicación
+     en el tooltip (`scPushNeedsDone`) en vez de esconderlo — un botón que
+     aparece "de la nada" al atender es más difícil de descubrir. De paso,
+     atender ya descontó el stock local antes del push.
+  3. **El rep es LA VENDEDORA DEL PEDIDO**, apriete quien apriete: antes se
+     resolvía primero el correo de quien apretaba (un admin apretando se
+     podía atribuir la venta); ahora la cadena es ID cargado de la vendedora
+     del cliente → resolución por su `login_email` → correo de quien apretó
+     SOLO si el cliente no tiene vendedora.
+  4. **KPI en 📈 Métricas**: "Enviados a SellerCloud" —
+     `totals.sellercloud_enviados` (del período elegido, cuenta pedidos con
+     `sellercloud_order_id` anotado, cancelados incluidos a propósito: un
+     pedido enviado y cancelado acá igual salió) + `sellercloud_total`
+     (histórico, sin ventana) en la leyenda. La migración replica
+     `sa_metrics_overview` entera con las líneas nuevas marcadas `--> NUEVO`;
+     **probada con datos** en un PG 18 desechable (período=2 con una
+     cancelada-después-de-enviada, histórico=3 con una fuera de ventana,
+     vendedora de prueba excluida de ambos, agregados viejos intactos, 2
+     pasadas). El front muestra "—" si la RPC es la vieja (clave ausente ≠
+     cero). Suite del cliente de la API en 86 comprobaciones (se fueron las
+     14 del hold, entró la de "no toca StatusCode").
+
+- [x] **Sales Rep y Marketing Source en la orden de SellerCloud** (2026-08-18,
+  a pedido del usuario; `migration-2026-08-18-sellercloud-salesrep.sql`
+  **pendiente de correr**, la Edge Function ya está redesplegada y es segura
+  sin la migración: la orden entra igual, con aviso). La orden que crea
+  "Enviar a SellerCloud" ahora viaja con el **Sales Rep de quien apretó el
+  botón** y el **Marketing Source "catalogo online"**. El descubrimiento clave
+  (del Swagger del propio servidor, `fc2.api.sellercloud.com/rest/swagger/docs/v1`,
+  guardado en el scratchpad de la sesión): la API de creación acepta ambos
+  **solo como enteros** (`OrderDetails.SalesRepresentative` /
+  `OrderDetails.MarketingSource`) y **no expone ningún endpoint** para
+  resolver un email o un nombre a su ID (no hay `/api/Employees` ni
+  `/api/Settings/MarketingSources`; el `GET /api/Orders` de lectura sí
+  devuelve `SalesRepEmail` + `SalesRepId` juntos, útil para verificar). Por
+  eso el mapeo vive de este lado:
+  * **Sales Rep** → columna nueva `vendedores.sellercloud_rep_id` (integer
+    null), editable en la pestaña Vendedoras (columna "SellerCloud", mismo
+    patrón de edición inline que el teléfono; claves i18n `scRepId*`). La Edge
+    Function la resuelve **con el JWT de quien apretó**: primero su propia
+    fila (RLS `vendedora_select_self` ya lo permite), y si es un admin — que
+    no es rep de nada — cae a la vendedora dueña del cliente del pedido, que
+    es a quien el negocio le atribuye la venta. **Desde la segunda pasada del
+    mismo día, el ID casi nunca hace falta cargarlo a mano**: sin ID guardado,
+    `findSalesRepIdByEmail` resuelve el **email** contra SellerCloud — no hay
+    endpoint de empleados, pero cada orden LEÍDA (`GET /api/Orders`,
+    `MultipleOrderDataDto`) trae `SalesRepEmail` + `SalesRepId` juntos, así
+    que se buscan las órdenes recientes de la compañía (hasta 5 páginas de
+    200, `orderBy=1` descendente) y se toma el ID del email que matchee
+    (case-insensitive; primero el de quien apretó, después el `login_email`
+    de la dueña del cliente). Lo encontrado **se guarda** en
+    `vendedores.sellercloud_rep_id` para no re-escanear (con JWT de vendedora
+    el update no pasa RLS y afecta 0 filas — no es error; el caché en memoria
+    del isolate cubre: 24 h si encontró, 10 min si no). Solo queda cargar el
+    ID a mano cuando el email del empleado en SellerCloud es distinto al del
+    login de acá, o cuando el rep nunca tuvo una orden asignada allá. Sin ID
+    por ningún lado: la orden entra **sin** Sales Rep y el aviso lo dice
+    (nunca se pierde la orden por un dato accesorio).
+  * **Marketing Source** → secret `SELLERCLOUD_MARKETING_SOURCE_ID` (el ID de
+    "catalogo online" en la lista de SellerCloud), mismo patrón que
+    COMPANY_ID. Sin secret: el campo no viaja y el aviso lo dice.
+  * En `sellercloud.ts` los dos entran por `OrderExtras` (4º parámetro de
+    `pushOrder`/`buildOrderPayload`); un valor basura (NaN, 0, negativo) no
+    viaja — un ID inválido haría que SellerCloud rechace la orden entera. Los
+    avisos se juntan con el del hold (el del hold primero, que es el único
+    que exige acción inmediata) y van a `sellercloud_error` vía la RPC.
+  * `caller.auth.getUser(jwt)` lleva el JWT explícito: el cliente de la
+    función no tiene sesión y `getUser()` sin argumento buscaría una que no
+    existe.
+  **Verificado**: migración probada 2 veces (idempotencia) en un PostgreSQL 18
+  desechable; **100 comprobaciones** del cliente de la API (los extras viajan,
+  null/NaN/0/negativo no viajan, compat con llamados sin extras, y el
+  resolvedor por email: match case-insensitive, paginado, corte en página
+  vacía, caché sin request extra, email vacío sin buscar); build OK.
+  **Estado 2026-08-18**: migración **corrida** y secret
+  `SELLERCLOUD_MARKETING_SOURCE_ID` **cargado** (confirmado por el usuario el
+  mismo día); función redesplegada con el resolvedor por email. Cargar IDs a
+  mano en la pestaña Vendedoras quedó solo como override para emails que no
+  coinciden entre acá y SellerCloud.
+
+- [x] **Cargar a mano el pedido que llegó por WhatsApp** (2026-08-17, a pedido
+  del usuario, `migration-2026-08-17-manual-order.sql` **corrida** — las RPC
+  `manual_order_client` / `preview_manual_order` / `create_manual_order` viven
+  en producción, comprobado el 2026-08-18 con la anon key).
+  Cierra el último caso que no cubrían ni `order_failures` (necesita que el
+  pedido haya llegado al servidor) ni el pendiente del navegador (necesita que
+  el cliente vuelva al catálogo): el mensaje del chat es lo único que queda.
+  Botón **"💬 Cargar pedido desde WhatsApp"** en la pestaña Pedidos
+  (`src/pages/admin/ManualOrderModal.jsx` nuevo): se pega el texto, se cruzan
+  los productos por nombre contra `products` y se crea el pedido.
+  `parseOrderMessage` vive en `src/utils/whatsapp.js`, al lado del
+  `buildOrderMessage` que genera el mensaje, y aguanta el membrete del chat, los
+  dos idiomas, las negritas comidas y las líneas sueltas; lo que no entiende lo
+  devuelve en `unparsed` y se muestra, no se descarta. **El precio y el total
+  los calcula el servidor** con la lista del cliente, nunca el mensaje: dos RPC
+  nuevas sobre `compute_order_items`, `preview_manual_order` (arma sin guardar y
+  avisa de líneas caídas y SKU sin precio — es RPC y no cuenta del navegador
+  porque una vendedora no puede leer `product_prices` de una lista con dueñas) y
+  `create_manual_order` (guarda, audita en `admin_audit_log` con el mensaje
+  original en `detail.source_message`, idempotente por `request_id`). Permiso:
+  admin sobre cualquier cliente, vendedora solo sobre los suyos. Contra el
+  duplicado, al elegir cliente se listan sus pedidos de las últimas 48 h.
+  **Verificado**: 30 comprobaciones del parser (round-trip contra el propio
+  `buildOrderMessage`), 24 de las RPC contra un PostgreSQL 18 desechable con la
+  `compute_order_items` real, y 20 de la pantalla con Playwright contra el build
+  real con la red interceptada.
+  **Arreglado el mismo día** tras el reporte del usuario ("se queda el cuadro
+  como si no hubieras puesto cuál perfume es y deja bloqueado el botón de crear
+  la orden"): el producto se elegía en un `<select>` colapsado puesto ENCIMA del
+  buscador, la respuesta atrasada de una pulsación anterior podía pisar la lista
+  de resultados justo después de elegir, y el paso "Calcular precios" se
+  invalidaba con cualquier cambio dejando el botón apagado sin decir por qué.
+  Ahora: resultados en una lista que se elige con un click, cada búsqueda con
+  número de secuencia (solo la última escribe), el precio se calcula solo y la
+  pantalla dice siempre qué falta. Lo elegido —cliente y producto— se muestra
+  con ✓ y botón "Cambiar", porque tener el nombre escrito en el campo no era lo
+  mismo que haberlo elegido y esa diferencia no se veía.
+
 ---
 
 
@@ -1475,6 +1785,10 @@ migración (`schema.sql` y `diagnostico-2026-08-12-*.sql` no cuentan).
 | `migration-2026-08-06-require-price.sql` | ✅ corrida | confirmado por el usuario (2026-08-12). Desde la API no se veía: solo reemplaza cuerpos de funciones |
 | `migration-2026-08-12-hide-out-of-stock.sql` | ✅ corrida | el sondeo de la mañana dio `products.deactivated_by_stock` → `42703`; el usuario la corrió ese mismo día y lo confirmó |
 | `migration-2026-08-13-exclude-box-skus.sql` | ⏳ **pendiente** (2026-08-13) | escrita hoy (punto 57). Cuando corra: `is_noncatalog_sku('X-BOX')` → `true` y el trigger `products_enforce_noncatalog` en `pg_trigger`. **Correr junto con el deploy** |
+| `migration-2026-08-17-sellercloud-push.sql` | ✅ corrida | comprobado 2026-08-18 con la anon key: `orders.sellercloud_order_id` existe y `mark_order_sellercloud` responde `no autorizado` (existe, anon sin permiso) |
+| `migration-2026-08-17-manual-order.sql` | ✅ corrida | comprobado 2026-08-18 con la anon key: las tres RPC responden `no autorizado` (existen) |
+| `migration-2026-08-18-sellercloud-salesrep.sql` | ✅ corrida | 2026-08-18, confirmada por el usuario el mismo día (junto con el secret `SELLERCLOUD_MARKETING_SOURCE_ID`). Probada 2× en PG 18 local antes de entregarla |
+| `migration-2026-08-18-sa-metrics-sellercloud.sql` | ⏳ **pendiente** (2026-08-18) | replica `sa_metrics_overview` con `totals.sellercloud_enviados` + `sellercloud_total`. Hasta que corra, el KPI "Enviados a SellerCloud" muestra "—". Probada con datos en PG 18 local (2 pasadas) |
 
 **✅ Cierre (2026-08-12): no queda ninguna migración pendiente.** El sondeo con
 la anon key dejó una sola pendiente confirmada
@@ -1527,7 +1841,10 @@ zimaxx-store/
 ├── .gitignore
 ├── README.md
 ├── supabase/
-│   └── schema.sql             ← ejecutar en Supabase SQL Editor (idempotente)
+│   ├── schema.sql             ← ejecutar en Supabase SQL Editor (idempotente)
+│   ├── migration-*.sql        ← deltas sobre una base ya creada
+│   ├── functions/             ← Edge Functions (Deno). sellercloud-push-order manda el pedido a SellerCloud On Hold (2026-08-17)
+│   └── cleanup-*.sql          ← limpiezas de datos de una sola vez, a mano y paso por paso (no son migraciones)
 └── src/
     ├── main.jsx
     ├── App.jsx                 ← rutas: / y /admin (admin con lazy import)
@@ -1553,6 +1870,7 @@ zimaxx-store/
     │       ├── ClientsAdmin.jsx
     │       ├── VendedoresAdmin.jsx
     │       ├── AuditLogAdmin.jsx
+    │       ├── ManualOrderModal.jsx ← pegar el mensaje de WhatsApp y crear el pedido (2026-08-17)
     │       ├── OrdersAdmin.jsx
     │       ├── SuperAdminPanel.jsx  ← solo superadmin (usuarios/roles/contraseñas + dueñas de listas)
     │       └── MetricsAdmin.jsx     ← solo superadmin (KPIs en vivo por polling + gráfico SVG + adopción por vendedora)
@@ -1561,6 +1879,7 @@ zimaxx-store/
         ├── whatsapp.js         ← buildOrderMessage(), whatsappUrl()
         ├── pdf.js              ← downloadOrderPdf() (async, jsPDF lazy)
         ├── token.js            ← generateToken() con crypto.getRandomValues
+        ├── orderOutbox.js      ← registro del pedido con keepalive + timeout + pendiente en localStorage que se reintenta al volver (2026-08-17)
         └── excel.js            ← parseSheet(), normalizeHeader(), pick(), downloadOrderExcel(), downloadAuditLogExcel(), downloadMetricsExcel() (XLSX lazy)
 ```
 
@@ -1591,7 +1910,7 @@ negro+dorado es idéntico en ambos modos).
 | `price_lists` | Listas de precio fijas (5 registros ya sembrados) |
 | `price_list_owners` | Dueñas de una lista de precio (2026-08-04, `migration-2026-08-04-shared-price-lists.sql` — **reemplaza** a la columna `price_lists.owner_vendedora_id` de 2026-07-09, que se dropeó). PK `(price_list_id, vendedora_id)`, así que una lista puede tener **varias** dueñas: sin filas = lista general (la usa cualquier vendedora), una fila = lista personal (comportamiento idéntico al de antes), varias = lista **compartida** (solo esas vendedoras la ven, y cada cliente queda con una de ellas). `is_primary` (índice único parcial: una sola por lista) marca la dueña por defecto — la que se asigna cuando un cliente entra a la lista con una vendedora que no es dueña. RLS: admin todo; una vendedora solo lee las filas de las listas que puede usar, y desde 2026-08-05 la escritura es **solo del superadmin** (antes era `admin_all`), desde la pestaña 🔐 Superadmin |
 | `clients` | Clientes con token único, lista asignada y `vendedora_id` (FK a `vendedores`). Desde la v2 del sync (2026-07-10): `sellercloud_id` (integer unique nullable, el General.ID de SellerCloud — llave del sync automático; null en clientes cargados a mano/Excel) y `price_list_id` pasó a ser **nullable** (los clientes nuevos del sync entran sin lista; un cliente sin lista ve catálogo vacío y no puede pedir hasta que se la asignen a mano) |
-| `vendedores` | Nombre + teléfono de cada vendedora (2026-07-06; antes texto libre en `clients`). Desde el rol vendedora (2026-07-06): `user_id` (FK a `auth.users`, nullable, único) + `login_email` (solo display) para vincular su login |
+| `vendedores` | Nombre + teléfono de cada vendedora (2026-07-06; antes texto libre en `clients`). Desde el rol vendedora (2026-07-06): `user_id` (FK a `auth.users`, nullable, único) + `login_email` (solo display) para vincular su login. `sellercloud_rep_id` (2026-08-18, integer nullable, `migration-2026-08-18-sellercloud-salesrep.sql`): ID de empleado en SellerCloud (Settings → Employees), viaja como `OrderDetails.SalesRepresentative` al mandar un pedido con "Enviar a SellerCloud"; editable inline en la pestaña Vendedoras; null = la orden entra sin Sales Rep, con aviso |
 | `products` | Catálogo de productos (`availability`: 'available' \| 'preorder' \| 'flash', este último desde 2026-07-08 — etiqueta "Flash Sale" del Excel de inventario, sin relación con la tabla `flash_sales`). `product_line` (2026-07-08, texto libre, nullable): tipo real del perfume desde `PRODUCT_CATEGORY` del export SellerCloud (`Perfume` / `Perfume - Arabes`), **distinto** de `category` que acá guarda la marca/Brand. `new_until` (2026-07-09, timestamptz nullable): mientras `now() < new_until` el producto lleva la etiqueta ✨ Nuevo en catálogo y admin; se setea automático (+10 días) al crear el producto y es editable en el formulario. `stock` (2026-07-14, int nullable, `migration-2026-07-14-inventory-stock.sql`): InventoryAvailableQTY de SellerCloud — **no** se expone en el catálogo del cliente (`get_catalog` no lo incluye), solo visible en el admin. Decide la disponibilidad en cada carga/sync (`>= 1` available, `0`/negativo preorder, respetando flash); NO toca `active`. null = "todavía no se sabe el stock" (distinto de 0 = sin stock). **Desde 2026-08-04 esa regla vive en un trigger de la tabla** (`products_availability_from_stock`, `migration-2026-08-04-order-stock.sql`) y no solo en cada camino de escritura: cualquier insert/update con `stock` no-null y `availability <> 'flash'` deja `availability` derivada del stock, venga del sync, del Excel, del bulk, del formulario, del descuento de un pedido atendido o de un request directo. Eso además tapó un agujero real: `apply_price_list` ponía `availability = 'available'` a todos los productos de un Excel de precios sin columna `Type`, con stock 0 incluido. El `stock` también **baja solo** al marcar un pedido Atendido (ver `apply_order_stock`) y es editable a mano en el formulario de la pestaña Productos. `deactivated_by_stock` (2026-08-12, boolean not null default false, `migration-2026-08-12-hide-out-of-stock.sql`): desde esa fecha el trigger no solo pone la etiqueta, también **despublica** — `stock <= 0` deja el producto en `preorder` **y** `active = false`, así que sale del catálogo (revierte a propósito media decisión del 2026-07-14: "stock 0 se muestra como pre-order, ocultarlo es manual"). La columna **no** es "está sin stock" (eso ya lo dice `stock`) sino "esta regla fue la que lo apagó", y es lo único que permite reactivarlo solo cuando entre stock sin resucitar de paso lo que apagó una persona ni la exclusión de no-catálogo (SKU `-SPECIAL`, beauty/electronics/support/packing/test), que tienen stock de sobra. Invariante: `true` = inactivo por falta de stock, vuelve solo con `stock >= 1`; `false` = si está inactivo lo apagó una persona y solo una persona lo reactiva. Un producto `flash` con stock 0 conserva la etiqueta 🔥 pero **también** se despublica (la etiqueta no publica nada). Quién borra la bandera a propósito, porque es decisión humana: el botón Desactivar (fila o selección) del panel, la columna `Activo` del Excel de productos, y el UPDATE de `apply_price_list` que desactiva lo que quedó fuera del archivo. `upc` (2026-07-14, text nullable, `migration-2026-07-14-product-upc.sql`): código de barras, dato interno del admin (**no** lo expone `get_catalog`), visible/editable en la pestaña Productos y buscable. **Desde 2026-08-13** (`migration-2026-08-13-exclude-box-skus.sql`) hay una segunda invariante de publicación, independiente del stock: un SKU terminado en `-SPECIAL` o `-BOX` (`is_noncatalog_sku`) queda `active = false` en todo insert/update, vía el trigger `products_enforce_noncatalog` — son variantes internas de SellerCloud (`-BOX` = el mismo perfume vendido por caja) y no se publican nunca; la única forma de vender uno es cambiarle el `sku` |
 | `product_prices` | Precio por producto+lista (clave compuesta) |
 | `flash_sales` | **LEGADO desde 2026-08-07**: ofertas con precio promo + fecha de expiración. La app ya no la lee (se eliminó la pestaña Flash Sales y la sección del catálogo). No se borró nada: la tabla y sus datos siguen ahí, sin migración de por medio, así que volver atrás es reponer código. `compute_order_items` todavía la consulta para revalorizar una línea vieja marcada `flash` de un pedido anterior — sin ofertas vigentes cae al precio de lista, que es lo correcto |
@@ -1883,6 +2202,30 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
   Devuelve `{ok, order_id, total, lines}`.
 - La llama el aviso rojo de `OrdersAdmin.jsx` (botón "Recuperar").
 
+### `preview_manual_order(p_client_id uuid, p_items jsonb) → jsonb` (2026-08-17)
+
+Arma un pedido **sin guardar nada**, para la pantalla "Cargar pedido desde
+WhatsApp". Delgada sobre `compute_order_items`, o sea que el precio y el total
+salen de la lista del cliente y no de lo que diga el mensaje pegado. Devuelve
+`{kind, client_name, items, total, dropped, no_price}`: `dropped` son los ids
+que se cayeron (producto apagado o borrado) y `no_price` los SKU sin precio en
+la lista, que harían fallar el alta. Existe como RPC —y no como cuenta del
+navegador— porque una vendedora no puede leer `product_prices` de una lista con
+dueñas: el total le saldría vacío justo a ella. Permiso: admin sobre cualquier
+cliente, vendedora solo sobre los suyos (helper interno `manual_order_client`,
+sin grant, mismo patrón que `compute_order_items`).
+
+### `create_manual_order(p_client_id uuid, p_items jsonb, p_request_id uuid, p_note text) → jsonb` (2026-08-17)
+
+Guarda el pedido que se armó con la anterior. Mismo permiso y mismo cálculo;
+rechaza si no queda ningún ítem válido o si un pedido real tiene una línea sin
+precio (misma regla que `create_order`, pero acá el mensaje nombra los SKU
+porque del otro lado hay una persona que puede corregir). Idempotente por
+`p_request_id` — un doble click devuelve `{order_id, already_existed: true}` en
+vez de crear otro. Audita en `admin_audit_log` con acción `create_manual_order`,
+guardando el mensaje original en `detail.source_message`. El tipo lo decide la
+lista del cliente: si es `quote`, entra como cotización.
+
 ### `get_quotes_live_pricing(p_order_ids uuid[]) → jsonb`
 - Acceso: solo `authenticated`. (2026-07-17.)
 - Devuelve `{order_id: {items, total}}` con el precio **vigente** (no el
@@ -1895,6 +2238,22 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
 - La llama `OrdersAdmin.jsx` una vez al cargar la bandeja (bulk, todas
   las cotizaciones visibles) y de nuevo para un solo pedido después de
   editarlo.
+
+### `mark_order_sellercloud(p_order_id uuid, p_sellercloud_order_id integer, p_error text) → jsonb` (2026-08-17)
+
+Anota el resultado de mandar un pedido a SellerCloud. La llama la Edge Function
+`sellercloud-push-order` **con el JWT de quien apretó el botón** (nunca con la
+service_role key): así el permiso —admin sobre cualquier pedido, vendedora solo
+sobre los de sus clientes— y la auditoría se deciden en un solo lugar, igual que
+en `update_order_items`.
+
+Con `p_sellercloud_order_id`: guarda el número, la fecha, limpia el error y
+audita `push_order_sellercloud` (con el número de orden, el total, la cantidad
+de líneas y `status: on_hold`). Si el pedido **ya tenía** número, no lo pisa ni
+audita de nuevo — devuelve `already_pushed: true`; puede pasar si dos personas
+apretaron el botón a la vez. Con `p_sellercloud_order_id` null: guarda el motivo
+en `orders.sellercloud_error` y no marca nada como enviado, así el panel muestra
+por qué no entró sin ir a los logs de la función.
 
 ### `is_admin() → boolean`
 - Acceso: solo `authenticated`.

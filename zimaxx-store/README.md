@@ -219,8 +219,9 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
    carrito queda vacío, en vez de dejar un `[]` guardado — importante porque el
    link del catálogo se comparte por WhatsApp y se abre en teléfonos que a
    veces no son del cliente. Vaciar a mano con "Vaciar carrito" hace lo mismo.
-5. Pendiente (planificado): push automático a SellerCloud como orden On Hold
-   vía Supabase Edge Function — ver sección 7.
+5. La vendedora marca el pedido **Atendido** y recién entonces lo manda a
+   SellerCloud con un botón (2026-08-17; modalidad 2026-08-18) — ver más
+   abajo.
 
 #### Si el pedido no llega a registrarse (2026-08-05)
 
@@ -253,6 +254,350 @@ que ver con el monto. Lo que cambió, en tres capas:
   único), así que un envío repetido — a mano, automático, o dos toques del
   cliente a la vez — devuelve el pedido ya guardado en vez de crear otro.
 
+#### El pedido que nunca llega al servidor (2026-08-17)
+
+Lo de 2026-08-05 cubre al pedido que **llega y el servidor rechaza**: eso queda
+en `order_failures` y se rescata desde el panel. Quedaba afuera el otro caso —
+el request que **nunca llegó**, que no deja rastro ni en el teléfono del cliente
+ni en la base. El usuario seguía viendo pedidos que llegaban por WhatsApp y no
+estaban en el sistema. Cuatro agujeros, todos en el camino del checkout:
+
+- **Los reintentos corrían cuando el cliente ya se había ido.** `handleCheckout`
+  abría WhatsApp y recién después llamaba a los reintentos, que esperaban con
+  `setTimeout(700ms, 1400ms)`. Al saltar a WhatsApp la pestaña queda en segundo
+  plano y los navegadores móviles **congelan los timers de las páginas ocultas**:
+  en el peor caso esos reintentos no se ejecutaban nunca. La red de seguridad
+  estaba del lado inalcanzable.
+- **El request no sobrevivía a que la pestaña se descargara.** `supabase.rpc` usa
+  `fetch` sin `keepalive`; si el sistema operativo recuperaba memoria o el
+  cliente cerraba el navegador con el POST en vuelo, se cancelaba.
+- **No había timeout.** Con mala señal el fetch se colgaba indefinidamente, el
+  botón quedaba deshabilitado y el cliente ni veía abrirse WhatsApp.
+- **El aviso no sobrevivía a una recarga.** `failed` era estado de React: al
+  volver al día siguiente el cliente veía su carrito lleno *sin ninguna
+  advertencia* y, como ya había mandado el WhatsApp, daba por hecho que pidió.
+
+El arreglo vive en **`src/utils/orderOutbox.js`** (solo frontend, sin migración):
+
+- El POST va a PostgREST directo con **`keepalive`**, así el navegador lo termina
+  aunque la pestaña se descargue o pase a segundo plano — `supabase.rpc` no deja
+  pasar esa opción, por eso el fetch es a mano con la misma anon key. Arriba de
+  50 KB de cuerpo se manda sin `keepalive` (el límite del navegador son 64 KB y
+  pasarse hace fallar el fetch de entrada).
+- **Timeout de 5 s** por intento, con `AbortController`.
+- El intento se graba en `localStorage` **antes** de mandarlo y se borra recién
+  cuando el servidor contesta. Lo que quede ahí se reintenta **al abrir el
+  catálogo y cada vez que la pestaña vuelve a primer plano** — que es justo
+  cuando el cliente regresa de mandar el WhatsApp. Es seguro por el
+  `request_id`: si el intento anterior sí había entrado, devuelve ese mismo
+  pedido en vez de duplicarlo.
+- El payload viaja **adelgazado a `{id, qty, flash}`**, que es lo único que lee
+  `compute_order_items`; antes iba el ítem entero (nombre, precio, UPC), ~4 veces
+  más bytes justo cuando la señal del cliente es peor.
+- Un pendiente se descarta si es **de otro cliente** (se compara el `tokenHint`,
+  mismo criterio que `order_failures.token_hint`: el link del catálogo se
+  comparte por WhatsApp y el mismo teléfono puede abrir el de otra persona — sin
+  ese chequeo el pedido de A se reenviaría bajo el token de B) o si tiene **más
+  de 24 h** (los precios y el stock ya se movieron, y lo más probable es que la
+  asesora lo haya cargado a mano desde el chat).
+
+Además, el aviso del drawer ahora **distingue los dos casos** (`failed` pasó de
+un string a `{ kind, reason }`): un fallo de red mantiene el aviso rojo con
+"Reintentar", pero un **rechazo del servidor** muestra un aviso ámbar que dice
+que la asesora lo va a completar y **no ofrece reintentar** — el rechazo es
+determinista, insistir falla igual y cada intento sumaba otra fila a
+`order_failures`.
+
+Verificado con Playwright contra el build real, con la red interceptada (nada
+sale a producción): que el pedido queda pendiente y el aviso aparece cuando la
+red se cae; que al volver al catálogo se reintenta solo, con el mismo
+`request_id`, y el carrito se vacía; que un rechazo no queda pendiente ni ofrece
+reintento; que un pendiente de otro cliente o de más de 24 h se descarta sin
+mandarse; que el payload viaja adelgazado; y que **WhatsApp se sigue abriendo
+aunque el registro falle**.
+
+#### Enviar el pedido a SellerCloud (2026-08-17; modalidad 2026-08-18)
+
+Hasta acá, cerrar un pedido terminaba en un paso a mano: bajar el Excel con el
+formato de `UploadTemplate.xls` y subirlo al bulk-order upload de SellerCloud.
+Ahora hay un botón **"📦 Enviar a SellerCloud"** en cada fila de la bandeja de
+Pedidos: crea la orden allá, asociada al correo de la vendedora como Sales Rep
+y con Marketing Source "catalogo online".
+
+**Solo pedidos Atendidos** (modalidad definida por el usuario el 2026-08-18):
+el botón queda deshabilitado — con la explicación en el tooltip — hasta que el
+pedido se marque Atendido, y la Edge Function lo exige también del lado del
+servidor. La revisión humana es ESE paso; por eso la orden ya **no** se deja
+On Hold en SellerCloud como en la versión del 2026-08-17 — el hold era un
+segundo control para una orden que ya se revisó acá (y atender el pedido ya
+descontó el stock local antes del push).
+
+**Las piezas.** El usuario y la contraseña de la API de SellerCloud no pueden
+estar en el navegador ni en la base, así que el HTTP lo hace una Edge Function:
+
+- `supabase/functions/sellercloud-push-order/sellercloud.ts` — el cliente de la
+  API. **No importa nada de Deno a propósito**: solo usa `fetch`, que existe
+  igual en Node, y por eso se puede probar entero contra un servidor falso sin
+  desplegar nada.
+- `.../index.ts` — el envoltorio de Edge Function: valida, arma y anota.
+- `migration-2026-08-17-sellercloud-push.sql` — `orders.sellercloud_order_id` /
+  `sellercloud_pushed_at` / `sellercloud_error`, y la RPC
+  `mark_order_sellercloud` que anota el resultado con permiso y auditoría.
+
+**La API de SellerCloud**, tal como está documentada (agosto 2026):
+
+| Paso | Llamada |
+| --- | --- |
+| Token | `POST {base}/rest/api/token` con `{Username, Password}` → `access_token`, dura 60 min |
+| Cliente | `GET {base}/rest/api/Customers/{id}` |
+| Crear orden | `POST {base}/rest/api/Orders/` con `CustomerDetails` + `OrderDetails{CompanyID, Channel: 21}` + direcciones + `Products[]` |
+| Órdenes (lectura) | `GET {base}/rest/api/Orders` — cada fila trae `SalesRepEmail` + `SalesRepId`, de ahí sale la resolución del rep por correo |
+
+Canal Wholesale = 21. (Hasta el 2026-08-18 había un cuarto paso, `PUT
+{base}/api/Orders/StatusCode` para dejar la orden On Hold = 200; se quitó con
+el cambio de modalidad — el candado de Atendido lo reemplaza.)
+
+**Sales Rep y Marketing Source (2026-08-18).** La orden viaja además con el
+Sales Rep de **quien apretó el botón** y el Marketing Source **"catalogo
+online"**. La API de creación los acepta **solo como enteros**
+(`OrderDetails.SalesRepresentative` / `OrderDetails.MarketingSource`, según el
+Swagger del propio servidor en `/rest/swagger/docs/v1`) y no tiene ningún
+endpoint para resolver un email o un nombre a su ID — así que el mapeo vive de
+este lado:
+
+- El ID de empleado de cada vendedora va en `vendedores.sellercloud_rep_id`
+  (`migration-2026-08-18-sellercloud-salesrep.sql`), editable en la pestaña
+  Vendedoras (columna "SellerCloud"; el ID sale de SellerCloud → Settings →
+  Employees). Desde el cambio de modalidad (2026-08-18), **la orden se asocia
+  a la vendedora del pedido apriete quien apriete**: la cadena es ID cargado
+  de la vendedora del cliente → resolución por su `login_email` → correo de
+  quien apretó SOLO si el cliente no tiene vendedora — así un admin que
+  aprieta no se atribuye la venta.
+- **En la práctica el ID casi nunca se carga a mano**: si la fila no lo tiene,
+  la función resuelve el **correo** sola. No hay endpoint de empleados, pero
+  cada orden leída (`GET /api/Orders`) trae `SalesRepEmail` + `SalesRepId`
+  juntos: `findSalesRepIdByEmail` busca el correo (case-insensitive) en las
+  órdenes recientes de la compañía — hasta 5 páginas de 200, más nuevas
+  primero —, guarda el ID encontrado en `vendedores` (si el JWT puede
+  escribirlo) y lo cachea en el isolate (24 h si encontró, 10 min si no). El
+  campo manual queda como **override** para cuando el correo del empleado en
+  SellerCloud no coincide con el login de acá, o el rep todavía no tiene
+  ninguna orden asignada allá.
+- El ID de "catalogo online" va en el secret `SELLERCLOUD_MARKETING_SOURCE_ID`
+  (la fuente se crea una vez en SellerCloud y se anota su ID).
+- Si falta cualquiera de los dos, **la orden entra igual** sin ese campo y el
+  aviso lo dice — nunca se pierde la orden por un dato accesorio. Un valor
+  basura (0, NaN, negativo) tampoco viaja: un ID inválido haría que
+  SellerCloud rechace la orden entera.
+
+**Decisiones que no son obvias:**
+
+- **Los datos del cliente se leen de SellerCloud en el momento del envío**, no
+  de nuestra base. Email y direcciones son obligatorios para crear la orden y
+  allá es donde viven; copiarlos a `clients` sería una segunda copia que se
+  desincroniza sola. Ya teníamos lo único que hacía falta para ir a buscarlos:
+  `clients.sellercloud_id`, que llena el sync de n8n desde julio.
+- **El SKU es el `ProductID` de SellerCloud**, así que las líneas se arman
+  directo — es la misma equivalencia que ya usaba el Excel de `UploadTemplate`.
+- **El precio que viaja es el nuestro** (`SitePrice`, el de la lista del
+  cliente que ya calculó el servidor al registrar el pedido), no el de
+  SellerCloud.
+- **Una sola vez**: mientras el pedido tenga `sellercloud_order_id`, en lugar
+  del botón se muestra ese número. Duplicar una orden allá obliga a ir a
+  cancelarla a mano, así que el índice único sobre esa columna impide además
+  que dos pedidos apunten a la misma orden.
+- **Si falta el Sales Rep o el Marketing Source, la orden entra igual** sin
+  ese campo y el aviso lo dice — se corrige para la próxima, no se pierde
+  esta. Y si falla el anotar de vuelta (la orden ya existe allá pero no se
+  pudo guardar el número acá): el error trae el número adentro y dice
+  explícitamente que no se vuelva a mandar.
+- **El motivo del fallo se guarda en el pedido** (`sellercloud_error`), no solo
+  en pantalla: al recargar sigue estando, y no hay que ir a los logs de la
+  función para saber por qué no entró.
+- **Cotizaciones no**: solo `kind = 'order'`. Una cotización va a SellerCloud
+  recién cuando alguien la convierte en pedido.
+- **Permiso y auditoría viven en SQL, no en Deno**: la Edge Function llama a
+  `mark_order_sellercloud` **con el JWT de quien apretó el botón** y nunca usa
+  la service_role key, así la regla de "admin, o vendedora sobre lo suyo" está
+  escrita una sola vez. Queda en el Registro de movimientos como *Orden enviada
+  a SellerCloud*, con el número de allá.
+
+**Qué hace falta para que funcione** (migración corrida, función desplegada y
+secrets cargados — al 2026-08-18 **las tres cosas ya están hechas en
+producción**; esto queda como referencia para rehacerlo):
+
+```
+supabase functions deploy sellercloud-push-order
+supabase secrets set SELLERCLOUD_BASE_URL=https://XX.api.sellercloud.com \
+                     SELLERCLOUD_USERNAME=... \
+                     SELLERCLOUD_PASSWORD=... \
+                     SELLERCLOUD_COMPANY_ID=... \
+                     SELLERCLOUD_WAREHOUSE_ID=...            # opcional
+supabase secrets set SELLERCLOUD_MARKETING_SOURCE_ID=...     # opcional: ID de "catalogo online" (2026-08-18)
+```
+
+> `SELLERCLOUD_BASE_URL` es **solo el host de la API** — para esta cuenta,
+> **`https://fc2.api.sellercloud.com`** (el portal web es
+> `fc2.delta.sellercloud.com`; el patrón es portal `<srv>.delta.` → API
+> `<srv>.api.`) — sin `/rest/api` ni barra final: la función ya se los agrega.
+> El error `Unexpected token '<', "<!doctype "... is not valid JSON` que
+> apareció al probar el 2026-08-18 era justo esto: el secret apuntaba al
+> portal, que devuelve la página de Login (HTML), y el `res.json()` lo escupía
+> crudo. Ahora el cliente lee el cuerpo como texto y, si parece HTML, el
+> mensaje dice el paso, el status, la URL y que casi seguro hay que revisar
+> `SELLERCLOUD_BASE_URL`. `normalizeBaseUrl` además tolera que el secret venga
+> con `/rest/api` de más. El mismo día cayó un segundo bug, ya nuestro: el
+> cuerpo se recortaba a 2 KB **antes** de parsear (el límite era para mensajes
+> de error) y la respuesta real de `Customers/{id}` — que anida todo bajo
+> `General` y pasa largo ese tamaño — daba "la respuesta no es JSON" siendo
+> JSON válido. El recorte quedó solo al armar el mensaje de error. Y tercero:
+> la respuesta real trae las direcciones en la **lista `Addresses`**, no como
+> `ShippingAddress`/`BillingAddress` sueltas — `fromAddressList` elige la
+> marcada (bandera booleana que nombre ship/bill, o `AddressType`) y si no hay
+> marca usa la primera; `Addresses` vacía da el error "cargásela allá".
+
+Verificado con **86 comprobaciones** del cliente de la API (la suite del
+2026-08-18; las 14 del On Hold se fueron con el cambio de modalidad y entró la
+de "no toca el endpoint de status") contra un SellerCloud falso que habla como
+el real: canal 21, token reusado mientras vive y renovado cuando vence, sin
+ninguna llamada de status tras crear la orden, credenciales malas que no crean
+nada, cliente sin email o sin dirección cortando **antes** de crear la orden,
+respuestas con el id pelado o sin id, la regresión con la respuesta real de
+`Customers/{id}` — >2 KB, anidada bajo `General`, direcciones en la lista
+`Addresses` —, los extras de Sales Rep / Marketing Source que viajan solo
+cuando son enteros válidos, el resolvedor correo→ID (match case-insensitive,
+paginado, corte en página vacía, caché sin request extra), **y el caso
+reportado: un 200 con HTML en cada paso**. Más 14 de la RPC contra un
+PostgreSQL 18 desechable (marcado, segundo envío que no pisa ni re-audita,
+error que no marca nada como enviado, índice único, permisos de vendedora
+ajena y sin rol); y 8 de la pantalla con Playwright. **Lo único que no se probó es contra la API real de SellerCloud** —
+no hay forma sin credenciales sensibles. Los nombres de campo de la respuesta
+de `Customers/{id}` se leen de forma defensiva (varias claves alternativas)
+justamente por eso, y si algo falta el error dice qué.
+
+#### Cargar a mano el pedido que llegó por WhatsApp (2026-08-17)
+
+Las dos redes anteriores dependen de algo: `order_failures` necesita que el
+pedido haya llegado al servidor, y el pendiente del navegador necesita que el
+cliente **vuelva** al catálogo. Cuando no pasa ninguna de las dos, lo único que
+queda del pedido es el mensaje en el chat de la vendedora. Esto lo convierte en
+un pedido: botón **"💬 Cargar pedido desde WhatsApp"** en la pestaña Pedidos
+(`ManualOrderModal.jsx`), se pega el texto y sale el pedido.
+
+**Cómo lee el mensaje.** `parseOrderMessage` en `src/utils/whatsapp.js`, pegado
+al `buildOrderMessage` que lo genera — si alguien cambia el formato del mensaje,
+tiene el parser a la vista. Aguanta lo que de verdad llega de un chat: el
+membrete de WhatsApp adelante (`[17/8/26, 10:32] Ana: Cliente: Fulano`), los dos
+idiomas, las negritas comidas, un "gracias!!" suelto en el medio y el espacio
+duro que mete el copiar/pegar. Nada se traga en silencio: lo que tiene forma de
+ítem pero no se entiende sale en `unparsed` y se muestra en pantalla.
+
+**Cómo cruza los productos.** Por nombre exacto contra `products` (el mensaje
+lleva el `name` tal cual lo escribió el carrito), normalizando mayúsculas y
+acentos. Una línea con un solo candidato queda resuelta sola y muestra **qué
+producto quedó**, con un botón "Cambiar"; las demás —nombre repetido entre SKU
+distintos, o producto renombrado después del pedido— traen un buscador cuyos
+resultados se eligen **con un click en la lista**. El pedido no se puede crear
+mientras quede una línea sin producto, y la pantalla dice cuántas faltan.
+
+> **Corregido el 2026-08-17, mismo día**, sobre una primera versión que el
+> usuario reportó como trabada: "los perfumes que no se seleccionan solos, cuando
+> los vas a seleccionar se queda el cuadro como si todavía no hubieras puesto
+> cuál perfume es, y deja bloqueado el botón de crear la orden". Eran tres cosas
+> sumadas, las tres del lado del panel:
+> 1. El producto se elegía en un **`<select>` colapsado ubicado encima del
+>    buscador**: se escribía abajo, los resultados entraban en el desplegable de
+>    arriba y, hasta abrirlo, seguía diciendo "Elegir producto". Ahora los
+>    resultados son una lista visible y se elige con un click.
+> 2. **Carrera en el buscador**: cada tecla lanzaba una consulta y la respuesta
+>    de una pulsación anterior podía llegar tarde y pisar (o vaciar) la lista de
+>    resultados justo después de elegir, dejando el cuadro en blanco. Ahora cada
+>    búsqueda lleva un número de secuencia y solo la última puede escribir.
+> 3. **El botón se apagaba en silencio**: había un paso "Calcular precios" y
+>    cualquier cambio posterior invalidaba el resultado, así que "Crear pedido"
+>    se deshabilitaba sin explicar por qué. Ese botón ya no existe: el total se
+>    calcula solo (debounce de 350 ms) en cuanto hay cliente y todas las líneas
+>    resueltas, y el botón muestra el importe. Cuando sigue deshabilitado, arriba
+>    dice exactamente qué falta — elegir el cliente de la lista, o cuántas líneas
+>    quedan sin producto.
+>
+> Lo mismo aplicaba al cliente: tener el nombre escrito en el campo no es lo
+> mismo que haberlo elegido de la lista, y esa diferencia no se veía. Ahora, una
+> vez elegido, se muestra con ✓ y botón "Cambiar".
+
+**El precio no sale del mensaje.** Lo calcula el servidor con la lista del
+cliente, igual que en cualquier alta: el mensaje puede ser de ayer. Lo que decía
+el mensaje se muestra al lado, solo para comparar. De eso se ocupan dos RPC
+nuevas (`migration-2026-08-17-manual-order.sql`), las dos delgadas sobre
+`compute_order_items`:
+
+- `preview_manual_order` arma el pedido **sin guardar nada** y devuelve, además
+  de los ítems con su precio vigente y el total: `dropped` (los que se cayeron
+  porque el producto está apagado o borrado) y `no_price` (los SKU sin precio en
+  la lista del cliente, que harían fallar el alta). Existe como RPC y no como
+  cuenta del navegador porque **una vendedora no puede leer `product_prices` de
+  una lista con dueñas**: el total le saldría vacío justo a ella.
+- `create_manual_order` lo guarda y lo audita en `admin_audit_log`
+  (`create_manual_order`), con el mensaje original en `detail.source_message` —
+  la prueba de dónde salió ese pedido si mañana alguien pregunta. Es idempotente
+  por `request_id`, así que un doble click no crea dos pedidos.
+
+Permiso: admin sobre cualquier cliente, vendedora solo sobre los suyos (mismo
+criterio que `update_order_items`). El tipo lo decide la lista del cliente, no
+quien carga: si es `quote`, entra como cotización.
+
+**Contra el duplicado**, que es el riesgo real de esta pantalla: al elegir el
+cliente se muestran sus pedidos de las últimas 48 h, para que la vendedora vea
+si el que está por cargar ya está.
+
+Verificado en tres niveles: **30 comprobaciones del parser** (round-trip contra
+el propio `buildOrderMessage`, en los dos idiomas, más los pegados sucios), **24
+de las RPC** contra un PostgreSQL 18 desechable con la `compute_order_items`
+real (precio y total del servidor, líneas caídas, SKU sin precio, permisos de
+vendedora ajena y sin rol, idempotencia, lista `quote`), y **20 de la pantalla**
+con Playwright contra el build real y toda la red interceptada — entre ellas el
+caso que se reportó: teclear el nombre del perfume letra por letra (con varias
+consultas en vuelo y respuestas fuera de orden), elegirlo de la lista y
+comprobar que la elección sobrevive a las respuestas atrasadas y que el botón de
+crear se habilita solo.
+
+#### Subir el PDF de una cotización y convertirlo en pedido (2026-08-18)
+
+La cotización que el catálogo genera en PDF también puede volver al sistema:
+botón **"📄 Cargar cotización desde PDF"** en la pestaña Pedidos, que abre el
+mismo modal del alta por WhatsApp con una **segunda pestaña**. Se sube el PDF
+y de ahí en adelante el camino es idéntico al del mensaje (cliente, revisión
+línea por línea, precios y total del servidor, `create_manual_order`); si la
+lista del cliente es de cotización, lo creado nace como cotización y se
+convierte en pedido con el botón de siempre de la bandeja. Sin migración: son
+las mismas RPC del 2026-08-17.
+
+**Cómo se lee el PDF** (`src/utils/quotePdf.js`, nuevo): con **pdfjs-dist**
+(cargado bajo demanda, como jspdf y xlsx; el worker viaja como asset del
+bundle). Como el PDF lo dibuja nuestra propia app, no se adivina con regex:
+cada texto se clasifica por la **coordenada X** de su columna (nombre / UPC /
+cantidad / plata), agrupando por renglón. Decisiones:
+
+- **El cruce es por UPC primero**: el PDF recorta los nombres largos a 78mm,
+  pero el UPC se imprime entero — justamente para esto. Después nombre exacto
+  y, para lo recortado, `ilike 'nombre%'` (el texto cortado ES un prefijo del
+  nombre real). Lo que no se resuelve queda en rojo con el buscador manual.
+- **`normalize('NFC')` en el parser no es opcional**: pdfjs puede devolver los
+  acentos como carácter combinante (NFD) y `products.name` está en NFC — se
+  ven iguales, pero no matchean ni con `in()` ni con `ilike`.
+- **El total impreso se muestra al lado del recalculado** y se resalta si
+  difieren: la cotización puede ser de ayer. El que vale es el del servidor,
+  siempre. La nota del pedido guarda de qué PDF salió y su total impreso.
+- Las líneas de un PDF van **sin bandera flash** (el PDF no la imprime): si
+  había precio flash, el recalculo lo pierde y se nota en la comparación.
+
+Verificado con **24 comprobaciones en Node** (un PDF generado con el mismo
+dibujo de la app: acentos, nombre recortado con UPC intacto, sin precios, 50
+líneas cruzando páginas, un PDF ajeno que no revienta y deja lo ilegible a la
+vista) y **18 con Playwright contra el build real** — navegador de verdad,
+pdfjs y su worker desde el bundle, Supabase interceptado: el flujo entero
+hasta `create_manual_order` con los ids, cantidades y nota correctos.
+
 #### El drawer podía quedar congelado sin ningún aviso (2026-08-13)
 
 `handleCheckout` y `handlePdf` en `CartDrawer.jsx` no tenían `try/finally`
@@ -267,8 +612,10 @@ un `finally`, y una excepción no prevista pasa por el mismo aviso rojo +
 migración. Distinto es el caso de una cotización cuyo PDF sí se descargó pero
 nunca se guardó: eso pasa cuando el cliente cierra la pestaña entre el PDF y
 el guardado (dos pasos async independientes) y no deja ningún rastro en la
-base — no tiene arreglo de fondo, es una carrera contra el cierre de la
-pestaña.
+base. **Desde 2026-08-17 sí tiene arreglo** (ver la sección siguiente): el
+intento queda guardado en el teléfono antes de mandarse y se reintenta al
+volver al catálogo, y el POST va con `keepalive` para sobrevivir al cierre de
+la pestaña.
 
 #### "Recuperar" siempre crea una cotización; los fallos sin cliente se pueden descartar (2026-08-13)
 
@@ -334,9 +681,9 @@ Pestañas:
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora) **por términos** (2026-08-12, mismo criterio que Pedidos — ver "Buscadores del panel" más abajo), filtros por lista y vendedora, **selector de lista por fila con confirmación** (2026-07-15: elegir una opción no aplica el cambio de una — pide "¿Cambiar la lista a X?" con Confirmar/Cancelar; ahora lo puede hacer también una vendedora con sus propios clientes, no solo admin) y campo **"$ inversión → nivel"** (solo admin, asigna el nivel automáticamente sin confirmación — pensado para carga rápida), **reasignar vendedora** por fila y **eliminar cliente** (ambos solo admin, vía RPC con registro de auditoría), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
 | **🛡️ Registro de movimientos** (solo admin, pestaña propia desde 2026-07-15 — antes vivía colapsada dentro de Clientes) | Historial de quién reasignó/borró un cliente, le cambió la lista de precio, o tocó un pedido (editar ítems, cambiar estado, convertir cotización) — con el **movimiento de stock** de ese cambio de estado cuando hubo uno (2026-08-04: "Stock descontado: N · M sin dato de stock"; el `detail` guarda producto, SKU, cantidad y el antes/después de cada uno). Fecha, usuario, acción, cliente, detalle, leído directo de `admin_audit_log`. Desde 2026-08-05 también registra **todo lo que se hace en la pestaña Superadmin** (rol admin, cambios de contraseña, dueñas de listas, alta/renombre/borrado de listas) — en esas filas la columna "Cliente / objetivo" no es un cliente sino el email del usuario o el nombre de la lista. **Filtros** (2026-07-15): por usuario, por acción y por rango de fechas (desde/hasta). **"⬇️ Descargar Excel"** (2026-08-05): baja **todo** el historial, no los 200 que muestra la tabla (usa `fetchAll`, así pasa el corte de 1,000 filas de PostgREST), respetando los filtros activos — el botón aclara "(todo el historial)" o "(filtrado)". Columnas: Fecha (texto `YYYY-MM-DD HH:MM:SS` local, ordenable en cualquier Excel sin depender de la configuración regional), Usuario, Acción, Cliente / objetivo, Detalle, ID cliente, ID pedido y **Datos completos (JSON)** — el `detail` crudo, porque el resumen legible deja cosas afuera (el antes/después ítem por ítem de una edición de pedido, el stock producto por producto). Con filtros que no dejan ninguna fila no genera archivo vacío: avisa. Es de solo lectura: la tabla no tiene policy de insert/update/delete para nadie, solo la escriben las RPC (`reassign_client`/`delete_client`/`update_client_price_list`/las de pedidos/`sa_log` desde las `sa_*`). |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**, dos formas de dar acceso a una vendedora sin cuenta: **"Vincular acceso"** (email de un usuario que ya existe en Supabase Auth, RPC `link_vendedora_login`) o **"+ Crear acceso"** (2026-07-15: crea el usuario de una — el admin define email + contraseña inicial ahí mismo, sin pasar por el dashboard de Supabase — vía la Edge Function `admin-create-vendedora-user`, ver sección 6). "Desvincular" le quita el acceso sin borrar la vendedora ni el usuario de Auth. |
-| **Pedidos** | **Todos los pedidos, sin tope** (2026-08-07: antes traía los últimos 200, así que el conteo del encabezado decía "200" hubiera 200 o 900 y los pedidos viejos no se podían ni ver ni marcar atendidos). Carga con `fetchAll` (páginas de 1,000 en paralelo) y se renderiza por lotes con scroll infinito; el encabezado muestra el total real y, con filtros puestos, "coinciden / total". Click en una fila expande un detalle de ancho completo (tabla Producto/Cantidad/Precio/Subtotal, 2026-07-17 — antes se abría angosto dentro de la columna Ítems). Cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado; 2026-07-17: las 3 acciones piden confirmación en un modal antes de aplicarse, y quedan auditadas vía RPC `update_order_status`, antes un `update` directo sin rastro) y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) **por términos** (2026-08-12: todos los términos tienen que aparecer, en cualquier orden y sin acentos — antes pedía una subcadena contigua y buscar "robert carlos" no encontraba a "Robert Edu Carlos Pacheco"; ver "Buscadores del panel" más abajo) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"**/**"Descargar Excel"** por fila (2026-07-17 el primero, mismo generador que el carrito del cliente; el Excel con las columnas exactas de `UploadTemplate.xls` para subirlo directo al bulk-order upload de SellerCloud); debajo, separados, **"Editar"** y **"Convertir en pedido"** — ambos **solo para cotizaciones** (`kind = 'quote'`), nunca para un pedido real, y "Editar" además solo mientras la cotización sigue `new` (ni atendida ni cancelada se edita). "Editar" (RPC auditada `update_order_items`) deja cambiar cantidad/quitar/agregar producto — cualquiera con acceso al pedido puede hacerlo (admin siempre, vendedora solo los de sus propios clientes). "Convertir en pedido" (RPC `convert_quote_to_order`) congela el precio de ese momento con la lista real del cliente (a diferencia de la cotización, que sigue mostrando el precio **vigente** vía `get_quotes_live_pricing` — ver sección 6) y deja de ajustarse a cambios de precio futuros. Arriba de la lista, **aviso rojo de los pedidos que el cliente envió y no se registraron** (2026-08-05, `order_failures`): cliente, fecha, motivo y cantidad de líneas, con un botón **"Recuperar"** que lo carga como pedido con los precios vigentes de su lista (RPC `recover_order_failure`, auditada) — antes un pedido rechazado no dejaba rastro en ninguna parte. Aparece también cuando todavía no hay ningún pedido, para que "aún no hay pedidos" no tape justo lo que hay que ver. Una vendedora solo ve (y recupera) los de sus propios clientes. |
+| **Pedidos** | **Todos los pedidos, sin tope** (2026-08-07: antes traía los últimos 200, así que el conteo del encabezado decía "200" hubiera 200 o 900 y los pedidos viejos no se podían ni ver ni marcar atendidos). Carga con `fetchAll` (páginas de 1,000 en paralelo) y se renderiza por lotes con scroll infinito; el encabezado muestra el total real y, con filtros puestos, "coinciden / total". Click en una fila expande un detalle de ancho completo (tabla Producto/Cantidad/Precio/Subtotal, 2026-07-17 — antes se abría angosto dentro de la columna Ítems). Cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado; 2026-07-17: las 3 acciones piden confirmación en un modal antes de aplicarse, y quedan auditadas vía RPC `update_order_status`, antes un `update` directo sin rastro) y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) **por términos** (2026-08-12: todos los términos tienen que aparecer, en cualquier orden y sin acentos — antes pedía una subcadena contigua y buscar "robert carlos" no encontraba a "Robert Edu Carlos Pacheco"; ver "Buscadores del panel" más abajo) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"**/**"Descargar Excel"** por fila (2026-07-17 el primero, mismo generador que el carrito del cliente; el Excel con las columnas exactas de `UploadTemplate.xls` para subirlo directo al bulk-order upload de SellerCloud); debajo, separados, **"Editar"** y **"Convertir en pedido"** — ambos **solo para cotizaciones** (`kind = 'quote'`), nunca para un pedido real, y "Editar" además solo mientras la cotización sigue `new` (ni atendida ni cancelada se edita). "Editar" (RPC auditada `update_order_items`) deja cambiar cantidad/quitar/agregar producto — cualquiera con acceso al pedido puede hacerlo (admin siempre, vendedora solo los de sus propios clientes). "Convertir en pedido" (RPC `convert_quote_to_order`) congela el precio de ese momento con la lista real del cliente (a diferencia de la cotización, que sigue mostrando el precio **vigente** vía `get_quotes_live_pricing` — ver sección 6) y deja de ajustarse a cambios de precio futuros. Arriba de la lista, **aviso rojo de los pedidos que el cliente envió y no se registraron** (2026-08-05, `order_failures`): cliente, fecha, motivo y cantidad de líneas, con un botón **"Recuperar"** que lo carga como pedido con los precios vigentes de su lista (RPC `recover_order_failure`, auditada) — antes un pedido rechazado no dejaba rastro en ninguna parte. Aparece también cuando todavía no hay ningún pedido, para que "aún no hay pedidos" no tape justo lo que hay que ver. Una vendedora solo ve (y recupera) los de sus propios clientes. Al lado, **"💬 Cargar pedido desde WhatsApp"** (2026-08-17): pega el mensaje del chat y crea el pedido, para el caso en que el registro nunca llegó al sistema y el cliente no vuelve a abrir el catálogo — ver la sección 2 para el detalle. |
 | **🔐 Superadmin** (2026-08-05, solo superadmin) | Lo que antes obligaba a entrar al SQL Editor o al dashboard de Auth. **Usuarios y accesos**: todos los usuarios de Supabase Auth con su rol (Superadmin/Admin/Vendedora/Sin rol), la vendedora vinculada, fecha de alta y último acceso; por fila, "Hacer admin"/"Quitar admin" (con confirmación) y **"Cambiar contraseña"** (sirve para cualquier acceso: vendedora, admin o el propio superadmin); arriba, **"+ Crear admin"** (crea el usuario de Auth con su contraseña inicial y le da el rol, en un paso). **Listas de precio y dueñas**: por lista, cuántos clientes y cuántos precios tiene, sus dueñas con la principal marcada (★), agregar/quitar dueña y cambiar cuál es la principal; si al mover dueñas quedaron clientes con una vendedora que ya no es dueña, avisa cuántos y ofrece pasarlos a la principal de una vez. También **crear** una lista nueva (código + nombre visible; el código se valida y no se puede cambiar después), **renombrar** el nombre visible y **eliminar** una lista que no sea de las base y esté completamente vacía. Todo va por RPC `sa_*` con `is_superadmin()` adentro (o por la Edge Function `superadmin-users` cuando hace falta la Admin API de Auth) y **todo queda en el Registro de movimientos**. |
-| **📈 Métricas** (2026-08-06, solo superadmin) | Los KPIs de todo el sistema en una pantalla, **en vivo** (se refresca solo cada 60 s, más un botón "↻ Actualizar" y un cartel "actualizado hace X"). Selector de rango **7 / 14 / 30 días** (default 14). Ocho tarjetas: monto capturado, pedidos, ticket promedio, cotizaciones, vendedoras activas, **tiempo promedio a atender** (horas desde que entró el pedido hasta la primera vez que se marcó Atendido; "—" con la aclaración "aún sin pedidos marcados atendidos" cuando todavía no hay ninguno), cotizaciones convertidas y cancelados; debajo, los **fallos de envío** del período y cuántos se recuperaron. Después, un **mini-gráfico de barras del monto por día** (SVG propio, sin librería de charts) y la tabla **"Adopción por vendedora"** (pedidos, monto, ticket y cotizaciones por vendedora, ordenada por monto, con fila de total del período que cuadra con las tarjetas) y su **"⬇️ Descargar Excel"**. Los pedidos sin vendedora salen agrupados en una fila "—". **Las cuentas de prueba (`SystemsPruebas` y compañía) quedan afuera de todos los números** y sus nombres se listan al pie de la tabla, para que la exclusión se vea en vez de ser invisible. Toda la data viene de **una sola RPC** `sa_metrics_overview(p_days)` con `is_superadmin()` adentro: los agregados cruzan a todas las vendedoras, así que sumarlos desde el cliente daría un número distinto según quién mira (la RLS le recorta a cada vendedora sus propios pedidos). Es la única `sa_*` que **no** audita: es de solo lectura, y una fila por refresco llenaría `admin_audit_log` con una por minuto por pestaña abierta. |
+| **📈 Métricas** (2026-08-06, solo superadmin) | Los KPIs de todo el sistema en una pantalla, **en vivo** (se refresca solo cada 60 s, más un botón "↻ Actualizar" y un cartel "actualizado hace X"). Selector de rango **7 / 14 / 30 días** (default 14). Nueve tarjetas: monto capturado, pedidos, ticket promedio, cotizaciones, vendedoras activas, **tiempo promedio a atender** (horas desde que entró el pedido hasta la primera vez que se marcó Atendido; "—" con la aclaración "aún sin pedidos marcados atendidos" cuando todavía no hay ninguno), cotizaciones convertidas, cancelados y **Enviados a SellerCloud** (2026-08-18, `migration-2026-08-18-sa-metrics-sellercloud.sql`: pedidos del período con `sellercloud_order_id` anotado — cancelados incluidos a propósito, un pedido enviado y cancelado acá igual salió — con el total histórico en la leyenda; muestra "—" mientras la RPC sea la vieja); debajo, los **fallos de envío** del período y cuántos se recuperaron. Después, un **mini-gráfico de barras del monto por día** (SVG propio, sin librería de charts) y la tabla **"Adopción por vendedora"** (pedidos, monto, ticket y cotizaciones por vendedora, ordenada por monto, con fila de total del período que cuadra con las tarjetas) y su **"⬇️ Descargar Excel"**. Los pedidos sin vendedora salen agrupados en una fila "—". **Las cuentas de prueba (`SystemsPruebas` y compañía) quedan afuera de todos los números** y sus nombres se listan al pie de la tabla, para que la exclusión se vea en vez de ser invisible. Toda la data viene de **una sola RPC** `sa_metrics_overview(p_days)` con `is_superadmin()` adentro: los agregados cruzan a todas las vendedoras, así que sumarlos desde el cliente daría un número distinto según quién mira (la RLS le recorta a cada vendedora sus propios pedidos). Es la única `sa_*` que **no** audita: es de solo lectura, y una fila por refresco llenaría `admin_audit_log` con una por minuto por pestaña abierta. |
 
 > **La pestaña Flash Sales se eliminó** (2026-08-07). Estaba entre Vendedoras
 > y Pedidos y manejaba ofertas con precio promo propio + cuenta regresiva
@@ -579,6 +926,55 @@ en un lado, cambiarlo en el otro (el sufijo del SKU vive en `isNonCatalogSku`,
 `src/pages/admin/ui.jsx`). Contra el export real `119389.xlsx` la regla excluye
 282 filas (77 `-BOX` + 111 `-SPECIAL` + 94 por categoría) y deja 3,371 de
 catálogo.
+
+### El día que entró el export general de SellerCloud (2026-08-17)
+
+Un admin subió por esta pestaña `124758.xlsx` —el export **general** de
+SellerCloud, 8,272 filas, no el de catálogo— y se crearon del orden de 3,000
+productos que no van. Sirve como caso de referencia de qué tan lejos llega el
+filtro de no-catálogo y qué se puede deshacer después.
+
+**Lo que el filtro atajó y lo que no.** De las 8,272 filas descartó 1,643 (13
+basura + `-BOX`/`-SPECIAL` + categorías excluidas) y dejó pasar 6,616. De esas,
+5,098 eran perfume y **1,518 no**, repartidas en categorías que la lista de
+exclusión no nombra:
+
+| `PRODUCT_CATEGORY` | filas | por qué pasó |
+| --- | --- | --- |
+| `855696`, `855824`, `856208` | 1,182 | categorías corruptas del export (un ID donde va el nombre) |
+| `Beauty and Health` | 255 | `EXCLUDED_LINES` tiene `beauty` y compara por **igualdad exacta** |
+| `Office Supply` | 55 | no está en la lista |
+| (sin categoría) | 16 | fila sin `PRODUCT_CATEGORY`, no hay nada que comparar |
+| `Home` / `Party` / `Toys` | 10 | no están en la lista |
+
+O sea: la exclusión por categoría es una lista blanca al revés — nombra lo que
+conoce y deja entrar todo lo demás. Un export nuevo con una categoría nueva
+vuelve a pasar. La regla del SKU (`-BOX`/`-SPECIAL`) sí es robusta porque
+matchea por sufijo.
+
+**Qué tan grave fue.** Poco, por el efecto de rebote de dos reglas que ya
+existían: la carga de productos no toca precios (eso es la pestaña Precios), y
+desde `migration-2026-08-06-require-price.sql` un producto sin precio `> 0` no
+sale en el catálogo ni se puede pedir. Los 3k quedaron ensuciando el panel
+admin, invisibles para el cliente.
+
+**Cómo se revirtió.** `supabase/cleanup-2026-08-17-carga-excel-erronea.sql`, para
+correr a mano en el SQL Editor paso por paso. La tanda se identifica por
+`created_at` (la carga los crea todos en el mismo minuto) y se congela en una
+tabla de respaldo con una columna `a_borrar`, que es lo que leen el apagado y el
+borrado — así los dos operan sobre el mismo conjunto aunque en el medio se
+perdone parte (ej. conservar los perfumes nuevos). Primero `active = false`
+(reversible, inmediato), y el `delete` recién después de revisar el catálogo.
+Detalles que el script cuida: `deactivated_by_stock = false` al apagar, para que
+el trigger de stock no los vuelva a prender; RLS en las tablas de respaldo, que
+si no PostgREST las publicaría con la anon key; y el deshacer reinserta con los
+mismos `id`, así los precios respaldados vuelven a enganchar. Probado sobre un
+Postgres desechable con réplica del esquema, en los dos escenarios (borrar todo
+/ perdonar los perfumes).
+
+**Lo que no se recupera con eso:** los SKU que ya existían y el archivo pisó
+(nombre, categoría, foto, activo, stock, upc). Eso es backup/PITR de Supabase o
+volver a subir el archivo bueno.
 
 ### Los SKU `-BOX` y `-SPECIAL` no se publican nunca (2026-08-13)
 
@@ -1279,12 +1675,15 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   `apply_price_list`, pedido atendido/reabierto, backfill), corridos también
   re-aplicando la migración, con el `schema.sql` completo encima y en una
   instalación desde cero.
-- **Integración SellerCloud** (analizada, no implementada): al crear una
-  orden → Supabase Edge Function la crea en SellerCloud (`POST
-  /rest/api/Orders/`, canal Wholesale) y la marca On Hold (`PUT
-  /api/Orders/StatusCode`, status 200); las vendedoras confirman desde
-  SellerCloud. Requiere: usuario API dedicado en SellerCloud, y agregar
-  email/UserID de SellerCloud a `clients` (el export 118377 ya los trae).
+- **Integración SellerCloud** — ✅ **hecha el 2026-08-17**, con un cambio sobre
+  lo que decía este plan: **no se dispara al crear la orden sino con un botón
+  por pedido** en la bandeja (decisión del usuario: la vendedora revisa antes).
+  Lo demás quedó como estaba pensado: Edge Function `sellercloud-push-order`,
+  `POST /rest/api/Orders/` con canal Wholesale, `PUT /api/Orders/StatusCode`
+  con status 200, y las vendedoras confirmando desde SellerCloud. Tampoco hizo
+  falta agregarle el email a `clients`: los datos del cliente se leen de
+  SellerCloud en el momento del envío con el `sellercloud_id` que ya teníamos.
+  Falta lo de afuera: usuario de API dedicado y los secrets. Ver la sección 2.
 - **Sync SellerCloud → catálogo vía n8n**: el lado base de datos ya está
   (2026-07-10): `supabase/migration-2026-07-10-sellercloud-sync.sql`
   (corrida y probada en producción: tabla `sync_runs` de auditoría +
