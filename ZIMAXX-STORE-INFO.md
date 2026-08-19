@@ -2,29 +2,32 @@
 
 > Documento de referencia para retomar el trabajo en cualquier sesión.
 >
-> **⚠️ ESTADO DE MIGRACIONES (2026-08-14): hay CUATRO pendientes** — correrlas
-> **junto con el deploy**, en cualquier orden (son independientes entre sí).
-> La cuarta es la del 2026-08-14 y es la única que **no** bloquea el deploy:
-> - `migration-2026-08-14-catalog-upc.sql` (punto 61): el UPC del producto viaja
->   al catálogo del cliente (`get_catalog`) y queda guardado en los ítems del
->   pedido (`compute_order_items`, para el PDF que baja la vendedora desde
->   Pedidos). Se puede desplegar el frontend antes: sin la migración llega
->   `undefined` y no se dibuja ningún UPC, igual que un producto sin código
->   cargado. Sin cambios de esquema ni de permisos.
+> **⚠️ ESTADO DE MIGRACIONES (2026-08-19, sondeado EN PRODUCCIÓN con
+> `supabase db query --linked`): queda UNA pendiente** —
+> `migration-2026-08-13-dismiss-order-failures.sql` (punto 60), y es justo la
+> que **rompe la pestaña Pedidos si el frontend se despliega sin ella**:
+> `loadFailures()` filtra por `dismissed_at`, columna que sin la migración no
+> existe (`42703`). Correrla junto con (o antes de) el próximo deploy del
+> frontend.
 >
-> Las tres del 2026-08-13, estas sí junto con el deploy:
-> - `migration-2026-08-13-exclude-box-skus.sql` (los SKU `-BOX` fuera del
->   catálogo, punto 57): el panel nuevo ya marca y bloquea los `-BOX`, pero sin
->   la migración nada los desactiva en la base y la carga de precios los sigue
->   republicando (y `apply_price_list` devolvería `blocked_noncatalog` vacío,
->   con lo que el chip 🚫 del preview de Precios no aparece nunca).
-> - `migration-2026-08-13-recover-as-quote.sql` (punto 59): sin ella,
->   "Recuperar" en el panel sigue creando un pedido real de una — el frontend
->   no cambió nada de este lado, es 100% lógica del servidor.
-> - `migration-2026-08-13-dismiss-order-failures.sql` (punto 60): **esta sí
->   rompe la pestaña Pedidos si se despliega el frontend sin ella antes** —
->   `loadFailures()` ya filtra por `dismissed_at`, columna que sin la
->   migración no existe (`42703`).
+> Las otras tres del aviso anterior (2026-08-14) **ya están corridas** —
+> verificado el 2026-08-19 mirando las funciones y columnas vivas de
+> producción: `catalog-upc` (el `get_catalog` vivo ya devuelve `upc`),
+> `exclude-box-skus` (`apply_price_list` ya conoce `blocked_noncatalog`) y
+> `recover-as-quote` (`recover_order_failure` ya crea cotización). También
+> corrió `migration-2026-08-18-sa-metrics-sellercloud.sql`
+> (`sa_metrics_overview` ya trae los contadores de SellerCloud). La Edge
+> Function `sellercloud-push-order` está en la **v11 = el repo** (verificada
+> bajándola el 2026-08-19).
+>
+> **⚠️ HALLAZGO 2026-08-19: la Edge Function `superadmin-users` NO está
+> desplegada** — `supabase functions list` solo muestra
+> `admin-create-vendedora-user` y `sellercloud-push-order`, y ya era así
+> antes de los deploys de ese día. `SuperAdminPanel.jsx` la invoca para
+> cambiar contraseñas y crear admins: esas acciones del panel 🔐 están rotas
+> en producción hasta redesplegarla (`supabase functions deploy
+> superadmin-users`; el código vive en el repo). Se desconoce cuándo ni cómo
+> se borró.
 >
 > **✅ ESTADO DE MIGRACIONES (2026-08-12): no quedaba ninguna pendiente.**
 > Todas las migraciones de `supabase/` anteriores a esa fecha están **corridas y probadas en
@@ -1496,7 +1499,10 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   la RPC contra un PostgreSQL 18 desechable y 8 de la pantalla con Playwright.
   **No se pudo probar contra la API real** (hacen falta credenciales y tocar
   producción): por eso la respuesta de `Customers/{id}` se lee de forma
-  defensiva y los errores dicen qué campo faltó.
+  defensiva y los errores dicen qué campo faltó. *(Superado el 2026-08-19: la
+  API real ya se ejercitó a fondo con la función de diagnóstico temporal —
+  ver las entradas del Sales Rep y de las direcciones — y de ahí salieron los
+  dos vicios grandes del create.)*
   **Los 5 secrets ya están cargados** (`SELLERCLOUD_BASE_URL / USERNAME /
   PASSWORD / COMPANY_ID / WAREHOUSE_ID`, vistos en `supabase secrets list`;
   `COMPANY_ID` = 172, igual que el sync). **Sin pendientes de deploy.**
@@ -1599,7 +1605,8 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
 
 - [x] **Cambio de modalidad del envío a SellerCloud** (2026-08-18, segunda
   tanda del día, a pedido del usuario; función redesplegada,
-  `migration-2026-08-18-sa-metrics-sellercloud.sql` **pendiente de correr**).
+  `migration-2026-08-18-sa-metrics-sellercloud.sql` pendiente en ese momento,
+  **corrida después** — verificado en producción el 2026-08-19).
   Cuatro cambios sobre lo de la mañana:
   1. **Sin On Hold**: la orden se crea y queda tal cual. El control humano
      pasó a estar ANTES (punto 2), así que el hold era un paso de más. Se
@@ -1735,6 +1742,50 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   link, las tres posiciones del filtro, el contador "1 / 3" y la combinación
   con el filtro de estado.
 
+- [x] **Las direcciones de la orden llegaban "sin dirección de shipping": el
+  nombre se perdía en el mapeo** (2026-08-19, tercer hallazgo de SellerCloud
+  del día, reportado por una vendedora vía el usuario; función **redesplegada
+  el mismo día**, v11 — verificada idéntica al repo bajándola). El diagnóstico (misma función temporal `sc-rep-diag`, modo
+  lectura) mostró que las direcciones SÍ viajaban y se guardaban —
+  calle/ciudad/zip/país presentes en todas las órdenes — pero con
+  `FirstName`/`LastName` VACÍOS: la ficha del cliente devuelve el nombre como
+  `ContactName` (`UserAddressDto`) y el create espera `FirstName`/`LastName`
+  (`OrderAddressDto`), así que el copiado textual lo perdía (ídem
+  `CompanyName` vs `Business`). En el panel una dirección sin nombre se ve
+  vacía — la orden de Nehomar (#6856344) apareció CON nombres porque una
+  vendedora la corrigió a mano allá, así llegó la queja. Fix: `toOrderAddress`
+  en `sellercloud.ts` traduce el DTO (parte `ContactName` en primera palabra +
+  resto, cae al nombre del cliente si no hay contacto, `CompanyName` →
+  `Business`, sin claves basura). **Reparadas las 6 órdenes existentes** con
+  `PUT /api/Orders/{id}` — que usa un TERCER shape de dirección
+  (`AddressWithSeparateAddrLinesDto`, `AddressLine1` en vez de `Address`) —
+  verificando por relectura que calle/rep/total quedaron intactos: #6856795
+  Angello, #6856340 Chachos, #6856332 Macedon, #6856329/#6854259/#6854229
+  Cortes (a estas además se les corrigió el mojibake "AmÃ©ricas" que viene
+  roto en la ficha del cliente — OJO: la ficha sigue rota allá, las órdenes
+  futuras de Cortes heredarán ese texto). La de Nehomar no se tocó (ya estaba
+  a mano). **Verificado**: la suite del cliente pasó a 22 comprobaciones (las
+  4 nuevas: mapeo completo shipping/billing con la entrada marcada de la
+  lista, fallback al nombre del cliente, y ausencia de claves basura).
+  reporte de una vendedora vía el usuario: "a un cliente a veces no le cargan
+  ciertas imágenes y se arregla reenviándole el link"). Diagnóstico con
+  datos: las 3,055 fotos son hotlinks a `fc2.cwa.sellercloud.com` (el
+  servidor de SellerCloud, no un CDN), medido con respuestas de 0.3–1.6 s,
+  ~110–125 KB por foto y SIN headers de caché; en datos móviles (navegador
+  embebido de WhatsApp) algunas requests de la ráfaga del lazy loading se
+  caen, y una `<img>` fallida quedaba rota hasta recargar la página —
+  reenviar el link era un reintento manual. `ProductImage` ahora reintenta 2
+  veces (1.2 s y 3.5 s) **remontando la `<img>` con `key={attempt}`** — no
+  cache-busters: el fallo de red no se cachea y el éxito debe seguir usando
+  el caché del teléfono — y muestra el monograma Z mientras espera o si se
+  agotan los intentos (nunca el glifo de imagen rota). **Verificado** con
+  Playwright contra el build real interceptando el host de fotos (6
+  comprobaciones): la foto que falla 2 veces carga sola a la 3ra sin recargar,
+  la imposible se pide exactamente 3 veces y deja la Z, y la sana se pide una
+  sola vez. Pendiente futuro (opción 2 de aquel diagnóstico): copiar las
+  fotos a Supabase Storage con CDN vía n8n y dejar de depender del servidor
+  de SellerCloud.
+
 - [x] **Cargar a mano el pedido que llegó por WhatsApp** (2026-08-17, a pedido
   del usuario, `migration-2026-08-17-manual-order.sql` **corrida** — las RPC
   `manual_order_client` / `preview_manual_order` / `create_manual_order` viven
@@ -1832,11 +1883,14 @@ migración (`schema.sql` y `diagnostico-2026-08-12-*.sql` no cuentan).
 | `migration-2026-08-06-sa-metrics.sql` | ✅ corrida | `sa_metrics_overview` → `42501` (existe, anon sin `execute`) |
 | `migration-2026-08-06-require-price.sql` | ✅ corrida | confirmado por el usuario (2026-08-12). Desde la API no se veía: solo reemplaza cuerpos de funciones |
 | `migration-2026-08-12-hide-out-of-stock.sql` | ✅ corrida | el sondeo de la mañana dio `products.deactivated_by_stock` → `42703`; el usuario la corrió ese mismo día y lo confirmó |
-| `migration-2026-08-13-exclude-box-skus.sql` | ⏳ **pendiente** (2026-08-13) | escrita hoy (punto 57). Cuando corra: `is_noncatalog_sku('X-BOX')` → `true` y el trigger `products_enforce_noncatalog` en `pg_trigger`. **Correr junto con el deploy** |
+| `migration-2026-08-13-exclude-box-skus.sql` | ✅ corrida (verificado el 2026-08-19 sondeando producción: `apply_price_list` ya conoce `blocked_noncatalog`) | los SKU `-BOX` fuera del catálogo (punto 57) |
+| `migration-2026-08-13-recover-as-quote.sql` | ✅ corrida (verificado el 2026-08-19: `recover_order_failure` de producción ya crea cotización) | "Recuperar" crea cotización y no pedido real (punto 59) |
+| `migration-2026-08-13-dismiss-order-failures.sql` | ⏳ **PENDIENTE — la única que queda** (verificado el 2026-08-19: `order_failures.dismissed_at` no existe en producción) | "Descartar" para fallos sin rescate posible (punto 60). **Rompe la pestaña Pedidos si el frontend se despliega sin ella** (`loadFailures()` filtra por la columna → `42703`) |
+| `migration-2026-08-14-catalog-upc.sql` | ✅ corrida (verificado el 2026-08-19: el `get_catalog` de producción ya devuelve `upc`) | UPC visible en el catálogo del cliente y guardado en los ítems (punto 61) |
 | `migration-2026-08-17-sellercloud-push.sql` | ✅ corrida | comprobado 2026-08-18 con la anon key: `orders.sellercloud_order_id` existe y `mark_order_sellercloud` responde `no autorizado` (existe, anon sin permiso) |
 | `migration-2026-08-17-manual-order.sql` | ✅ corrida | comprobado 2026-08-18 con la anon key: las tres RPC responden `no autorizado` (existen) |
 | `migration-2026-08-18-sellercloud-salesrep.sql` | ✅ corrida | 2026-08-18, confirmada por el usuario el mismo día (junto con el secret `SELLERCLOUD_MARKETING_SOURCE_ID`). Probada 2× en PG 18 local antes de entregarla |
-| `migration-2026-08-18-sa-metrics-sellercloud.sql` | ⏳ **pendiente** (2026-08-18) | replica `sa_metrics_overview` con `totals.sellercloud_enviados` + `sellercloud_total`. Hasta que corra, el KPI "Enviados a SellerCloud" muestra "—". Probada con datos en PG 18 local (2 pasadas) |
+| `migration-2026-08-18-sa-metrics-sellercloud.sql` | ✅ corrida (verificado el 2026-08-19 sondeando `sa_metrics_overview` en producción) | replica `sa_metrics_overview` con `totals.sellercloud_enviados` + `sellercloud_total` para el KPI "Enviados a SellerCloud". Probada con datos en PG 18 local (2 pasadas) |
 
 **✅ Cierre (2026-08-12): no queda ninguna migración pendiente.** El sondeo con
 la anon key dejó una sola pendiente confirmada
@@ -1891,8 +1945,10 @@ zimaxx-store/
 ├── supabase/
 │   ├── schema.sql             ← ejecutar en Supabase SQL Editor (idempotente)
 │   ├── migration-*.sql        ← deltas sobre una base ya creada
-│   ├── functions/             ← Edge Functions (Deno). sellercloud-push-order manda el pedido a SellerCloud On Hold (2026-08-17)
+│   ├── functions/             ← Edge Functions (Deno). sellercloud-push-order manda el pedido a SellerCloud (2026-08-17; desde el 2026-08-19 asigna Sales Rep y direcciones con nombre vía PUT posterior al create, verificando por relectura)
 │   └── cleanup-*.sql          ← limpiezas de datos de una sola vez, a mano y paso por paso (no son migraciones)
+├── tests/
+│   └── sc-push-tests.mjs      ← suite del cliente de SellerCloud (22 comprobaciones, Node contra un servidor falso; en el repo desde 2026-08-19)
 └── src/
     ├── main.jsx
     ├── App.jsx                 ← rutas: / y /admin (admin con lazy import)

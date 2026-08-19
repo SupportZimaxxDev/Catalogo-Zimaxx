@@ -414,6 +414,50 @@ export function addressesOf(customer: Record<string, unknown>) {
   }
 }
 
+// Convierte la dirección tal como viene en el CLIENTE (UserAddressDto:
+// ContactName, CompanyName, Address...) al shape que el create de órdenes
+// SÍ entiende (OrderAddressDto: FirstName/LastName, Business, Address...).
+// Copiarla textual — lo que se hacía hasta el 2026-08-19 — guardaba calle,
+// ciudad y zip pero PERDÍA EL NOMBRE del destinatario (el create espera
+// FirstName/LastName y la del cliente trae ContactName; Business vs
+// CompanyName, ídem): en el panel de SellerCloud esa dirección se ve como
+// "sin dirección de envío" y un label saldría sin destinatario — fue el
+// reporte de una vendedora, que las corregía a mano allá.
+// El nombre sale del ContactName de la propia dirección (primera palabra =
+// nombre, el resto apellido, mismo criterio que usa SellerCloud); si la
+// dirección no trae contacto, se cae al nombre del cliente.
+export function toOrderAddress(
+  addr: Record<string, unknown>,
+  fallback?: { FirstName?: string; LastName?: string },
+) {
+  const s = (v: unknown) => (v == null ? '' : String(v).trim())
+  const contact = s(pick(addr, 'ContactName', 'contactName', 'Name'))
+  let first = ''
+  let last = ''
+  if (contact) {
+    const parts = contact.split(/\s+/)
+    first = parts[0]
+    last = parts.slice(1).join(' ')
+  } else {
+    first = s(fallback?.FirstName)
+    last = s(fallback?.LastName)
+  }
+  return {
+    FirstName: first,
+    LastName: last,
+    Business: s(pick(addr, 'CompanyName', 'Business', 'companyName')),
+    Country: s(pick(addr, 'Country', 'CountryCode', 'country')),
+    City: s(pick(addr, 'City', 'city')),
+    State: s(pick(addr, 'State', 'StateCode', 'state')),
+    Region: s(pick(addr, 'Region', 'region')),
+    ZipCode: s(pick(addr, 'ZipCode', 'PostalCode', 'zipCode')),
+    Address: s(pick(addr, 'Address', 'StreetLine1', 'Address1', 'Street', 'address')),
+    Address2: s(pick(addr, 'Address2', 'StreetLine2', 'address2')),
+    Phone: s(pick(addr, 'Phone', 'PhoneNumber', 'phone')),
+    Fax: s(pick(addr, 'Fax', 'FaxNumber', 'fax')),
+  }
+}
+
 export function buildOrderPayload(
   cfg: Config,
   customer: Record<string, unknown>,
@@ -429,15 +473,18 @@ export function buildOrderPayload(
   const salesRep = Number(extras.salesRepId)
   const marketing = Number(extras.marketingSourceId)
 
+  const details = customerDetails(customer)
+  const addrs = addressesOf(customer)
   return {
-    CustomerDetails: customerDetails(customer),
+    CustomerDetails: details,
     OrderDetails: {
       CompanyID: cfg.companyId,
       Channel: CHANNEL_WHOLESALE,
       ...(Number.isFinite(salesRep) && salesRep > 0 ? { SalesRepresentative: salesRep } : {}),
       ...(Number.isFinite(marketing) && marketing > 0 ? { MarketingSource: marketing } : {}),
     },
-    ...addressesOf(customer),
+    ShippingAddress: toOrderAddress(addrs.ShippingAddress, details),
+    BillingAddress: toOrderAddress(addrs.BillingAddress, details),
     Products: usable.map((i) => ({
       ProductID: i.sku,
       Qty: i.qty,

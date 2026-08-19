@@ -346,6 +346,8 @@ estar en el navegador ni en la base, así que el HTTP lo hace una Edge Function:
   igual en Node, y por eso se puede probar entero contra un servidor falso sin
   desplegar nada.
 - `.../index.ts` — el envoltorio de Edge Function: valida, arma y anota.
+- `tests/sc-push-tests.mjs` — la suite del cliente (22 comprobaciones, Node
+  puro contra un servidor falso; ver "Cómo está verificado" más abajo).
 - `migration-2026-08-17-sellercloud-push.sql` — `orders.sellercloud_order_id` /
   `sellercloud_pushed_at` / `sellercloud_error`, y la RPC
   `mark_order_sellercloud` que anota el resultado con permiso y auditoría.
@@ -376,6 +378,23 @@ el cambio de modalidad — el candado de Atendido lo reemplaza.)
 > orden ya existe al llegar a ese paso, cualquier fallo posterior se degrada a
 > `warning` y nunca a error de envío (un error haría reintentar y duplicaría
 > la orden).
+
+> **Las direcciones hay que TRADUCIRLAS, no copiarlas** (2026-08-19, reporte
+> de una vendedora: "las órdenes llegan sin dirección de shipping"). El create
+> sí aplica las direcciones, pero espera `OrderAddressDto`
+> (`FirstName`/`LastName`/`Business`/`Address`…) y la ficha del cliente las
+> devuelve como `UserAddressDto` (`ContactName`/`CompanyName`/`Address`…).
+> Copiarlas textual — lo que se hacía — guardaba calle/ciudad/zip pero perdía
+> el **nombre del destinatario**: en el panel de SellerCloud esa dirección se
+> ve como vacía y el label saldría sin nombre (las vendedoras las corregían a
+> mano). `toOrderAddress` en `sellercloud.ts` hace el mapeo: parte
+> `ContactName` en nombre/apellido (primera palabra + resto), cae al nombre
+> del cliente si la dirección no trae contacto, mapea `CompanyName` →
+> `Business` y no deja pasar las claves basura del DTO del cliente (ID,
+> flags, RowStatus). En una orden ya creada, las direcciones se corrigen con
+> el mismo `PUT /api/Orders/{id}` del rep, pero con OTRO shape más
+> (`AddressWithSeparateAddrLinesDto`: `AddressLine1` en vez de `Address`) —
+> tres nombres distintos para el mismo campo según el endpoint.
 
 **Sales Rep y Marketing Source (2026-08-18).** La orden queda además con el
 Sales Rep de **la vendedora del pedido** y el Marketing Source **"catalogo
@@ -474,24 +493,30 @@ supabase secrets set SELLERCLOUD_MARKETING_SOURCE_ID=...     # opcional: ID de "
 > marcada (bandera booleana que nombre ship/bill, o `AddressType`) y si no hay
 > marca usa la primera; `Addresses` vacía da el error "cargásela allá".
 
-Verificado con **86 comprobaciones** del cliente de la API (la suite del
-2026-08-18; las 14 del On Hold se fueron con el cambio de modalidad y entró la
-de "no toca el endpoint de status") contra un SellerCloud falso que habla como
-el real: canal 21, token reusado mientras vive y renovado cuando vence, sin
-ninguna llamada de status tras crear la orden, credenciales malas que no crean
-nada, cliente sin email o sin dirección cortando **antes** de crear la orden,
-respuestas con el id pelado o sin id, la regresión con la respuesta real de
-`Customers/{id}` — >2 KB, anidada bajo `General`, direcciones en la lista
-`Addresses` —, los extras de Sales Rep / Marketing Source que viajan solo
-cuando son enteros válidos, el resolvedor correo→ID (match case-insensitive,
-paginado, corte en página vacía, caché sin request extra), **y el caso
-reportado: un 200 con HTML en cada paso**. Más 14 de la RPC contra un
-PostgreSQL 18 desechable (marcado, segundo envío que no pisa ni re-audita,
-error que no marca nada como enviado, índice único, permisos de vendedora
-ajena y sin rol); y 8 de la pantalla con Playwright. **Lo único que no se probó es contra la API real de SellerCloud** —
-no hay forma sin credenciales sensibles. Los nombres de campo de la respuesta
-de `Customers/{id}` se leen de forma defensiva (varias claves alternativas)
-justamente por eso, y si algo falta el error dice qué.
+**Cómo está verificado.** La suite del cliente de la API vive en el repo
+desde el 2026-08-19 — **`tests/sc-push-tests.mjs`, 22 comprobaciones, se
+corre con `node tests/sc-push-tests.mjs`** (Node 23+; `sellercloud.ts` no
+importa nada de Deno a propósito). Corre contra un servidor falso que
+reproduce los vicios REALES de esta API: el create que ignora el Sales Rep,
+el PUT que puede fallar con 500 o contestar 200 sin aplicar, la relectura
+vacía, y el shape verdadero del cliente (direcciones en la lista `Addresses`
+con `ContactName`/`CompanyName`). Cubre el camino feliz completo
+(create → PUT solo con `SalesRep1` → relectura), el mapeo de direcciones
+(nombre partido, fallback al nombre del cliente, sin claves basura), la
+degradación a warning de todo fallo posterior al create, y que extras basura
+(NaN, 0, negativos) no viajan. Las suites anteriores (86 y 100
+comprobaciones, 2026-08-17/18: token renovado al vencer, credenciales malas,
+cliente sin email/dirección cortando antes de crear, el 200 con HTML en cada
+paso, el resolvedor correo→ID) quedaban en el scratchpad de cada sesión y se
+perdieron — por eso esta vive en `tests/`. Además hubo 14 comprobaciones de
+la RPC contra un PostgreSQL 18 desechable y 8 de la pantalla con Playwright.
+
+**La API real ya se ejercitó** (2026-08-19, con una Edge Function de
+diagnóstico temporal, borrada al terminar): de ahí salieron los dos
+descubrimientos grandes de arriba (el create ignora `SalesRepresentative`;
+las direcciones necesitan traducción de DTO) y la reparación de las órdenes
+ya creadas. La respuesta de `Customers/{id}` se sigue leyendo de forma
+defensiva (varias claves alternativas) y si algo falta el error dice qué.
 
 #### Cargar a mano el pedido que llegó por WhatsApp (2026-08-17)
 
@@ -1269,6 +1294,16 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   oscuras), `primary` (texto, se invierte de noche), `surface` (tarjetas),
   `bg`/`line`/`gold-pale` (se ajustan por modo).
 - Placeholder de producto sin foto: monograma "Z" dorado sobre tinta.
+- **Reintento automático de fotos** (2026-08-19, por reporte de una
+  vendedora: "a veces no cargan ciertas imágenes y se arregla reenviando el
+  link"). Las fotos son hotlinks al servidor de SellerCloud
+  (`fc2.cwa.sellercloud.com` — sin CDN, sin headers de caché, respuestas de
+  hasta 1.6 s) y en datos móviles algunas requests se caen. `ProductImage`
+  ahora reintenta 2 veces (a los 1.2 s y 3.5 s) **remontando la `<img>`**, no
+  con cache-busters (un fallo de red no se cachea; un éxito sí debe seguir
+  usando el caché del teléfono). Mientras espera —y si se agotan los
+  intentos— muestra el monograma Z, nunca el glifo de imagen rota. Reenviar
+  el link era exactamente esto, un reintento manual.
 - Idioma es/en: auto-detección + selector en header (localStorage).
 
 ---
@@ -1964,5 +1999,7 @@ src/
 supabase/schema.sql     Esquema completo + RLS + RPCs + migraciones
 supabase/migration-*.sql  Deltas idempotentes para producción (no re-correr el schema completo)
 supabase/functions/admin-create-vendedora-user/  Edge Function (Deno) — crea el usuario de Auth de una vendedora, requiere deploy manual
-supabase/functions/superadmin-users/  Edge Function (Deno) — cambia contraseñas y crea admins (Admin API de Auth), requiere deploy manual
+supabase/functions/superadmin-users/  Edge Function (Deno) — cambia contraseñas y crea admins (Admin API de Auth), requiere deploy manual (⚠️ 2026-08-19: NO está desplegada en producción — redesplegarla)
+supabase/functions/sellercloud-push-order/  Edge Function (Deno) — crea la orden en SellerCloud + Sales Rep y direcciones vía PUT (v11 en producción, 2026-08-19)
+tests/sc-push-tests.mjs  Suite del cliente de SellerCloud (22 comprobaciones, Node contra un servidor falso)
 ```
