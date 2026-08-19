@@ -324,6 +324,12 @@ Ahora hay un botón **"📦 Enviar a SellerCloud"** en cada fila de la bandeja d
 Pedidos: crea la orden allá, asociada al correo de la vendedora como Sales Rep
 y con Marketing Source "catalogo online".
 
+Una vez enviado, el badge **"SellerCloud #N"** de la fila es un **link a la
+orden en el portal** (`fc2.delta.sellercloud.com/orders/order-details.aspx?id=N`,
+2026-08-19) que abre en pestaña nueva, y la bandeja tiene un **filtro
+"Enviadas / Sin enviar a SellerCloud"** (por `sellercloud_order_id`), que se
+combina con los filtros de estado, tipo y vendedora.
+
 **Solo pedidos Atendidos** (modalidad definida por el usuario el 2026-08-18):
 el botón queda deshabilitado — con la explicación en el tooltip — hasta que el
 pedido se marque Atendido, y la Edge Function lo exige también del lado del
@@ -351,19 +357,31 @@ estar en el navegador ni en la base, así que el HTTP lo hace una Edge Function:
 | Token | `POST {base}/rest/api/token` con `{Username, Password}` → `access_token`, dura 60 min |
 | Cliente | `GET {base}/rest/api/Customers/{id}` |
 | Crear orden | `POST {base}/rest/api/Orders/` con `CustomerDetails` + `OrderDetails{CompanyID, Channel: 21}` + direcciones + `Products[]` |
-| Órdenes (lectura) | `GET {base}/rest/api/Orders` — cada fila trae `SalesRepEmail` + `SalesRepId`, de ahí sale la resolución del rep por correo |
+| Asignar el rep | `PUT {base}/rest/api/Orders/{id}` con `{ SalesRep1: <id> }` (2026-08-19, ver abajo) |
+| Órdenes (lectura) | `GET {base}/rest/api/Orders` — cada fila trae `SalesRepEmail` + `SalesRepId`; con `model.orderIDs=` filtra órdenes puntuales (así se verifica qué quedó aplicado) |
 
-Canal Wholesale = 21. (Hasta el 2026-08-18 había un cuarto paso, `PUT
+Canal Wholesale = 21. (Hasta el 2026-08-18 había un paso `PUT
 {base}/api/Orders/StatusCode` para dejar la orden On Hold = 200; se quitó con
 el cambio de modalidad — el candado de Atendido lo reemplaza.)
 
-**Sales Rep y Marketing Source (2026-08-18).** La orden viaja además con el
-Sales Rep de **quien apretó el botón** y el Marketing Source **"catalogo
-online"**. La API de creación los acepta **solo como enteros**
-(`OrderDetails.SalesRepresentative` / `OrderDetails.MarketingSource`, según el
-Swagger del propio servidor en `/rest/swagger/docs/v1`) y no tiene ningún
-endpoint para resolver un email o un nombre a su ID — así que el mapeo vive de
-este lado:
+> **El POST de creación IGNORA `OrderDetails.SalesRepresentative`**
+> (descubierto el 2026-08-19: los campos están en el modelo del Swagger y el
+> servidor contesta 200, pero las órdenes entraban con `SalesRepId 0`; se
+> comprobó releyendo órdenes reales). El único camino que el servidor aplica
+> es el `PUT /api/Orders/{id}` con el campo **`SalesRep1`** (nombre distinto
+> que en el create, viene del `UpdateOrderRequest`). Por eso `pushOrder` asigna
+> el rep en un **segundo paso** después de crear, manda SOLO ese campo (los
+> demás del modelo van ausentes para no tocarlos) y **relee la orden** para
+> verificar que quedó — la lección es que acá un 200 no confirma nada. Como la
+> orden ya existe al llegar a ese paso, cualquier fallo posterior se degrada a
+> `warning` y nunca a error de envío (un error haría reintentar y duplicaría
+> la orden).
+
+**Sales Rep y Marketing Source (2026-08-18).** La orden queda además con el
+Sales Rep de **la vendedora del pedido** y el Marketing Source **"catalogo
+online"**. Los dos son **enteros** (no hay ningún endpoint para resolver un
+email o un nombre a su ID, según el Swagger del propio servidor en
+`/rest/swagger/docs/v1`) — así que el mapeo vive de este lado:
 
 - El ID de empleado de cada vendedora va en `vendedores.sellercloud_rep_id`
   (`migration-2026-08-18-sellercloud-salesrep.sql`), editable en la pestaña

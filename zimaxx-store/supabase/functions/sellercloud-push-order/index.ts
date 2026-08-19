@@ -236,7 +236,7 @@ Deno.serve(async (req) => {
 
   const extras: OrderExtras = { salesRepId: repId, marketingSourceId }
 
-  let result: { orderId: number }
+  let result: { orderId: number; warnings: string[] }
   try {
     result = await pushOrder(config(), Number(sellercloudId), items, extras)
   } catch (e) {
@@ -251,8 +251,12 @@ Deno.serve(async (req) => {
     return json({ error: message }, 502)
   }
 
-  // Datos que faltaron y se corrigen para la próxima orden, no para esta.
-  const warning = [repWarning, marketingWarning].filter(Boolean).join(' | ') || null
+  // Datos que faltaron y se corrigen para la próxima orden, no para esta —
+  // más lo que pushOrder no pudo dejar aplicado en la orden ya creada
+  // (2026-08-19: el Sales Rep se asigna con un PUT posterior al create y se
+  // verifica releyendo; si algo de eso falla, la orden queda y acá se avisa).
+  const warning =
+    [repWarning, marketingWarning, ...result.warnings].filter(Boolean).join(' | ') || null
 
   // La orden ya existe en SellerCloud: pase lo que pase con esta llamada, hay
   // que dejar anotado el número. Si esto fallara, el próximo intento crearía

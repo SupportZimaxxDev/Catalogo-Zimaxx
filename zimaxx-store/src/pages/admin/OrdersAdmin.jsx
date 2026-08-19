@@ -21,6 +21,11 @@ const STATUS_STYLES = {
 // vendedora RLS ya le recorta la consulta a sus propios pedidos.
 const ORDER_SELECT = '*, clients(name, phone, vendedora_id, vendedores(name))'
 
+// Link directo a la orden en el PORTAL de SellerCloud (2026-08-19, a pedido
+// del usuario). El host del portal es fc2.delta — la API usa fc2.api, son
+// dominios distintos del mismo servidor (ver README).
+const SC_ORDER_URL = 'https://fc2.delta.sellercloud.com/orders/order-details.aspx?id='
+
 // Cuántos ids por llamada a get_quotes_live_pricing. La RPC recalcula el
 // precio vigente de cada línea de cada cotización: pedirle 800 de una es
 // una sola consulta larga que puede chocar con el statement_timeout, y si
@@ -46,6 +51,10 @@ export default function OrdersAdmin() {
   const [statusFilter, setStatusFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
   const [repFilter, setRepFilter] = useState('')
+  // '' | 'sent' | 'notsent' — enviadas (o no) a SellerCloud (2026-08-19,
+  // a pedido del usuario). Se filtra por sellercloud_order_id: es lo único
+  // que distingue un pedido que ya vive allá.
+  const [scFilter, setScFilter] = useState('')
 
   // Cotizaciones (kind='quote') nunca guardan precio congelado — se
   // recalculan con el precio VIGENTE del producto (2026-07-17, a pedido
@@ -357,6 +366,7 @@ export default function OrdersAdmin() {
     statusFilter,
     typeFilter,
     repFilter,
+    scFilter,
   ])
 
   const filtered = useMemo(() => {
@@ -371,13 +381,15 @@ export default function OrdersAdmin() {
       if (statusFilter && (o.status ?? 'new') !== statusFilter) return false
       if (typeFilter && (o.kind ?? 'order') !== typeFilter) return false
       if (repFilter && o.clients?.vendedora_id !== repFilter) return false
+      if (scFilter === 'sent' && !o.sellercloud_order_id) return false
+      if (scFilter === 'notsent' && o.sellercloud_order_id) return false
       if (terms.length === 0) return true
       return (
         matchesTerms(terms, o.clients?.name) ||
         (qDigits && cleanPhone(o.clients?.phone).includes(qDigits))
       )
     })
-  }, [orders, query, statusFilter, typeFilter, repFilter])
+  }, [orders, query, statusFilter, typeFilter, repFilter, scFilter])
 
   // Va arriba de la bandeja y también cuando todavía no hay ningún pedido: un
   // catálogo nuevo cuyo primer pedido rebotó mostraría "aún no hay pedidos"
@@ -549,6 +561,11 @@ export default function OrdersAdmin() {
           <option value="">{t('allTypes')}</option>
           <option value="order">{t('order')}</option>
           <option value="quote">{t('quote')}</option>
+        </select>
+        <select value={scFilter} onChange={(e) => setScFilter(e.target.value)} className={inputCls}>
+          <option value="">{t('scFilterAll')}</option>
+          <option value="sent">{t('scFilterSent')}</option>
+          <option value="notsent">{t('scFilterNotSent')}</option>
         </select>
         {isAdmin && reps.length > 0 && (
           <select value={repFilter} onChange={(e) => setRepFilter(e.target.value)} className={inputCls}>
@@ -724,9 +741,18 @@ export default function OrdersAdmin() {
                     {o.kind === 'order' && o.status !== 'cancelled' && (
                       <span className="inline-flex items-center gap-1.5">
                         {o.sellercloud_order_id ? (
-                          <span className="whitespace-nowrap rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">
-                            {t('scPushed', { id: o.sellercloud_order_id })}
-                          </span>
+                          // El badge es un LINK a la orden en el portal
+                          // (2026-08-19): stopPropagation para que el click
+                          // abra SellerCloud y no despliegue la fila.
+                          <a
+                            href={`${SC_ORDER_URL}${o.sellercloud_order_id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="whitespace-nowrap rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-200 hover:underline dark:bg-indigo-900/50 dark:text-indigo-300 dark:hover:bg-indigo-900"
+                          >
+                            {t('scPushed', { id: o.sellercloud_order_id })} ↗
+                          </a>
                         ) : (
                           <button
                             onClick={(e) => {

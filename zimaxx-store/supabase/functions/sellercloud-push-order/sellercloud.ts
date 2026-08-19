@@ -8,10 +8,18 @@
 // Referencia de la API (documentación oficial, agosto 2026):
 //   * Token         POST {base}/rest/api/token     {Username, Password} → access_token (60 min)
 //   * Crear orden   POST {base}/rest/api/Orders/   → id de la orden
+//   * Editar orden  PUT  {base}/rest/api/Orders/{id}  (UpdateOrderRequest; el rep es SalesRep1)
 //   * Cliente       GET  {base}/rest/api/Customers/{id}
 //   * Órdenes       GET  {base}/rest/api/Orders    (lectura; trae SalesRepEmail + SalesRepId)
 //
 // Canal Wholesale = 21.
+//
+// DESCUBRIMIENTO 2026-08-19: el POST de creación ACEPTA
+// OrderDetails.SalesRepresentative (está en el modelo del Swagger) pero el
+// servidor LO IGNORA — las órdenes entraban con SalesRepId 0, comprobado
+// releyendo órdenes reales. El rep de una orden existente sí se escribe, con
+// PUT /api/Orders/{id} { SalesRep1 }. Por eso pushOrder lo asigna en un
+// segundo paso después de crear, y relee la orden para verificar qué quedó.
 //
 // La orden se crea y se deja tal cual (2026-08-18, cambio de modalidad pedido
 // por el usuario): hasta hoy se le ponía On Hold para que la vendedora la
@@ -227,6 +235,68 @@ export async function findSalesRepIdByEmail(
   return found
 }
 
+// Asigna el Sales Rep a una orden YA CREADA. Es el único camino que el
+// servidor aplica de verdad (ver el descubrimiento 2026-08-19 arriba): el
+// campo se llama SalesRep1 en el UpdateOrderRequest del PUT, no
+// SalesRepresentative como en el POST. Se manda SOLO ese campo: los demás
+// del modelo (CustomerId, direcciones...) van ausentes para no tocarlos.
+export async function setSalesRep(
+  cfg: Config,
+  token: string,
+  orderId: number,
+  repId: number,
+  f: Fetcher = fetch,
+): Promise<void> {
+  const url = `${cfg.baseUrl}/rest/api/Orders/${orderId}`
+  const res = await f(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ SalesRep1: repId }),
+  })
+  const text = await readBody(res)
+  if (!res.ok) {
+    throw failure(`No se pudo asignar el Sales Rep ${repId} a la orden ${orderId}`, url, res, text)
+  }
+}
+
+// Relee una orden por número para verificar qué quedó aplicado. Va por el
+// LISTADO filtrado con model.orderIDs y no por GET /Orders/{id}: el DTO de la
+// orden única no trae SalesRepId ni MarketingSourceID, el del listado sí.
+// Devuelve null si la orden no aparece (p.ej. el índice del listado todavía
+// no la tiene) — el llamador decide si eso amerita aviso.
+export async function readOrderRep(
+  cfg: Config,
+  token: string,
+  orderId: number,
+  f: Fetcher = fetch,
+): Promise<{ salesRepId: number | null; marketingSourceId: number | null } | null> {
+  const url =
+    `${cfg.baseUrl}/rest/api/Orders?model.orderIDs=${orderId}` +
+    `&model.pageNumber=1&model.pageSize=1`
+  const res = await f(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+  })
+  const data = (await readJson(res, `No se pudo releer la orden ${orderId}`, url)) as {
+    Items?: Array<Record<string, unknown>>
+  } | null
+  const o = data?.Items?.[0]
+  if (!o) return null
+  const rep = Number(o.SalesRepId)
+  const mkt = Number(o.MarketingSourceID)
+  return {
+    salesRepId: Number.isFinite(rep) && rep > 0 ? rep : null,
+    marketingSourceId: Number.isFinite(mkt) && mkt > 0 ? mkt : null,
+  }
+}
+
 // Los datos del cliente salen de SellerCloud en el momento del envío, no de
 // nuestra base: allá es donde viven el email y las direcciones, y son
 // obligatorios para crear la orden. Copiarlos a `clients` sería una segunda
@@ -411,6 +481,11 @@ export async function createOrder(
 // Crea la orden en SellerCloud y devuelve su número. Sin On Hold desde el
 // 2026-08-18: el pedido ya viene revisado (solo se puede enviar si está
 // Atendido en el panel), así que entra directo.
+//
+// El Sales Rep se asigna DESPUÉS de crear (2026-08-19), porque el POST lo
+// ignora; y como a partir del create la orden YA EXISTE allá, nada de lo que
+// falle después puede volver como error de envío — el panel lo reintentaría
+// y duplicaría la orden. Todo lo posterior se degrada a `warnings`.
 export async function pushOrder(
   cfg: Config,
   sellercloudId: number,
@@ -418,10 +493,69 @@ export async function pushOrder(
   extras: OrderExtras = {},
   f: Fetcher = fetch,
   now = Date.now,
-): Promise<{ orderId: number }> {
+): Promise<{ orderId: number; warnings: string[] }> {
   const token = await getToken(cfg, now, f)
   const customer = await getCustomer(cfg, token, sellercloudId, f)
   const payload = buildOrderPayload(cfg, customer, items, extras)
   const orderId = await createOrder(cfg, token, payload, f)
-  return { orderId }
+
+  const warnings: string[] = []
+  const repId = Number(extras.salesRepId)
+  const mktId = Number(extras.marketingSourceId)
+  const wantRep = Number.isFinite(repId) && repId > 0
+  const wantMkt = Number.isFinite(mktId) && mktId > 0
+
+  let repPutOk = false
+  if (wantRep) {
+    try {
+      await setSalesRep(cfg, token, orderId, repId, f)
+      repPutOk = true
+    } catch (e) {
+      warnings.push(
+        `La orden #${orderId} se creó pero no se le pudo asignar el Sales Rep ` +
+          `(${(e as Error).message}). Asignáselo a mano en SellerCloud.`,
+      )
+    }
+  }
+
+  // Verificación releyendo la orden: la lección del 2026-08-19 es que esta
+  // API puede contestar 200 y no aplicar el campo, así que "el PUT no falló"
+  // no alcanza como confirmación.
+  if (repPutOk || wantMkt) {
+    try {
+      const back = await readOrderRep(cfg, token, orderId, f)
+      if (back == null) {
+        if (repPutOk) {
+          warnings.push(
+            `No se pudo verificar el Sales Rep de la orden #${orderId} ` +
+              '(todavía no aparece en el listado de SellerCloud). Revisalo allá.',
+          )
+        }
+      } else {
+        if (repPutOk && back.salesRepId !== repId) {
+          warnings.push(
+            `SellerCloud aceptó el Sales Rep de la orden #${orderId} pero al releerla ` +
+              `quedó ${back.salesRepId ?? 'sin rep'} en vez de ${repId}. Corregilo a mano allá.`,
+          )
+        }
+        // A diferencia del rep, el Marketing Source SÍ lo aplica el create
+        // (verificado 2026-08-19: las órdenes reales quedaron con el ID
+        // correcto) — este aviso es solo por si algún día deja de hacerlo.
+        if (wantMkt && back.marketingSourceId !== mktId) {
+          warnings.push(
+            `El Marketing Source no quedó aplicado en la orden #${orderId} ` +
+              `(quedó ${back.marketingSourceId ?? 'vacío'} en vez de ${mktId}). Revisalo allá.`,
+          )
+        }
+      }
+    } catch (e) {
+      if (repPutOk) {
+        warnings.push(
+          `No se pudo verificar el Sales Rep de la orden #${orderId}: ${(e as Error).message}`,
+        )
+      }
+    }
+  }
+
+  return { orderId, warnings }
 }

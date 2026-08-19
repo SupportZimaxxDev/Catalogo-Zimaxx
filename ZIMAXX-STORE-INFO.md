@@ -1687,6 +1687,54 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   mano en la pestaña Vendedoras quedó solo como override para emails que no
   coinciden entre acá y SellerCloud.
 
+- [x] **El create de SellerCloud IGNORA el Sales Rep: se asigna con un PUT
+  posterior** (2026-08-19, tras el reporte del usuario "se subió una orden de
+  prueba con el salesrep incorrecto"; función **redesplegada el mismo día**,
+  v10 — verificado bajándola y comparándola contra el repo: idénticas).
+  El diagnóstico dio vuelta la sospecha inicial: los 12 IDs cargados a mano en
+  la pestaña Vendedoras estaban TODOS bien (se verificó contra los pares
+  `SalesRepId`/`SalesRepEmail` que devuelven las órdenes reales, vía una Edge
+  Function de diagnóstico temporal `sc-rep-diag`, protegida por token y
+  borrada al final). El bug real: **`POST /api/Orders` acepta
+  `OrderDetails.SalesRepresentative` en el modelo pero el servidor lo ignora**
+  — 200, orden creada, `SalesRepId 0`. De las 5 órdenes enviadas hasta hoy,
+  solo Macedon tenía rep (75431) y le venía del registro del cliente allá, no
+  de nuestro payload. El único camino que el servidor sí aplica es
+  `PUT /api/Orders/{id}` con **`SalesRep1`** (nombre distinto que en el
+  create; sale del `UpdateOrderRequest` del Swagger). `pushOrder` ahora: crea
+  → PUT del rep (solo ese campo, para no tocar los demás del modelo) →
+  **relee la orden** (`GET /api/Orders?model.orderIDs=`) para verificar que el
+  rep quedó — porque acá un 200 no confirma nada — y devuelve `warnings`; como
+  la orden ya existe, nada posterior al create vuelve como error (se
+  reintentaría y duplicaría), todo se degrada a warning que `index.ts` junta
+  con los avisos de siempre y anota vía `mark_order_sellercloud`. La
+  relectura también verifica el Marketing Source, aunque ese SÍ lo aplica el
+  create (verificado con órdenes reales: quedaron con MarketingSourceID 10) —
+  lo único que el create ignora es el rep. La reparación de las 4 órdenes que
+  entraron sin rep se hizo el mismo día con la función de diagnóstico
+  (#6856340 → 75448 Montilla; #6856329/#6854259/#6854229 → 75431 Quintero),
+  verificando en la relectura que el PUT no toca cliente/total/ítems.
+  **Verificado**: 18 comprobaciones nuevas contra un servidor falso que
+  reproduce el vicio real (create que ignora el rep, PUT que puede fallar con
+  500 o contestar 200 sin aplicar, relectura vacía): camino feliz, PUT solo
+  con `SalesRep1`, degradación a warning en cada fallo, y extras basura que
+  no viajan. El "Assertion failed" de libuv al final del proceso es Node 24
+  en Windows cerrando el servidor, no un test caído — el TODO OK sale antes.
+
+- [x] **Filtro "enviadas a SellerCloud" + badge con link al portal**
+  (2026-08-19, a pedido del usuario, misma tanda que el fix del Sales Rep).
+  En la bandeja de Pedidos: (1) un cuarto select — SellerCloud: todas /
+  Enviadas / Sin enviar — que filtra por `sellercloud_order_id` (es lo único
+  que distingue un pedido que ya vive allá) y se combina con los filtros de
+  estado/tipo/vendedora; (2) el badge "SellerCloud #N" pasó a ser un `<a>` a
+  `https://fc2.delta.sellercloud.com/orders/order-details.aspx?id=N` (host del
+  PORTAL, no el de la API), `target="_blank"` y `stopPropagation` para que el
+  click abra SellerCloud y no despliegue la fila. Claves i18n nuevas
+  `scFilterAll/scFilterSent/scFilterNotSent` en ambos idiomas. **Verificado**
+  con Playwright contra el build real (9 comprobaciones): href/target del
+  link, las tres posiciones del filtro, el contador "1 / 3" y la combinación
+  con el filtro de estado.
+
 - [x] **Cargar a mano el pedido que llegó por WhatsApp** (2026-08-17, a pedido
   del usuario, `migration-2026-08-17-manual-order.sql` **corrida** — las RPC
   `manual_order_client` / `preview_manual_order` / `create_manual_order` viven
