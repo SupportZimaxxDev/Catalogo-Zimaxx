@@ -22,6 +22,8 @@
 // segundo plano, y los navegadores móviles congelan los timers de las páginas
 // ocultas. En el peor caso no se ejecutaban nunca.
 
+import { logEvent } from './systemLog'
+
 const PENDING_KEY = 'zimaxx_pending_order'
 
 // Después de un día un pedido pendiente ya no se manda solo: los precios y el
@@ -113,6 +115,35 @@ function bumpTries() {
   }
 }
 
+// El `outbox_exhausted` por tope de reintentos se loguea UNA sola vez: el
+// pendiente sigue en el teléfono (el aviso rojo y el reintento a mano siguen
+// vivos) y flushPending corre en cada visita/foco — sin esta marca, cada
+// vuelta al catálogo sumaría otro critical idéntico.
+function markExhaustedLogged() {
+  const p = loadPending()
+  if (!p) return
+  try {
+    localStorage.setItem(PENDING_KEY, JSON.stringify({ ...p, exhaustedLogged: true }))
+  } catch {
+    /* nada que hacer */
+  }
+}
+
+// Lo que identifica al pendiente en system_logs sin exponer nada sensible:
+// mismo criterio que order_failures (token_hint de 8 chars, conteos y total,
+// nunca los ítems). El request_id permite cruzar con orders.request_id para
+// confirmar si al final entró.
+function pendingContext(p) {
+  return {
+    kind: p.kind,
+    lines: Array.isArray(p.items) ? p.items.length : null,
+    total: p.total,
+    tries: p.tries ?? 0,
+    request_id: p.requestId,
+    token_hint: p.tokenHint,
+  }
+}
+
 // Un intento contra create_order. Devuelve los mismos tres estados que usaba
 // CartDrawer:
 //   'ok'       → quedó guardado
@@ -200,11 +231,34 @@ export async function flushPending(token) {
     return null
   }
   if (Date.now() - (p.ts ?? 0) > MAX_AGE_MS) {
+    // El peor final del outbox: el pedido nunca entró y ya no se va a mandar
+    // solo. Queda en system_logs (2026-08-20) con lo que hace falta para que
+    // la asesora lo busque en el chat — antes esto se descartaba sin dejar
+    // rastro en ninguna parte.
+    logEvent(
+      'critical',
+      'order_outbox',
+      'outbox_exhausted',
+      'Pedido pendiente descartado por antigüedad (más de 24 h sin poder registrarse)',
+      { ...pendingContext(p), reason: 'expired' },
+    )
     clearPending()
     return null
   }
   // Se sigue mostrando el aviso, pero ya no se insiste solo.
-  if ((p.tries ?? 0) >= MAX_AUTO_TRIES) return null
+  if ((p.tries ?? 0) >= MAX_AUTO_TRIES) {
+    if (!p.exhaustedLogged) {
+      markExhaustedLogged()
+      logEvent(
+        'critical',
+        'order_outbox',
+        'outbox_exhausted',
+        `El pedido agotó los ${MAX_AUTO_TRIES} reintentos automáticos y sigue sin registrarse`,
+        { ...pendingContext(p), reason: 'max_tries' },
+      )
+    }
+    return null
+  }
 
   bumpTries()
   const res = await postOrder({
@@ -214,6 +268,18 @@ export async function flushPending(token) {
     kind: p.kind,
     requestId: p.requestId,
   })
+  if (res === 'error') {
+    // Cada reintento automático que no llega queda contado (2026-08-20): una
+    // seguidilla de estos en el panel es la señal de un cliente con el pedido
+    // trabado ANTES de que se agote y pase a critical.
+    logEvent(
+      'warning',
+      'order_outbox',
+      'outbox_retry_failed',
+      'Reintento automático del pedido pendiente sin respuesta de la base',
+      { ...pendingContext(p), attempt: (p.tries ?? 0) + 1 },
+    )
+  }
   if (res !== 'error') clearPending()
   return res
 }

@@ -2,6 +2,19 @@
 
 > Documento de referencia para retomar el trabajo en cualquier sesión.
 >
+> **⚠️ MIGRACIONES NUEVAS DEL 2026-08-20 — DOS, en este orden:**
+> `migration-2026-08-20-system-logs.sql` (tabla `system_logs` + RPCs
+> `log_event`/`get_system_logs`/`purge_system_logs`) y después
+> `migration-2026-08-20-price-apply-log.sql` (`apply_price_list` pasa a dejar
+> su resumen en el log; su preflight corta si la primera no corrió). **Ninguna
+> bloquea el deploy del frontend** en ningún sentido: antes del deploy no
+> rompen la versión vieja (son aditivas; la segunda conserva firma y retorno de
+> `apply_price_list`), y sin correrlas el frontend nuevo degrada (los
+> `logEvent()` fallan en silencio por diseño y la pestaña ⚙️ Sistema avisa qué
+> migración falta). La Edge Function `sellercloud-push-order` ganó logs de push:
+> **redesplegarla** para tenerlos (sin redeploy sigue andando como hasta hoy).
+> Ver punto 62 y la sección "Logs del sistema" del README.
+>
 > **⚠️ ESTADO DE MIGRACIONES (2026-08-19, sondeado EN PRODUCCIÓN con
 > `supabase db query --linked`): queda UNA pendiente** —
 > `migration-2026-08-13-dismiss-order-failures.sql` (punto 60), y es justo la
@@ -46,7 +59,18 @@
 > estado real (2026-08-12)" — la lista de pendientes de este doc ya se equivocó
 > en las dos direcciones antes.
 >
-> Creado: 2026-07-02. Última actualización: 2026-08-14 (**el UPC del producto
+> Creado: 2026-07-02. Última actualización: 2026-08-20 (**sistema centralizado
+> de logs de errores y eventos operativos**: tabla `system_logs` + RPC
+> `log_event` que nunca lanza excepción + pestaña ⚙️ Sistema solo-superadmin
+> con `get_system_logs`. Quedan instrumentados el checkout que no registra
+> (`order_capture`), los reintentos/agotamiento del outbox (`order_outbox`,
+> hasta `critical`), el push a SellerCloud (`sellercloud_push`, vía la RPC con
+> el JWT de quien aprieta — la función sigue sin usar service_role), el
+> resumen de cada carga de precios **dentro de la propia transacción de
+> `apply_price_list`** y de cada Excel de productos, y los errores JS globales
+> del navegador con throttle 5/min + dedupe y la URL sin query para no loguear
+> el token. Punto 62; dos migraciones nuevas, ver el aviso de arriba).
+> Antes: 2026-08-14 (**el UPC del producto
 > deja de ser dato interno**: se ve en la tarjeta del catálogo del cliente y en
 > el carrito, se puede buscar por él, y sale como columna propia del PDF de
 > cotización —también en el que descarga la vendedora desde Pedidos, para lo
@@ -1823,6 +1847,36 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   pantalla dice siempre qué falta. Lo elegido —cliente y producto— se muestra
   con ✓ y botón "Cambiar", porque tener el nombre escrito en el campo no era lo
   mismo que haberlo elegido y esa diferencia no se veía.
+- [x] **Sistema centralizado de logs de errores y eventos** (2026-08-20, punto
+  62; a pedido del usuario). Tabla `system_logs` (severity con CHECK
+  info/warning/error/critical, source, event, message ≤2,000, context jsonb
+  ≤8 KB, user_agent del header) + tres RPC: `log_event` (escritura única,
+  grant a `anon/authenticated/service_role`, **nunca lanza excepción** — un
+  log no puede romper el flujo que lo llama), `get_system_logs` (lectura
+  única, candado `is_superadmin()`, cursor por `created_at`) y
+  `purge_system_logs` (retención 30/90 días, lista para pg_cron sin asumirlo
+  habilitado). RLS sin policies + revoke: la tabla no se toca por PostgREST.
+  Instrumentado: checkout que no registra (`order_create_failed` con reason
+  rejected/network, sin ítems ni token), outbox (`outbox_retry_failed`
+  warning por intento; `outbox_exhausted` critical al agotar los 8 reintentos
+  —una sola vez, marcado en el pendiente— o al vencer a las 24 h), push a
+  SellerCloud (`push_ok`/`push_failed`/`push_html_response`/
+  `push_annotate_failed`, desde la Edge Function vía la RPC con el JWT del
+  caller — sigue sin service_role), `apply_price_list` (el resumen
+  `price_apply_summary` **dentro de su transacción**, solo si commitea; el
+  fallo lo loguea el frontend porque una excepción revierte todo, incluido el
+  log), Excel de productos (`product_upload_summary`/`_failed` desde el
+  frontend: son upserts directos, no RPC) y errores JS globales (`js_error`
+  desde `main.jsx`, throttle 5/min + dedupe de consecutivos, URL sin query
+  string para no loguear `?c=<token>`). Pestaña **⚙️ Sistema**
+  (`SystemLogsAdmin.jsx`, `/admin/system`, solo superadmin como Métricas):
+  badges por severity, filtros, context expandible, "Cargar más"; degrada con
+  aviso si la migración no corrió. `src/utils/systemLog.js` es la puerta del
+  frontend: fetch directo con anon key + keepalive, fire-and-forget.
+  **Verificado**: asserts SQL en PostgreSQL 18 desechable (10 bloques de
+  system_logs + 4 de apply_price_list, incluida la regla de oro con la tabla
+  renombrada y los preflights cortando) y 37 aserciones Playwright contra el
+  build real con la red interceptada (15 del panel + 22 del catálogo).
 
 ---
 
@@ -2024,6 +2078,7 @@ negro+dorado es idéntico en ambos modos).
 | `superadmins` | El perfil superadmin (2026-08-05, `migration-2026-08-05-superadmin.sql`): `user_id` + `created_at`, sembrada con `support5@firstchoiceonline.com`. **RLS activo y CERO policies** — desde la app no existe para nadie, ni para el propio superadmin; solo la leen las funciones SECURITY DEFINER y el SQL Editor. Tabla aparte y no una columna en `admins` justamente porque `admins` era escribible por cualquier admin: la marca de "llave maestra" no puede vivir en una tabla que el resto puede tocar. Sumar/quitar superadmins es a propósito solo por SQL |
 | `sync_runs` | Auditoría del sync SellerCloud→Supabase vía n8n (2026-07-10, `migration-2026-07-10-sellercloud-sync.sql`): `started_at`/`finished_at`, `status` 'running' \| 'ok' \| 'error', contadores `rows_products`/`rows_prices`/`rows_clients`, `error_detail`. n8n la escribe directo con la service_role key (salta RLS); admins solo lectura |
 | `admin_audit_log` | Auditoría de acciones sensibles (2026-07-14, `migration-2026-07-14-client-admin-actions.sql`; suma `update_price_list` 2026-07-15, `edit_order_items`/`update_order_status`/`convert_quote_to_order` 2026-07-17, y `recover_order_failure` 2026-08-05): `action` ('reassign_client' \| 'delete_client' \| 'update_price_list' \| 'edit_order_items' \| 'update_order_status' \| 'convert_quote_to_order' \| 'recover_order_failure' \| las `sa_*` del superadmin), `performed_by`/`performed_by_email` (quién), `client_id`/`client_name` (snapshot del cliente dueño del pedido/acción), `order_id` (2026-07-17, nullable, SIN FK por el mismo motivo que `client_id` — sobrevive si el pedido se borra a futuro), `detail` jsonb, `created_at`. Solo lectura para admin (RLS); la escriben solo las RPC `reassign_client`/`delete_client`/`update_client_price_list`/`update_order_items`/`update_order_status`/`convert_quote_to_order`/`recover_order_failure`/`sa_log` |
+| `system_logs` | **Logs de errores y eventos operativos** (2026-08-20, `migration-2026-08-20-system-logs.sql`): `id` bigint identity, `severity` con CHECK ('info' \| 'warning' \| 'error' \| 'critical'), `source` (sin CHECK a propósito — sumar una fuente no exige migración; en uso: `order_capture`, `order_outbox`, `sellercloud_push`, `price_upload`, `product_upload`, `sync`, `frontend`), `event`, `message` (≤2,000), `context` jsonb (≤8 KB, truncado con marcador `_truncated`), `user_agent` (lo extrae `log_event` de `request.headers`). Índices `(created_at desc)` y `(severity, created_at desc)`. **RLS activo y CERO policies + revoke a `anon`/`authenticated`**: por PostgREST no se lee ni se escribe — la única escritura es `log_event` (SECURITY DEFINER, también para `anon`: el catálogo del cliente es justo donde los errores no dejaban rastro) y la única lectura `get_system_logs` (solo superadmin). No reemplaza a `order_failures` (que guarda el payload recuperable) ni a `orders.sellercloud_error` (que se ve en la bandeja): es la vista transversal de la pestaña ⚙️ Sistema. Retención: `purge_system_logs()` (30 días info/warning, 90 error/critical), pensada para pg_cron |
 
 ### Listas de precio sembradas por el schema
 
@@ -2460,6 +2515,50 @@ por qué no entró sin ir a los logs de la función.
   `created_at >= now() - N days` era un seq scan cada 60 s por pestaña abierta) y
   `admin_audit_log_order_status_idx` (parcial, `where action =
   'update_order_status'`).
+
+### `log_event(p_severity, p_source, p_event, p_message, p_context) → bigint` (2026-08-20)
+- Acceso: `anon`, `authenticated` y `service_role` (`migration-2026-08-20-system-logs.sql`).
+  `anon` a propósito: el catálogo del cliente es donde los errores no dejaban
+  rastro. La única puerta de escritura de `system_logs`.
+- **Nunca lanza excepción hacia el caller** — la regla de oro del sistema de
+  logs: severity inválida ⇒ `raise warning` + `null` (no se inventa una);
+  insert fallido ⇒ ídem. Un log jamás rompe el flujo que lo llama, por eso
+  también se puede invocar desde dentro de otra RPC (`apply_price_list` lo
+  hace) sin riesgo.
+- Trunca `message` a 2,000 caracteres; `context` que no es objeto se envuelve
+  en `{value: …}` y uno de más de 8 KB se reemplaza por
+  `{_truncated, _original_bytes, _preview}` (un jsonb no se puede "cortar" sin
+  romperlo). El `user_agent` sale de `current_setting('request.headers')` con
+  su propio `begin/exception`: si no está o no parsea, queda null y ya.
+- Devuelve el `id` insertado (sirve en tests; el frontend lo ignora —
+  `src/utils/systemLog.js` es fire-and-forget con keepalive y catch mudo).
+
+### `get_system_logs(p_severity, p_source, p_limit int default 100, p_before timestamptz) → jsonb` (2026-08-20)
+- Acceso: `authenticated`, con `is_superadmin()` de **primera línea** (mismo
+  candado que `sa_metrics_overview`). La única puerta de lectura de
+  `system_logs`; alimenta la pestaña ⚙️ Sistema.
+- Filtros opcionales por severity y source (null = todos), `p_limit`
+  clampeado a `[1, 500]`, y paginación por cursor: orden
+  `created_at desc, id desc` y `created_at < p_before` estricto — "Cargar más"
+  manda el `created_at` de la última fila. Si dos filas comparten el
+  timestamp justo en el borde de página la segunda se salta: con precisión de
+  microsegundos solo pasa entre logs de la misma transacción, costo aceptado
+  para no complicar la firma con un segundo cursor.
+
+### `purge_system_logs() → jsonb` (2026-08-20)
+- **Sin grant a ningún rol de API** (ni `authenticated`): la corre pg_cron
+  (como `postgres`, dueño) o un admin a mano en el SQL Editor. Borra
+  `info`/`warning` de +30 días y `error`/`critical` de +90; devuelve cuántas
+  filas se llevó cada tramo. La instrucción de `cron.schedule` está comentada
+  al pie de la migración — **pg_cron no se asume habilitado**.
+- Nota `apply_price_list` (2026-08-20, `migration-2026-08-20-price-apply-log.sql`):
+  misma firma y mismo retorno de siempre, pero con `p_commit = true` ahora
+  hace `perform log_event('info', 'price_upload', 'price_apply_summary', …)`
+  con todos sus contadores **dentro de la misma transacción** — si la carga
+  commitea el log queda, si revienta se van juntos. El caso de error se
+  loguea desde `PricesUpload.jsx` (`price_apply_failed`): una excepción en la
+  RPC revierte la transacción entera de PostgREST, incluido cualquier log
+  hecho adentro, así que el único lugar donde el error sobrevive es el caller.
 
 ### `is_vendedora() → boolean` / `current_vendedora_id() → uuid` / `get_my_role() → text`
 - Acceso: solo `authenticated`. (2026-07-06, rol vendedora.)
@@ -3080,4 +3179,6 @@ Formato: `https://zimaxxstore.com/?c=<token>`
     **Segunda tanda del mismo día, a pedido del usuario** ("el anuncio del final cuando se genera una cotizacion... quitalo, solo con que diga que se envio la cotizacion y ya es suficiente"): el acuse del carrito (el ✓ que reemplaza a la lista de ítems una vez que el pedido/cotización quedó registrado) **deja de explicar que se vació el carrito**. Se fue la línea "Vaciamos el carrito de este dispositivo para que no se envíe dos veces por error" y con ella la clave `cartCleared` de los dos idiomas; queda el título ("Cotización generada…" / "Pedido registrado…") y el botón "Armar otro pedido". **El comportamiento no cambió**: el carrito se sigue vaciando solo cuando el pedido quedó realmente guardado, y `CartContext` sigue borrando la clave de `localStorage` — lo único que se fue es el anuncio. Nota: la línea era una sola para los dos casos, así que también deja de aparecer en el acuse de un **pedido** por WhatsApp. Sin migración. Verificado en Chromium real generando una cotización de verdad (4 aserciones: se llamó a `create_order` una vez, el acuse dice que la cotización se generó, la línea del carrito vaciado ya no aparece, y el botón sigue estando).
 
     Los puntos 58, 59 y 60 (carrito que podía quedar congelado, "Recuperar" que ahora crea una cotización, y descartar fallos sin cliente/ítems) quedaron descritos solo en la narrativa del principio de este documento.
+
+62. **Sistema centralizado de logs de errores y eventos operativos** (2026-08-20, a pedido del usuario) — tabla `system_logs` + RPC `log_event`/`get_system_logs`/`purge_system_logs` (`migration-2026-08-20-system-logs.sql`) y pestaña **⚙️ Sistema** solo-superadmin. Los errores vivían dispersos (`order_failures`, `orders.sellercloud_error`, contadores efímeros de `apply_price_list`, `sync_runs`) y los del navegador del cliente no quedaban en ninguna parte; esto no reemplaza nada de aquello, es la **vista transversal** consultable. Cuatro decisiones que sostienen el diseño: (1) **`log_event` nunca lanza** — severity inválida o insert roto terminan en `raise warning` + null, y el `logEvent()` del frontend (`src/utils/systemLog.js`, fetch directo con anon key + `keepalive` para sobrevivir al salto a WhatsApp) es fire-and-forget con catch mudo: un log jamás rompe el flujo que lo llama, regla verificada renombrando la tabla en las pruebas. (2) **anon puede escribir** (el catálogo del cliente es donde no había rastro) pero con message ≤2,000 / context ≤8 KB, y **nadie lee por API**: RLS sin policies + revoke, la lectura es solo `get_system_logs` con `is_superadmin()`. (3) El resumen de `apply_price_list` va **dentro de su transacción** (`migration-2026-08-20-price-apply-log.sql`, misma firma y retorno) y el error de esa RPC se loguea **desde el frontend**, porque una excepción revierte la transacción entera incluido el log. (4) Los `js_error` globales llevan **throttle 5/min + dedupe de consecutivos** (un error en loop = 1 fila por carga de página) y la URL va **sin query string** — `?c=<token>` es la credencial del cliente. Eventos por source: `order_capture/order_create_failed` (error, reason rejected|network), `order_outbox/outbox_retry_failed` (warning) y `outbox_exhausted` (critical, una sola vez por pendiente), `sellercloud_push/push_ok|push_failed|push_html_response|push_annotate_failed` (info/error/error/critical, desde la Edge Function vía la RPC con el JWT del caller — sigue sin usar service_role), `price_upload/price_apply_summary|price_apply_failed`, `product_upload/product_upload_summary|_failed`, `frontend/js_error`; `sync` queda reservado para n8n. Verificado con asserts SQL en PostgreSQL 18 desechable y 37 aserciones Playwright (15 panel + 22 catálogo) contra el build real con la red interceptada.
 

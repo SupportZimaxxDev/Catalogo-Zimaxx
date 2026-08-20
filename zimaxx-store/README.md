@@ -906,6 +906,71 @@ Registro, `['name', 'id']` en Productos/Clientes/Vendedoras y
 la regla es esa: la clave de orden tiene que identificar la fila sin empates
 (la tabla no tiene por qué tener `id` — `product_prices` no lo tiene).
 
+### Logs del sistema (pestaña ⚙️ Sistema, solo superadmin — 2026-08-20)
+
+Hasta hoy los errores vivían dispersos y cada uno se miraba en un lugar
+distinto: los pedidos rechazados en `order_failures`, el último fallo de un
+push en `orders.sellercloud_error`, los contadores de una carga de precios en
+el aviso efímero del panel, y los errores de JavaScript del navegador del
+cliente **en ninguna parte**. Ahora hay un registro central consultable:
+
+- **Tabla `system_logs`** (`migration-2026-08-20-system-logs.sql`): severity
+  `info`/`warning`/`error`/`critical` (CHECK), `source`, `event`, `message`
+  (truncado a 2,000), `context` jsonb (truncado a ~8 KB) y `user_agent`
+  (extraído del header por la RPC). **No reemplaza nada**: `order_failures`
+  sigue guardando el payload recuperable y `sellercloud_error` sigue en el
+  pedido — esto es la vista transversal.
+- **Se escribe SOLO vía `log_event(severity, source, event, message, context)`**,
+  SECURITY DEFINER con grant a `anon, authenticated, service_role` (el
+  catálogo del cliente corre como anon y es justo donde los errores no dejaban
+  rastro). **Regla de oro: `log_event` nunca lanza excepción** — severity
+  inválida o insert fallido terminan en `raise warning` + `null`, porque un
+  log jamás puede romper el flujo que lo llama. Del lado del frontend,
+  `src/utils/systemLog.js` aplica la misma regla: `logEvent()` es
+  fire-and-forget (fetch directo con la anon key + `keepalive`, para que el
+  log sobreviva al salto a WhatsApp o al cierre de la pestaña) con catch
+  silencioso.
+- **Se lee SOLO vía `get_system_logs(severity, source, limit, before)`**, con
+  `is_superadmin()` de candado (mismo criterio que Métricas) y paginación por
+  cursor (`created_at` de la última fila). La tabla tiene RLS **sin policies**
+  y revoke explícito: por PostgREST directo no se ve nada — que anon pueda
+  escribir no la convierte en canal de lectura.
+- **Retención**: `purge_system_logs()` borra `info`/`warning` de más de 30
+  días y `error`/`critical` de más de 90. Sin grant a los roles de API; la
+  instrucción para programarla con pg_cron (no se asume habilitado) está en
+  el pie de la migración. Mientras no se programe, correrla a mano de vez en
+  cuando.
+
+**Qué queda instrumentado y con qué severity:**
+
+| Source | Event | Severity | Cuándo |
+|---|---|---|---|
+| `order_capture` | `order_create_failed` | error | El checkout no pudo registrar el pedido: `reason: 'rejected'` (el servidor lo rechazó, ya está en `order_failures`) o `'network'` (nunca llegó; queda pendiente en el teléfono) |
+| `order_outbox` | `outbox_retry_failed` | warning | Cada reintento automático del pendiente que sigue sin llegar (con `attempt`) |
+| `order_outbox` | `outbox_exhausted` | critical | El pendiente agotó los 8 reintentos (`reason: 'max_tries'`, **una sola vez**, marcado en el propio pendiente) o se descartó por viejo (`'expired'`, >24 h) |
+| `sellercloud_push` | `push_ok` / `push_failed` / `push_html_response` / `push_annotate_failed` | info / error / error / critical | Resultado de "Enviar a SellerCloud". `push_html_response` = el `BASE_URL` apunta al portal, no a la API; `push_annotate_failed` = la orden existe allá y no quedó anotada acá (riesgo de duplicado). La Edge Function loguea **vía la RPC con el JWT de quien apretó** — sigue sin usar la service_role key |
+| `price_upload` | `price_apply_summary` / `price_apply_failed` | info / error | El resumen lo escribe la propia `apply_price_list` **dentro de su transacción** (solo con `p_commit = true`; `migration-2026-08-20-price-apply-log.sql`, misma firma y mismo retorno). El fallo lo loguea el frontend: una excepción en la RPC revierte la transacción entera, incluido cualquier log hecho adentro |
+| `product_upload` | `product_upload_summary` / `product_upload_failed` | info / error | Resumen por corrida del Excel de productos (creados/actualizados/salteados/basura/no-catálogo); lo emite el frontend porque esa carga son upserts directos, no una RPC |
+| `frontend` | `js_error` | error | `window.onerror` + `unhandledrejection` globales (registrados en `main.jsx` antes del primer render), con **throttle** (máx. 5/min) y **dedupe** (el mismo mensaje no se repite consecutivo: un error en loop = 1 fila por carga de página). La URL va **sin query string** — `?c=<token>` es la credencial del cliente y no puede quedar en un log |
+| `sync` | — | — | Reservado para n8n (puede llamar `log_event` con la service_role key); hoy el sync sigue reportando solo en `sync_runs` |
+
+La pestaña **⚙️ Sistema** (`SystemLogsAdmin.jsx`, ruta `/admin/system`, solo
+superadmin — guard en `AdminLayout.jsx` + candado real en la RPC) muestra la
+tabla con badge de color por severity (gris/amarillo/rojo/rojo oscuro),
+filtros por severity y source, el `context` expandible como JSON y botón
+"Cargar más". Sin polling a propósito: un log se consulta cuando algo anda
+mal, no en vivo. Si la migración no corrió, la pestaña avisa cuál falta en
+vez de romper (mismo patrón PGRST202 que Métricas).
+
+Contra el abuso (la RPC es pública por diseño): message/context van topeados,
+la tabla no se puede leer por API, y la retención la vacía sola. Verificado
+con asserts SQL contra un PostgreSQL 18 desechable (log_event que nunca lanza
+—incluso sin tabla—, truncados, permisos por rol, paginación, purga, y que
+`apply_price_list` commitea igual con el log roto) y 37 aserciones Playwright
+contra el build real con la red interceptada (checkout fallido en las dos
+variantes, outbox con reintento/agotamiento/vencimiento, throttle y dedupe de
+js_error, pestaña Sistema completa, guard de rol y degradación sin migración).
+
 ---
 
 ## 3. Formatos de Excel aceptados
@@ -1642,6 +1707,23 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 
 ## 7. Roadmap / pendientes
 
+> **⚠️ MIGRACIONES NUEVAS DEL 2026-08-20 — DOS, en este orden:**
+> 1. `migration-2026-08-20-system-logs.sql` (tabla `system_logs` + `log_event`
+>    + `get_system_logs` + `purge_system_logs`)
+> 2. `migration-2026-08-20-price-apply-log.sql` (`apply_price_list` deja su
+>    resumen en el log; **requiere la anterior**, el preflight corta si falta)
+>
+> **Ninguna bloquea el deploy del frontend** en ningún sentido: se pueden
+> correr antes (no tocan nada existente — la 2 reemplaza `apply_price_list`
+> con la misma firma y el mismo retorno) o después (el frontend nuevo degrada:
+> los `logEvent()` fallan en silencio por diseño y la pestaña ⚙️ Sistema
+> muestra "falta correr la migración" en vez de romper). Sin correrlas, eso
+> sí, **no se loguea nada**. Después de correrlas, opcional: programar la
+> retención con pg_cron (la instrucción está al pie de la migración 1) y
+> redesplegar la Edge Function `sellercloud-push-order` (ganó los logs de
+> push; sin redeploy sigue funcionando como hasta hoy, solo que sin loguear).
+> Ver "Logs del sistema" en la sección 2.
+>
 > **⚠️ MIGRACIONES PENDIENTES AL 2026-08-14 — CUATRO.** Las tres del 2026-08-13
 > (`exclude-box-skus`, `recover-as-quote`, `dismiss-order-failures`: el detalle
 > de las dos últimas está en el encabezado de `ZIMAXX-STORE-INFO.md`) más
