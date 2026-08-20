@@ -239,6 +239,69 @@ exactas) y 15 aserciones Playwright contra el build real (chip que filtra,
 badges conviviendo, orden asc/desc, quote sin selector, backend viejo sin
 chip ni badges con el orden funcionando igual).
 
+### ⭐ por línea, Mujer/Hombre/Sets y ❤️ Favoritos (2026-08-20, cuarta tanda)
+
+Tres agregados más al catálogo, a pedido del usuario:
+
+- **⭐ Más vendidos árabes / diseñador**
+  (`migration-2026-08-20-top-by-line.sql`): el top global puede quedar
+  dominado por una línea y tapar a la otra, así que `get_catalog` ahora
+  también marca `is_top_line` = ¿está en el **top 12 DE SU línea**? (misma
+  ventana de 60 días, función nueva `top_seller_ids_by_line` sobre las mismas
+  cubetas, resuelta una vez por llamada y cerrada a la API). Los chips se
+  arman en el frontend cruzando `is_top_line` con `product_line` — así la
+  base no queda casada con los nombres de las dos líneas de hoy. Los tres ⭐
+  (global/árabes/diseñador) son excluyentes entre sí; los productos con
+  `product_line` null no rankean por línea. El chip global y el badge no
+  cambian.
+- **Mujer / Hombre / Sets**: derivados **del nombre** del producto, sin
+  migración — no hay columna de género y el dato ya viene en el nombre del
+  export (medido en producción: de 875 activos, 330 "Men", 355 "Women", 185
+  "Unisex", solo 5 sin token; 95 con "Set"). La clasificación vive en
+  `Catalog.jsx` (`genderOf`, regex con `\b` para que "Women" no matchee
+  "men") y se calcula una sola vez por carga. **Mujer y Hombre incluyen
+  unisex a propósito**: el chip responde "¿qué le puedo vender a una
+  mujer/un hombre?", y un unisex califica en las dos. Son excluyentes entre
+  sí y combinables con los ⭐, la búsqueda y el orden por precio.
+- **❤️ Favoritos — EN LA BASE** (quinta tanda del mismo día, a pedido del
+  usuario: "que quede un registro de los favoritos de cada uno de los
+  clientes"; `migration-2026-08-20-client-favorites.sql` +
+  `src/utils/favorites.js`): corazón en la esquina de la imagen de cada
+  tarjeta y chip "❤️ Favoritos (N)" que aparece recién con el primero
+  marcado. La fuente de verdad es la tabla **`client_favorites`**:
+  - Se escribe SOLO vía **`set_favorite(p_token, p_product_id, p_fav)`** —
+    por token como `create_order`, idempotente, y a prueba de basura: token
+    inválido, producto apagado/inexistente o el tope de **500 por cliente**
+    devuelven null sin excepción (un corazón jamás genera un 500). La tabla
+    no se puede escribir por PostgREST (RLS sin policy de insert).
+  - Se lee con el catálogo: `get_catalog` devuelve **`is_fav`** por producto
+    en el mismo round-trip, y el panel puede consultar la tabla (RLS de
+    lectura en forma InitPlan: admin todo, vendedora sus clientes — UI del
+    panel cuando se pida; `created_at` dice desde cuándo le interesa).
+  - El **localStorage queda como caché de arranque y fallback** (clave por
+    `tokenHint`, como siempre): los corazones cacheados se pintan al
+    instante, y al llegar `get_catalog` **manda el servidor** (pisa lo local
+    y reescribe el caché). El toggle es optimista y la RPC viaja
+    fire-and-forget con keepalive + un reintento. Sin la migración corrida,
+    `is_fav` llega undefined y los favoritos funcionan en modo
+    solo-dispositivo (la v1) — no bloquea el deploy en ningún orden.
+  El botón "Todos los estados" resetea ⭐ + segmento + favoritos de una.
+
+Verificado con asserts SQL en PostgreSQL 18 desechable (ranking por línea con
+límite POR línea, el global intacto, `is_top_line` en ambas ramas, API
+cerrada; y para favoritos: RPC idempotente marcar/desmarcar, basura que
+devuelve null sin escribir nada, `is_fav` en ambas ramas con cada cliente
+viendo LO SUYO, anon que puede la RPC pero no la tabla, RLS del panel
+admin/vendedora-propia/vendedora-ajena, policies en forma InitPlan, tope de
+500 con desmarcar vivo en el tope, cascades e idempotencia de la migración) y
+**26 aserciones Playwright** (chips por línea incluido el top de línea que NO
+es top global, Mujer/Hombre con unisex incluido, Sets, combinación ⭐ árabes
++ Hombre, favoritos en modo local: chip/filtro/persistencia/aislamiento
+entre clientes; y en modo servidor: corazones sembrados desde `is_fav` sin
+localStorage previo, la RPC disparada con token/producto/estado en cada
+toggle, y el servidor pisando lo optimista al recargar), más las suites del
+carrito (22) y de top-sellers (15) re-corridas en verde.
+
 ### Flujo del pedido
 
 1. Cliente abre su link → catálogo con sus precios → arma carrito.
@@ -1836,16 +1899,23 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 > 5. `migration-2026-08-20-top-sellers.sql` (⭐ Más vendidos: cubetas
 >    `product_sales_daily` + trigger + backfill + `is_top` en `get_catalog`;
 >    ver "Más vendidos y orden por precio" en la sección 1)
+> 6. `migration-2026-08-20-top-by-line.sql` (⭐ por línea:
+>    `top_seller_ids_by_line` + `is_top_line` en `get_catalog`; **requiere la
+>    5**, el preflight corta si falta)
+> 7. `migration-2026-08-20-client-favorites.sql` (❤️ favoritos en la base:
+>    tabla `client_favorites` + RPC `set_favorite` por token + `is_fav` en
+>    `get_catalog`; **requiere la 6**, el preflight corta si falta)
 >
-> Las cinco son **independientes del deploy del frontend** (se pueden correr
+> Las siete son **independientes del deploy del frontend** (se pueden correr
 > antes o después; el frontend degrada con gracia en todos los casos: los
 > `logEvent()` fallan en silencio por diseño, la pestaña ⚙️ Sistema avisa qué
-> falta, la bandeja reintenta con el select viejo si `units` no existe, y sin
-> `is_top` el chip ⭐ no aparece). La 3, la 4 y la 5 no dependen entre sí ni
-> de las de logs. Después de correrlas, opcional: programar la retención con
-> pg_cron (instrucción al pie de la migración 1) y redesplegar la Edge
-> Function `sellercloud-push-order` (ganó los logs de push; sin redeploy sigue
-> funcionando igual, solo que sin loguear).
+> falta, la bandeja reintenta con el select viejo si `units` no existe, sin
+> `is_top`/`is_top_line` los chips ⭐ no aparecen, y sin `is_fav` los
+> favoritos quedan en modo solo-dispositivo). La 3 y la 4 no dependen de
+> nadie; la cadena del catálogo es 5 → 6 → 7. Después de correrlas, opcional:
+> programar la retención con pg_cron (instrucción al pie de la migración 1) y
+> redesplegar la Edge Function `sellercloud-push-order` (ganó los logs de
+> push; sin redeploy sigue funcionando igual, solo que sin loguear).
 >
 > **⚠️ MIGRACIONES PENDIENTES AL 2026-08-14 — CUATRO.** Las tres del 2026-08-13
 > (`exclude-box-skus`, `recover-as-quote`, `dismiss-order-failures`: el detalle

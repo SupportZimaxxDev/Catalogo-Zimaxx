@@ -2,12 +2,18 @@
 
 > Documento de referencia para retomar el trabajo en cualquier sesión.
 >
-> **⚠️ MIGRACIONES NUEVAS DEL 2026-08-20 — CINCO** (la quinta es
+> **⚠️ MIGRACIONES NUEVAS DEL 2026-08-20 — SIETE** (la quinta es
 > `migration-2026-08-20-top-sellers.sql`, del punto 64: cubetas
 > `product_sales_daily` + trigger `orders_track_product_sales` + backfill +
-> `is_top` en `get_catalog` — independiente de las otras y del deploy: sin
-> ella el chip ⭐ del catálogo simplemente no aparece). Las primeras cuatro,
-> en este orden:
+> `is_top` en `get_catalog`; la sexta es
+> `migration-2026-08-20-top-by-line.sql`, del punto 65: `is_top_line` = top 12
+> DE cada línea, para los chips "Más vendidos árabes/diseñador"; la séptima es
+> `migration-2026-08-20-client-favorites.sql`, del punto 66: tabla
+> `client_favorites` + RPC `set_favorite` por token + `is_fav` en
+> `get_catalog` — **la cadena del catálogo es 5 → 6 → 7**, cada preflight
+> corta si falta la anterior. Las tres independientes del deploy: sin ellas
+> los chips ⭐ no aparecen y los favoritos quedan en modo solo-dispositivo).
+> Las primeras cuatro, en este orden:
 > `migration-2026-08-20-system-logs.sql` (tabla `system_logs` + RPCs
 > `log_event`/`get_system_logs`/`purge_system_logs`) y después
 > `migration-2026-08-20-price-apply-log.sql` (`apply_price_list` pasa a dejar
@@ -72,7 +78,27 @@
 > estado real (2026-08-12)" — la lista de pendientes de este doc ya se equivocó
 > en las dos direcciones antes.
 >
-> Creado: 2026-07-02. Última actualización: 2026-08-20, tercera tanda
+> Creado: 2026-07-02. Última actualización: 2026-08-20, quinta tanda
+> (**los ❤️ favoritos pasan a la base**, punto 66, a pedido del usuario: "pq
+> no hacemos una tabla y rpc por token mejor? y asi queda un registro de los
+> favoritos de cada uno de los clientes" — tabla `client_favorites` escrita
+> solo vía `set_favorite(p_token, …)` (idempotente, nunca lanza, tope 500,
+> solo productos activos), `is_fav` en las dos ramas de `get_catalog`, RLS de
+> lectura para el panel (admin todo / vendedora sus clientes, forma InitPlan)
+> y el localStorage degradado a caché de arranque + fallback sin migración;
+> el toggle es optimista con fire-and-forget keepalive + 1 reintento, y al
+> recargar manda el servidor. `migration-2026-08-20-client-favorites.sql`,
+> requiere la de top-by-line).
+> Cuarta tanda:
+> (**⭐ Más vendidos POR LÍNEA + Mujer/Hombre/Sets + ❤️ Favoritos en el
+> catálogo**, punto 65: `is_top_line` marca el top 12 de CADA línea
+> (`migration-2026-08-20-top-by-line.sql`, requiere la de top-sellers) y los
+> chips árabes/diseñador se arman cruzándolo con `product_line`; Mujer/Hombre
+> (unisex incluido en ambos) y Sets se derivan DEL NOMBRE sin migración
+> (cobertura medida en producción: 870/875 con token de género); favoritos con
+> corazón en la tarjeta + chip con conteo, en localStorage POR CLIENTE
+> (tokenHint) — no viajan entre dispositivos, limitación asumida).
+> Tercera tanda:
 > (**⭐ Más vendidos + orden por precio en el catálogo del cliente**, punto
 > 64: chip y badge para el top 12 por unidades pedidas en los últimos 60
 > días — calculado desde los pedidos reales con cubetas por día
@@ -1966,6 +1992,56 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   del catálogo, API cerrada, re-corrida idempotente que reconstruye cubetas
   exactas) + 15 aserciones Playwright (chip/badges/orden/quote/backend viejo)
   + la suite del carrito re-corrida en verde.
+- [x] **⭐ por línea + Mujer/Hombre/Sets + ❤️ Favoritos** (2026-08-20, cuarta
+  tanda del día, punto 65; a pedido del usuario: "agregar filtros de, mas
+  vendidos arabes, mas vendidos diseñador, mujer, hombre, sets, trabajar en
+  una funcion de favoritos"). (1) `migration-2026-08-20-top-by-line.sql`:
+  `top_seller_ids_by_line` (top 12 POR product_line sobre las mismas cubetas,
+  línea null no rankea) + `is_top_line` en las dos ramas de `get_catalog`;
+  chips "⭐ Más vendidos árabes/diseñador" armados en el frontend cruzando la
+  clave con `product_line`, excluyentes con el ⭐ global (un solo topFilter).
+  (2) Mujer/Hombre/Sets SIN migración: derivados del nombre en `Catalog.jsx`
+  (`genderOf`, regex \b — cobertura medida en producción: 330 Men + 355 Women
+  + 185 Unisex de 875 activos, 95 Sets), calculados una vez por carga
+  (`enriched`); **Mujer y Hombre incluyen unisex a propósito**; excluyentes
+  entre sí, combinables con todo lo demás. (3) Favoritos:
+  `src/utils/favorites.js` — localStorage por dispositivo y POR CLIENTE
+  (clave `zimaxx_favs_<tokenHint>`, el mismo criterio del outbox: el link se
+  comparte por WhatsApp y el teléfono puede abrir el catálogo de otro);
+  corazón en la esquina de la imagen (handler memoizado para no romper el
+  memo de ProductCard), chip "❤️ Favoritos (N)" que aparece con el primero,
+  larga vida a propósito (no se borra al pedir); tope de sanidad 500; jamás
+  lanza. "Todos los estados" resetea ⭐+segmento+favoritos de una.
+  **Verificado**: asserts SQL (ranking por línea, límite POR línea, global
+  intacto, ambas ramas, API cerrada, regresión de test5 en verde) + 21
+  aserciones Playwright (chips por línea incluido el top de línea no-global,
+  unisex en ambos géneros, combinación árabes+Hombre, favoritos con
+  persistencia al recargar y aislamiento entre clientes, degradación sin
+  is_top_line) + suites de carrito (22) y top-sellers (15) re-corridas.
+- [x] **❤️ Favoritos EN LA BASE** (2026-08-20, quinta tanda del día, punto 66;
+  a pedido del usuario, reemplaza el "solo localStorage" de la cuarta tanda
+  antes de deployarse). `migration-2026-08-20-client-favorites.sql` (requiere
+  la de top-by-line): tabla `client_favorites (client_id, product_id,
+  created_at)` con cascades, escrita SOLO vía `set_favorite(p_token,
+  p_product_id, p_fav)` — por token como create_order, idempotente, nunca
+  lanza (token inválido / producto apagado o inexistente / tope de 500 por
+  cliente devuelven null), ejecutable por anon (el catálogo corre como anon);
+  la tabla no se escribe por PostgREST (RLS sin policy de insert) y el panel
+  la LEE (admin todo, vendedora sus clientes, policies en forma InitPlan —
+  UI del panel cuando se pida). `get_catalog` devuelve `is_fav` en las dos
+  ramas, resuelto una vez por llamada. El frontend queda servidor-primero:
+  localStorage como caché de arranque (corazones instantáneos) y fallback si
+  la migración no corrió; al llegar get_catalog el servidor PISA lo local y
+  reescribe el caché; el toggle es optimista y `pushFavorite` viaja
+  fire-and-forget con keepalive + 1 reintento (favorites.js). **Verificado**:
+  asserts SQL (idempotencia de marcar/desmarcar, basura → null sin filas,
+  is_fav por rama con cada cliente viendo LO SUYO, anon puede la RPC pero no
+  la tabla, authenticated no inserta directo, RLS admin/Ana/Beta, forma
+  InitPlan, tope 500 con desmarcar vivo, cascade de producto, migración ×2) y
+  26 aserciones Playwright (los 21 de la cuarta tanda + 5 del modo servidor:
+  siembra desde is_fav sin localStorage, RPC capturada con
+  token/producto/estado en cada toggle, y el servidor pisando lo optimista al
+  recargar), más carrito (22) y top-sellers (15) re-corridas en verde.
 
 ---
 
@@ -2160,6 +2236,7 @@ negro+dorado es idéntico en ambos modos).
 | `vendedores` | Nombre + teléfono de cada vendedora (2026-07-06; antes texto libre en `clients`). Desde el rol vendedora (2026-07-06): `user_id` (FK a `auth.users`, nullable, único) + `login_email` (solo display) para vincular su login. `sellercloud_rep_id` (2026-08-18, integer nullable, `migration-2026-08-18-sellercloud-salesrep.sql`): ID de empleado en SellerCloud (Settings → Employees), viaja como `OrderDetails.SalesRepresentative` al mandar un pedido con "Enviar a SellerCloud"; editable inline en la pestaña Vendedoras; null = la orden entra sin Sales Rep, con aviso |
 | `products` | Catálogo de productos (`availability`: 'available' \| 'preorder' \| 'flash', este último desde 2026-07-08 — etiqueta "Flash Sale" del Excel de inventario, sin relación con la tabla `flash_sales`). `product_line` (2026-07-08, texto libre, nullable): tipo real del perfume desde `PRODUCT_CATEGORY` del export SellerCloud (`Perfume` / `Perfume - Arabes`), **distinto** de `category` que acá guarda la marca/Brand. `new_until` (2026-07-09, timestamptz nullable): mientras `now() < new_until` el producto lleva la etiqueta ✨ Nuevo en catálogo y admin; se setea automático (+10 días) al crear el producto y es editable en el formulario. `stock` (2026-07-14, int nullable, `migration-2026-07-14-inventory-stock.sql`): InventoryAvailableQTY de SellerCloud — **no** se expone en el catálogo del cliente (`get_catalog` no lo incluye), solo visible en el admin. Decide la disponibilidad en cada carga/sync (`>= 1` available, `0`/negativo preorder, respetando flash); NO toca `active`. null = "todavía no se sabe el stock" (distinto de 0 = sin stock). **Desde 2026-08-04 esa regla vive en un trigger de la tabla** (`products_availability_from_stock`, `migration-2026-08-04-order-stock.sql`) y no solo en cada camino de escritura: cualquier insert/update con `stock` no-null y `availability <> 'flash'` deja `availability` derivada del stock, venga del sync, del Excel, del bulk, del formulario, del descuento de un pedido atendido o de un request directo. Eso además tapó un agujero real: `apply_price_list` ponía `availability = 'available'` a todos los productos de un Excel de precios sin columna `Type`, con stock 0 incluido. El `stock` también **baja solo** al marcar un pedido Atendido (ver `apply_order_stock`) y es editable a mano en el formulario de la pestaña Productos. `deactivated_by_stock` (2026-08-12, boolean not null default false, `migration-2026-08-12-hide-out-of-stock.sql`): desde esa fecha el trigger no solo pone la etiqueta, también **despublica** — `stock <= 0` deja el producto en `preorder` **y** `active = false`, así que sale del catálogo (revierte a propósito media decisión del 2026-07-14: "stock 0 se muestra como pre-order, ocultarlo es manual"). La columna **no** es "está sin stock" (eso ya lo dice `stock`) sino "esta regla fue la que lo apagó", y es lo único que permite reactivarlo solo cuando entre stock sin resucitar de paso lo que apagó una persona ni la exclusión de no-catálogo (SKU `-SPECIAL`, beauty/electronics/support/packing/test), que tienen stock de sobra. Invariante: `true` = inactivo por falta de stock, vuelve solo con `stock >= 1`; `false` = si está inactivo lo apagó una persona y solo una persona lo reactiva. Un producto `flash` con stock 0 conserva la etiqueta 🔥 pero **también** se despublica (la etiqueta no publica nada). Quién borra la bandera a propósito, porque es decisión humana: el botón Desactivar (fila o selección) del panel, la columna `Activo` del Excel de productos, y el UPDATE de `apply_price_list` que desactiva lo que quedó fuera del archivo. `upc` (2026-07-14, text nullable, `migration-2026-07-14-product-upc.sql`): código de barras, dato interno del admin (**no** lo expone `get_catalog`), visible/editable en la pestaña Productos y buscable. **Desde 2026-08-13** (`migration-2026-08-13-exclude-box-skus.sql`) hay una segunda invariante de publicación, independiente del stock: un SKU terminado en `-SPECIAL` o `-BOX` (`is_noncatalog_sku`) queda `active = false` en todo insert/update, vía el trigger `products_enforce_noncatalog` — son variantes internas de SellerCloud (`-BOX` = el mismo perfume vendido por caja) y no se publican nunca; la única forma de vender uno es cambiarle el `sku` |
 | `product_prices` | Precio por producto+lista (clave compuesta) |
+| `client_favorites` | **Favoritos del catálogo por cliente** (2026-08-20, `migration-2026-08-20-client-favorites.sql`): PK `(client_id, product_id)` + `created_at` (desde cuándo le interesa), FKs con cascade a clients y products. Se escribe SOLO vía la RPC `set_favorite` (por token, DEFINER — anon no tiene ni grant sobre la tabla y no hay policy de insert para nadie); lo lee `get_catalog` (`is_fav`) y, con RLS de solo lectura en forma InitPlan, el panel: admin todo, vendedora los de sus clientes (UI pendiente de que se pida). Tope de 500 por cliente aplicado en la RPC |
 | `product_sales_daily` | **Unidades pedidas por producto y día** (2026-08-20, `migration-2026-08-20-top-sellers.sql`): PK `(product_id, day)`, `units` bigint; FK a products con cascade. La mantiene el trigger `orders_track_product_sales` (AFTER insert/update/delete en orders, SECURITY DEFINER, jamás lanza): si la versión vieja de la fila contaba (`kind='order'` no cancelado) resta sus unidades, si la nueva cuenta las suma — una sola regla para alta/conversión/cancelar/reabrir/editar/borrar; cubetas por el día del pedido (`created_at`), anotaciones tipo SellerCloud salen gratis por el early-exit. La lee `top_seller_ids(days, limit)` para el ⭐ Más vendidos del catálogo (`get_catalog` marca `is_top` con el top 12 de 60 días). RLS sin policies + revoke, y `apply_product_sales`/`top_seller_ids` sin EXECUTE para los roles de la API (si fueran públicos, cualquiera con la anon key inflaría el ranking). Se reconstruye entera re-corriendo la migración (backfill = truncate + recálculo desde orders) |
 | `flash_sales` | **LEGADO desde 2026-08-07**: ofertas con precio promo + fecha de expiración. La app ya no la lee (se eliminó la pestaña Flash Sales y la sección del catálogo). No se borró nada: la tabla y sus datos siguen ahí, sin migración de por medio, así que volver atrás es reponer código. `compute_order_items` todavía la consulta para revalorizar una línea vieja marcada `flash` de un pedido anterior — sin ofertas vigentes cae al precio de lista, que es lo correcto |
 | `orders` | Pedidos del checkout — fuente de verdad (precios recalculados en el servidor) con `status` 'new' \| 'done' \| 'cancelled'. `stock_applied` (2026-08-04, boolean not null default false, `migration-2026-08-04-order-stock.sql`): ¿este pedido ya descontó su stock? Marcar Atendido descuenta las cantidades de `products.stock`, reabrir/cancelar las devuelve, y esta bandera — **no** el estado — es la que evita el doble descuento (un pedido puede ir done → new → done varias veces). `request_id` (2026-08-05, uuid nullable + índice único **parcial** `where request_id is not null`, `migration-2026-08-05-order-capture.sql`): identifica al **carrito**, no al envío — `CartContext` lo genera una vez y lo rota al vaciar el carrito, así reintentar un envío que falló devuelve el pedido ya guardado en vez de duplicarlo. Null en los pedidos previos al cambio y en los que llegan de un frontend sin actualizar (de ahí que el índice sea parcial). Las dos columnas están blindadas por el trigger `orders_guard_items_edit` igual que `items`/`total`/`status`/`kind`. `units` (2026-08-20, integer **generado** de `items` vía `order_items_units()`, `migration-2026-08-20-orders-units.sql`): total de unidades del pedido, existe para que la bandeja no baje el jsonb `items` completo — no se puede escribir (la deriva Postgres) y su función jamás lanza (un error ahí rompería todo insert de pedidos); índice parcial `orders_status_new_idx` para el badge de pendientes (misma fecha, `migration-2026-08-20-rls-initplan.sql`) |
@@ -2221,6 +2298,30 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
   12)` (la ventana y el tamaño viven ahí) contra las cubetas de
   `product_sales_daily`; las dos ramas lo llevan — la lista `quote` también
   ve el chip ⭐.
+- Y desde la cuarta tanda del mismo día (`migration-2026-08-20-top-by-line.sql`)
+  también `is_top_line`: ¿está en el top 12 **de su `product_line`**? (vía
+  `top_seller_ids_by_line(60, 12)`, `row_number()` particionado por línea
+  sobre las mismas cubetas; los productos con línea null no rankean). El
+  frontend arma los chips "Más vendidos árabes/diseñador" cruzando esta clave
+  con `product_line` — la base no queda casada con los nombres de las líneas.
+- Y desde la quinta tanda (`migration-2026-08-20-client-favorites.sql`)
+  también `is_fav`: ¿este producto es favorito DEL cliente del token? (de
+  `client_favorites`, resuelto una vez por llamada). Las dos ramas lo llevan.
+
+### `set_favorite(p_token text, p_product_id uuid, p_fav boolean) → boolean` (2026-08-20)
+- Acceso: `anon` y `authenticated` — el catálogo del cliente corre como anon
+  y se identifica por token, igual que `create_order`. La única puerta de
+  escritura de `client_favorites`.
+- Devuelve el estado FINAL (true = quedó favorito, false = quedó quitado) o
+  **null sin excepción** cuando no se pudo: token inválido (sin rastro),
+  producto inexistente o apagado (solo se marca lo que el catálogo puede
+  mostrar — y así la FK no puede explotar), o tope de 500 por cliente
+  (anti-abuso: la RPC es pública por diseño). Idempotente: re-marcar no
+  duplica (PK + on conflict do nothing), desmarcar dos veces no falla, y
+  desmarcar sigue funcionando aun en el tope.
+- El frontend la dispara fire-and-forget con keepalive y 1 reintento
+  (`pushFavorite` en `src/utils/favorites.js`): el toggle es optimista y al
+  recargar manda lo que diga el servidor vía `is_fav`.
 - Todas las listas regionales/Special se tratan igual: un producto solo
   aparece si tiene precio cargado en `product_prices` para esa lista.
   **Excepción: `quote`** (2026-07-08) — ver abajo.
@@ -3284,3 +3385,7 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 63. **Escalabilidad: RLS en forma InitPlan + bandeja de Pedidos con ventana e ítems bajo demanda** (2026-08-20, segunda tanda del día, a pedido del usuario: "arma e implementa esos 2 arreglos para asegurar la escalabilidad del sistema" — tras el análisis de rendimiento medido en producción). **(1)** `migration-2026-08-20-rls-initplan.sql`: las 25 policies llamaban las funciones de rol POR FILA (son SECURITY DEFINER: ni inline ni caché) — el badge de "pedidos nuevos" tardaba 770 ms con 647 pedidos y el costo crecía lineal con clients+orders+prices hacia el statement_timeout de 8 s. Recreadas con `(select f())` (InitPlan), y las 3 de listas con dueñas pasaron de `can_vendedora_use_price_list(col)` a `col in (select vendedora_usable_price_list_ids())` (función DEFINER nueva, misma regla, una ejecución hasheada por query; no se inlineó en la policy porque leería `price_list_owners` bajo su propio RLS circular). Índice parcial `orders_status_new_idx` de yapa. **Semántica idéntica demostrada**: snapshot de visibilidad de 6 personas × 13 tablas + 11 intentos de escritura sobre las policies vivas de producción, igual antes/después; con 12k clients + 8k orders: 771→3 ms (×257), 995→2.9 ms (×343), 502→1.7 ms (×295). **Regla nueva del proyecto: toda policy usa la forma envuelta** — y si se re-corre `schema.sql` (forma vieja), re-correr esta migración. **(2)** `migration-2026-08-20-orders-units.sql` + frontend: la bandeja bajaba TODO el historial con el jsonb `items` adentro (~3 MB hoy, ~55 MB/año al ritmo real de ~250 pedidos/semana). Ahora: ventana de 90 días por defecto (selector 30/90/180/Todo, filtro de servidor vía el 4º parámetro nuevo de `fetchAll`), select sin `items` (la fila muestra la columna **generada** `orders.units`, no escribible, con función que jamás lanza — un error ahí rompería todo insert de pedidos) e ítems por pedido recién al desplegar/exportar/editar (`ensureItems`, con loading/error en la fila). Degrada en los dos sentidos: sin la migración la bandeja detecta 42703 y reintenta con el select viejo; el frontend viejo ignora la columna extra. Se quitó el retorno anticipado de "aún no hay pedidos" (escondía el selector de ventana y aparecía durante la carga). Verificado con el snapshot RLS + asserts de units en PostgreSQL 18 y 16 aserciones Playwright de la bandeja (más las 37 de la primera tanda re-corridas en verde).
 
 64. **⭐ Más vendidos + orden por precio en el catálogo del cliente** (2026-08-20, tercera tanda del día, a pedido del usuario) — `migration-2026-08-20-top-sellers.sql` + Catalog/FilterBar/ProductCard. El "más vendido" lo decide la base desde los pedidos REALES (`kind='order'` no cancelados; una cotización cuenta al convertirse, un cancelado deja de contar), por unidades pedidas en una **ventana móvil de 60 días**, top 12. La mecánica que no es obvia: ni agregado por apertura de catálogo (costo lineal recién eliminado del panel) ni job programado (no hay pg_cron) — cubetas por producto y día (`product_sales_daily`) mantenidas por un trigger AFTER en orders con UNA regla que cubre todos los caminos: si la fila vieja contaba se resta, si la nueva cuenta se suma (cubetas por `created_at`, no `now()`: editar un pedido viejo ajusta su día; las anotaciones de SellerCloud/stock salen gratis por early-exit). Regla de oro heredada de system_logs: la estadística JAMÁS tumba un pedido (trigger con catch + warning; basura suma 0), y si desconfía se reconstruye re-corriendo la migración (backfill = truncate + recálculo). `top_seller_ids(days, limit)` y `apply_product_sales` son SECURITY DEFINER **sin EXECUTE para la API** (públicas permitirían inflar el ranking con la anon key); el trigger es DEFINER para que el update directo de una vendedora (policy `vendedora_update_own_orders`) pueda anotar sin privilegios sobre la tabla. `get_catalog` (copia de la versión UPC) marca `is_top` en las DOS ramas — la lista `quote` también lo ve: es información comercial, no un precio. En el frontend: chip "⭐ Más vendidos" (patrón de ✨ Nuevo: solo aparece si algo viene marcado, se resetea con "Todos los estados"), badge apilable con Nuevo en hex fijos (imagen de fondo siempre oscura), y **selector de orden por precio** (Orden del catálogo / mayor a menor / menor a mayor) client-side sobre lo filtrado con desempate por nombre, **oculto para la lista quote** (sin precios no hay qué ordenar). Degradación en ambos sentidos, mismo patrón que el UPC. Verificado: asserts SQL (backfill histórico, trigger camino por camino, conversión de cotización, authenticated sin permission denied, ranking/ventana/límite, ambas ramas, API cerrada, idempotencia con recheck) y 15 aserciones Playwright + la suite del carrito en verde.
+
+65. **⭐ Más vendidos por línea + Mujer/Hombre/Sets + ❤️ Favoritos** (2026-08-20, cuarta tanda del día, a pedido del usuario) — `migration-2026-08-20-top-by-line.sql` (requiere la de top-sellers) + Catalog/FilterBar/ProductCard + `src/utils/favorites.js`. **Los ⭐ por línea**: el top global puede quedar dominado por la línea que más vende; `is_top_line` marca el top 12 DE cada `product_line` (`top_seller_ids_by_line`, `row_number()` particionado sobre las mismas cubetas de `product_sales_daily`; línea null no rankea) y los chips "árabes"/"diseñador" lo cruzan con `product_line` en el frontend — la base no queda casada con los nombres de las dos líneas de hoy; los tres ⭐ son excluyentes entre sí (un `topFilter`). **Mujer/Hombre/Sets sin migración**: no hay columna de género — el dato vive EN EL NOMBRE del export y la cobertura medida en producción es casi total (330 Men + 355 Women + 185 Unisex de 875 activos; 95 con "Set"), así que se deriva en `Catalog.jsx` con regex `\b` ("Women" no matchea "men") una sola vez por carga; **Mujer y Hombre incluyen unisex a propósito** (el chip responde "¿qué le puedo vender a…?"); excluyentes entre sí. **Favoritos**: localStorage por dispositivo y POR CLIENTE (`zimaxx_favs_<tokenHint>` — sin la clave por token, los corazones de A aparecerían en el catálogo de B al compartir teléfono); larga vida a propósito (no se borran al pedir, son "lo que siempre pido"); corazón en la esquina de la imagen con handler memoizado (ProductCard sigue memo) y chip "❤️ Favoritos (N)" que recién aparece con el primero; jamás lanzan, tope 500; limitación asumida: no viajan entre dispositivos (el camino futuro es tabla + RPC por token, como create_order). "Todos los estados" resetea ⭐+segmento+favoritos. Verificado: asserts SQL (ranking y límite POR línea, global intacto encabezado por un sin-línea, ambas ramas del catálogo, API cerrada, regresión top-sellers) y 21 aserciones Playwright (incluidas persistencia al recargar, aislamiento entre clientes y degradación sin `is_top_line`), más carrito (22) y top-sellers (15) re-corridas en verde.
+
+66. **Los ❤️ favoritos pasan a la base** (2026-08-20, quinta tanda del día, a pedido del usuario: "pq no hacemos una tabla y rpc por token mejor? y asi queda un registro de los favoritos de cada uno de los clientes" — pedido ANTES de deployar la v1 localStorage de la cuarta tanda, así que no hubo nada que migrar del lado del dispositivo) — `migration-2026-08-20-client-favorites.sql` (la cadena del catálogo queda 5 top-sellers → 6 top-by-line → 7 favorites, cada preflight corta si falta la anterior). El corazón deja de ser un dato del teléfono y pasa a ser **un dato del negocio**: `client_favorites (client_id, product_id, created_at)`, escrito SOLO vía `set_favorite(p_token, p_product_id, p_fav)` — por token como `create_order`, idempotente, **nunca lanza** (token inválido / producto apagado / tope de 500 → null; la RPC es pública por diseño y esos tres son el anti-abuso), ejecutable por `anon`; la tabla no tiene policy de escritura para nadie, y el panel la LEE con RLS en forma InitPlan (admin todo, vendedora sus clientes; la UI del panel queda para cuando se pida — el registro ya está consultable). `get_catalog` suma `is_fav` en las dos ramas (una resolución por llamada). El frontend queda **servidor-primero con caché**: localStorage pinta los corazones al instante y sirve de fallback si la migración no corrió (modo v1); al llegar `get_catalog`, el servidor pisa lo local y reescribe el caché; el toggle es optimista y `pushFavorite` viaja fire-and-forget con keepalive + 1 reintento — si aún así no llega, al recargar manda el servidor (pérdida asumida: un toggle hecho sin señal puede revertirse, preferible a bloquear el corazón esperando la red). Verificado: asserts SQL (idempotencia, basura → null sin filas, `is_fav` por rama con cada cliente viendo lo suyo, anon puede la RPC pero no la tabla, authenticated no inserta directo, RLS admin/vendedora-propia/vendedora-sin-clientes, forma InitPlan verificada en pg_policies, tope 500 con desmarcar vivo, cascade, migración ×2) y 26 aserciones Playwright (las 21 de la cuarta tanda + siembra desde `is_fav` sin localStorage previo, RPC capturada con token/producto/estado, y el servidor pisando lo optimista al recargar), más carrito y top-sellers re-corridas.

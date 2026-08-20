@@ -506,6 +506,17 @@ const dict = {
     sortDefault: 'Orden del catálogo',
     sortPriceDesc: 'Precio: mayor a menor',
     sortPriceAsc: 'Precio: menor a mayor',
+
+    // Más vendidos por línea + Mujer/Hombre/Sets + Favoritos (2026-08-20,
+    // cuarta tanda del día).
+    topSellersArabic: 'Más vendidos árabes',
+    topSellersDesigner: 'Más vendidos diseñador',
+    filterWomen: 'Mujer',
+    filterMen: 'Hombre',
+    filterSets: 'Sets',
+    favorites: 'Favoritos',
+    favAdd: 'Agregar a favoritos',
+    favRemove: 'Quitar de favoritos',
   },
   en: {
     search: 'Search by name, category or UPC...',
@@ -976,6 +987,15 @@ const dict = {
     sortDefault: 'Catalog order',
     sortPriceDesc: 'Price: high to low',
     sortPriceAsc: 'Price: low to high',
+
+    topSellersArabic: 'Best sellers - Arab',
+    topSellersDesigner: 'Best sellers - Designer',
+    filterWomen: 'Women',
+    filterMen: 'Men',
+    filterSets: 'Sets',
+    favorites: 'Favorites',
+    favAdd: 'Add to favorites',
+    favRemove: 'Remove from favorites',
   },
 }
 

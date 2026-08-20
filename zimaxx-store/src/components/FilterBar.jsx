@@ -7,12 +7,19 @@ const chipCls = (active, size = 'text-xs') =>
       : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
   }`
 
-// Chips de categoría/línea/disponibilidad. Vive pegado al Header (ver
-// Catalog.jsx: ambos comparten el mismo contenedor sticky) para quedar
+// Chips de categoría/línea/disponibilidad + segmento. Vive pegado al Header
+// (ver Catalog.jsx: ambos comparten el mismo contenedor sticky) para quedar
 // siempre a la vista sin importar cuánto crezca el contenido de abajo.
 // El chip 🔥 Flash Sale filtra por la etiqueta del producto: desde
 // 2026-08-07 es la única Flash Sale que hay (no existe más la sección de
 // ofertas con precio promo y cuenta regresiva).
+//
+// 2026-08-20 (cuarta tanda): se suman los ⭐ Más vendidos POR LÍNEA (el top de
+// cada línea, para que la que más vende no tape a la otra), la fila de
+// segmento (Mujer / Hombre / Sets, derivados del nombre — ver Catalog.jsx) y
+// ❤️ Favoritos. Cada chip aparece solo si el catálogo tiene con qué
+// responderle; con una base sin las migraciones de ranking, los ⭐
+// simplemente no salen.
 export default function FilterBar({
   categories,
   category,
@@ -28,28 +35,44 @@ export default function FilterBar({
   hasNew,
   onlyNew,
   onOnlyNewChange,
-  // ⭐ Más vendidos (2026-08-20): mismo patrón que ✨ Nuevo — el chip solo
-  // aparece si el catálogo trae al menos un producto marcado por la base.
   hasTop,
-  onlyTop,
-  onOnlyTopChange,
-  // Orden por precio (2026-08-20): oculto para la lista 'quote' (sin precios).
+  hasTopArabic,
+  hasTopDesigner,
+  topFilter,
+  onTopFilterChange,
+  hasWomen,
+  hasMen,
+  hasSets,
+  segment,
+  onSegmentChange,
+  favCount,
+  onlyFavs,
+  onOnlyFavsChange,
   hasPrices,
   sortBy,
   onSortChange,
 }) {
   const { t } = useI18n()
 
-  if (
-    categories.length === 0 &&
-    lines.length <= 1 &&
-    !hasPreorder &&
-    !hasFlashType &&
-    !hasNew &&
-    !hasTop &&
-    !hasPrices
-  )
-    return null
+  const hasStatusRow =
+    hasPreorder || hasFlashType || hasNew || hasTop || hasTopArabic || hasTopDesigner || hasPrices
+  const hasSegmentRow = hasWomen || hasMen || hasSets || favCount > 0
+
+  if (categories.length === 0 && lines.length <= 1 && !hasStatusRow && !hasSegmentRow) return null
+
+  // Un solo botón "Todos" resetea todos los filtros especiales de una: es el
+  // escape para volver al catálogo completo sin destildar chip por chip.
+  const resetSpecials = () => {
+    onAvailabilityChange('')
+    onOnlyNewChange(false)
+    onTopFilterChange('')
+    onSegmentChange('')
+    onOnlyFavsChange(false)
+  }
+  const anySpecial = availability || onlyNew || topFilter || segment || onlyFavs
+
+  const toggleTop = (value) => onTopFilterChange(topFilter === value ? '' : value)
+  const toggleSegment = (value) => onSegmentChange(segment === value ? '' : value)
 
   return (
     <div className="space-y-2 border-b border-line bg-bg px-4 py-2.5">
@@ -77,22 +100,26 @@ export default function FilterBar({
           ))}
         </div>
       )}
-      {(hasPreorder || hasFlashType || hasNew || hasTop || hasPrices) && (
+      {hasStatusRow && (
         <div className="flex items-center gap-2 overflow-x-auto pb-0.5">
-          <button
-            onClick={() => {
-              onAvailabilityChange('')
-              onOnlyNewChange(false)
-              onOnlyTopChange?.(false)
-            }}
-            className={chipCls(!availability && !onlyNew && !onlyTop)}
-          >
+          <button onClick={resetSpecials} className={chipCls(!anySpecial)}>
             {t('allStatuses')}
           </button>
-          {/* Primero de los chips especiales: es el gancho comercial. */}
+          {/* Primero los ⭐: son el gancho comercial. El global y los de línea
+              son excluyentes entre sí (un solo topFilter). */}
           {hasTop && (
-            <button onClick={() => onOnlyTopChange(!onlyTop)} className={chipCls(onlyTop)}>
+            <button onClick={() => toggleTop('global')} className={chipCls(topFilter === 'global')}>
               ⭐ {t('topSellers')}
+            </button>
+          )}
+          {hasTopArabic && (
+            <button onClick={() => toggleTop('arabes')} className={chipCls(topFilter === 'arabes')}>
+              ⭐ {t('topSellersArabic')}
+            </button>
+          )}
+          {hasTopDesigner && (
+            <button onClick={() => toggleTop('disenador')} className={chipCls(topFilter === 'disenador')}>
+              ⭐ {t('topSellersDesigner')}
             </button>
           )}
           {hasNew && (
@@ -136,6 +163,33 @@ export default function FilterBar({
               <option value="price_desc">{t('sortPriceDesc')}</option>
               <option value="price_asc">{t('sortPriceAsc')}</option>
             </select>
+          )}
+        </div>
+      )}
+      {/* Segmento (Mujer/Hombre/Sets, excluyentes entre sí — Mujer y Hombre
+          incluyen unisex a propósito) + ❤️ Favoritos, que recién aparece
+          cuando el cliente marcó alguno con el corazón de la tarjeta. */}
+      {hasSegmentRow && (
+        <div className="flex gap-2 overflow-x-auto pb-0.5">
+          {hasWomen && (
+            <button onClick={() => toggleSegment('women')} className={chipCls(segment === 'women')}>
+              {t('filterWomen')}
+            </button>
+          )}
+          {hasMen && (
+            <button onClick={() => toggleSegment('men')} className={chipCls(segment === 'men')}>
+              {t('filterMen')}
+            </button>
+          )}
+          {hasSets && (
+            <button onClick={() => toggleSegment('sets')} className={chipCls(segment === 'sets')}>
+              {t('filterSets')}
+            </button>
+          )}
+          {favCount > 0 && (
+            <button onClick={() => onOnlyFavsChange(!onlyFavs)} className={chipCls(onlyFavs)}>
+              ❤️ {t('favorites')} ({favCount})
+            </button>
           )}
         </div>
       )}

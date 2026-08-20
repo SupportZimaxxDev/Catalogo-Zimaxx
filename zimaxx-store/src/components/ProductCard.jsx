@@ -12,7 +12,11 @@ const BULK_STEPS = [10, 15, 20]
 // listas de cientos de tarjetas — sin esto, cada tecla del buscador o cada
 // lote nuevo del scroll infinito re-renderizaba TODAS las tarjetas ya
 // visibles, no solo las nuevas.
-function ProductCard({ product }) {
+//
+// isFav/onToggleFav (2026-08-20): el corazón de favoritos. onToggleFav viene
+// memoizado desde Catalog (useCallback), así el memo sigue funcionando y al
+// marcar un favorito solo re-renderiza la tarjeta tocada.
+function ProductCard({ product, isFav, onToggleFav }) {
   const { t } = useI18n()
   const cart = useCart()
   const price = product.price == null ? null : Number(product.price)
@@ -66,7 +70,23 @@ function ProductCard({ product }) {
           )}
         </span>
       )}
-      <ProductImage src={product.image_url} alt={product.name} />
+      <div className="relative">
+        <ProductImage src={product.image_url} alt={product.name} />
+        {/* Corazón de favoritos (2026-08-20), abajo a la derecha de la imagen
+            para no chocar con los badges de arriba. Fondo oscuro traslúcido
+            fijo: la imagen es oscura siempre, el corazón blanco/rojo se lee
+            en los dos temas. */}
+        {onToggleFav && (
+          <button
+            onClick={() => onToggleFav(product.id)}
+            aria-label={isFav ? t('favRemove') : t('favAdd')}
+            aria-pressed={!!isFav}
+            className="absolute bottom-2 right-2 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-base shadow-md shadow-black/30 backdrop-blur-sm transition-transform hover:scale-110 active:scale-95"
+          >
+            {isFav ? '❤️' : '🤍'}
+          </button>
+        )}
+      </div>
       <div className="flex flex-1 flex-col gap-1.5 p-3.5">
         {product.category && (
           <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-secondary-dark">
