@@ -28,10 +28,27 @@ export default function FilterBar({
   hasNew,
   onlyNew,
   onOnlyNewChange,
+  // ⭐ Más vendidos (2026-08-20): mismo patrón que ✨ Nuevo — el chip solo
+  // aparece si el catálogo trae al menos un producto marcado por la base.
+  hasTop,
+  onlyTop,
+  onOnlyTopChange,
+  // Orden por precio (2026-08-20): oculto para la lista 'quote' (sin precios).
+  hasPrices,
+  sortBy,
+  onSortChange,
 }) {
   const { t } = useI18n()
 
-  if (categories.length === 0 && lines.length <= 1 && !hasPreorder && !hasFlashType && !hasNew)
+  if (
+    categories.length === 0 &&
+    lines.length <= 1 &&
+    !hasPreorder &&
+    !hasFlashType &&
+    !hasNew &&
+    !hasTop &&
+    !hasPrices
+  )
     return null
 
   return (
@@ -60,17 +77,24 @@ export default function FilterBar({
           ))}
         </div>
       )}
-      {(hasPreorder || hasFlashType || hasNew) && (
-        <div className="flex gap-2 overflow-x-auto pb-0.5">
+      {(hasPreorder || hasFlashType || hasNew || hasTop || hasPrices) && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-0.5">
           <button
             onClick={() => {
               onAvailabilityChange('')
               onOnlyNewChange(false)
+              onOnlyTopChange?.(false)
             }}
-            className={chipCls(!availability && !onlyNew)}
+            className={chipCls(!availability && !onlyNew && !onlyTop)}
           >
             {t('allStatuses')}
           </button>
+          {/* Primero de los chips especiales: es el gancho comercial. */}
+          {hasTop && (
+            <button onClick={() => onOnlyTopChange(!onlyTop)} className={chipCls(onlyTop)}>
+              ⭐ {t('topSellers')}
+            </button>
+          )}
           {hasNew && (
             <button onClick={() => onOnlyNewChange(!onlyNew)} className={chipCls(onlyNew)}>
               ✨ {t('newTag')}
@@ -97,6 +121,21 @@ export default function FilterBar({
             >
               🔥 {t('flashSale')}
             </button>
+          )}
+          {/* Orden por precio (2026-08-20): a la derecha de los chips, con el
+              mismo lenguaje visual redondeado. Solo si el catálogo tiene
+              precios — para la lista 'quote' no hay nada que ordenar. */}
+          {hasPrices && (
+            <select
+              value={sortBy}
+              onChange={(e) => onSortChange(e.target.value)}
+              aria-label={t('sortDefault')}
+              className="ml-auto shrink-0 rounded-full border border-line bg-surface px-3 py-1.5 text-xs font-medium text-primary/70 outline-none transition-colors hover:border-secondary focus:border-secondary"
+            >
+              <option value="">{t('sortDefault')}</option>
+              <option value="price_desc">{t('sortPriceDesc')}</option>
+              <option value="price_asc">{t('sortPriceAsc')}</option>
+            </select>
           )}
         </div>
       )}

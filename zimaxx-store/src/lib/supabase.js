@@ -27,12 +27,17 @@ export const supabase = createClient(url ?? 'http://localhost', anonKey ?? 'anon
 // en todos los bordes de las ~20 páginas. Hay que pasar siempre una
 // combinación única (la tabla no tiene por qué tener `id`: `product_prices`
 // se identifica por producto + lista).
-export async function fetchAll(table, columns = '*', orderBy = 'id') {
+// `applyFilter` (2026-08-20, opcional): función que recibe el query de
+// PostgREST y le encadena condiciones — ej. `(q) => q.gte('created_at', iso)`
+// para la ventana de tiempo de la bandeja de Pedidos. Se aplica al conteo Y a
+// cada página: si filtraran distinto, el conteo pediría páginas que no
+// existen o dejaría filas afuera.
+export async function fetchAll(table, columns = '*', orderBy = 'id', applyFilter = null) {
   const PAGE = 1000
   const orderCols = Array.isArray(orderBy) ? orderBy : [orderBy]
-  const { count, error: countError } = await supabase
-    .from(table)
-    .select(columns, { count: 'exact', head: true })
+  let countQuery = supabase.from(table).select(columns, { count: 'exact', head: true })
+  if (applyFilter) countQuery = applyFilter(countQuery)
+  const { count, error: countError } = await countQuery
   if (countError) throw countError
   const total = count ?? 0
   if (total === 0) return []
@@ -41,6 +46,7 @@ export async function fetchAll(table, columns = '*', orderBy = 'id') {
   const pages = await Promise.all(
     Array.from({ length: pageCount }, (_, i) => {
       let q = supabase.from(table).select(columns)
+      if (applyFilter) q = applyFilter(q)
       for (const col of orderCols) q = q.order(col)
       return q.range(i * PAGE, i * PAGE + PAGE - 1)
     }),

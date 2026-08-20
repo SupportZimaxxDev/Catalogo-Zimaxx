@@ -2,18 +2,31 @@
 
 > Documento de referencia para retomar el trabajo en cualquier sesión.
 >
-> **⚠️ MIGRACIONES NUEVAS DEL 2026-08-20 — DOS, en este orden:**
+> **⚠️ MIGRACIONES NUEVAS DEL 2026-08-20 — CINCO** (la quinta es
+> `migration-2026-08-20-top-sellers.sql`, del punto 64: cubetas
+> `product_sales_daily` + trigger `orders_track_product_sales` + backfill +
+> `is_top` en `get_catalog` — independiente de las otras y del deploy: sin
+> ella el chip ⭐ del catálogo simplemente no aparece). Las primeras cuatro,
+> en este orden:
 > `migration-2026-08-20-system-logs.sql` (tabla `system_logs` + RPCs
 > `log_event`/`get_system_logs`/`purge_system_logs`) y después
 > `migration-2026-08-20-price-apply-log.sql` (`apply_price_list` pasa a dejar
-> su resumen en el log; su preflight corta si la primera no corrió). **Ninguna
-> bloquea el deploy del frontend** en ningún sentido: antes del deploy no
-> rompen la versión vieja (son aditivas; la segunda conserva firma y retorno de
-> `apply_price_list`), y sin correrlas el frontend nuevo degrada (los
-> `logEvent()` fallan en silencio por diseño y la pestaña ⚙️ Sistema avisa qué
-> migración falta). La Edge Function `sellercloud-push-order` ganó logs de push:
-> **redesplegarla** para tenerlos (sin redeploy sigue andando como hasta hoy).
-> Ver punto 62 y la sección "Logs del sistema" del README.
+> su resumen en el log; su preflight corta si la primera no corrió) — **las
+> dos ya corridas en producción ese mismo día** (verificado por sondeo: la
+> tabla existe). Después, de la tanda de escalabilidad (punto 63):
+> `migration-2026-08-20-rls-initplan.sql` (las 25 policies en forma InitPlan —
+> el arreglo de los reads del panel de 770 ms) y
+> `migration-2026-08-20-orders-units.sql` (columna generada `orders.units`).
+> **Ninguna bloquea el deploy del frontend** en ningún sentido: antes del
+> deploy no rompen la versión vieja (aditivas; misma firma y retorno de
+> `apply_price_list`; misma semántica exacta de las policies), y sin correrlas
+> el frontend nuevo degrada (los `logEvent()` fallan en silencio por diseño,
+> la pestaña ⚙️ Sistema avisa qué migración falta, y la bandeja reintenta con
+> el select viejo si `units` no existe — 42703). La Edge Function
+> `sellercloud-push-order` ganó logs de push: **redesplegarla** para tenerlos
+> (sin redeploy sigue andando como hasta hoy).
+> Ver puntos 62 y 63 y las secciones "Logs del sistema" y "Escalabilidad" del
+> README.
 >
 > **⚠️ ESTADO DE MIGRACIONES (2026-08-19, sondeado EN PRODUCCIÓN con
 > `supabase db query --linked`): queda UNA pendiente** —
@@ -59,7 +72,24 @@
 > estado real (2026-08-12)" — la lista de pendientes de este doc ya se equivocó
 > en las dos direcciones antes.
 >
-> Creado: 2026-07-02. Última actualización: 2026-08-20 (**sistema centralizado
+> Creado: 2026-07-02. Última actualización: 2026-08-20, tercera tanda
+> (**⭐ Más vendidos + orden por precio en el catálogo del cliente**, punto
+> 64: chip y badge para el top 12 por unidades pedidas en los últimos 60
+> días — calculado desde los pedidos reales con cubetas por día
+> (`product_sales_daily`) mantenidas por un trigger en orders que suma/resta
+> con la regla "si la fila vieja contaba se resta, si la nueva cuenta se
+> suma"; `get_catalog` marca `is_top` en las dos ramas — y selector de orden
+> por precio asc/desc, oculto para la lista `quote`. Una migración más,
+> `migration-2026-08-20-top-sellers.sql`).
+> Segunda tanda del día:
+> (**escalabilidad, los 2 arreglos del análisis de rendimiento**, punto 63:
+> las 25 policies RLS dejan de llamar funciones por fila — badge de pedidos
+> 771 ms → 3 ms, ×257 — y la bandeja de Pedidos pasa a ventana de 90 días sin
+> bajar `items` (columna generada `orders.units` + ítems bajo demanda). Dos
+> migraciones más, mismas garantías de compatibilidad; el análisis que motivó
+> esto — con los números de producción — está en la sección "Escalabilidad"
+> del README).
+> Primera tanda del mismo día: (**sistema centralizado
 > de logs de errores y eventos operativos**: tabla `system_logs` + RPC
 > `log_event` que nunca lanza excepción + pestaña ⚙️ Sistema solo-superadmin
 > con `get_system_logs`. Quedan instrumentados el checkout que no registra
@@ -1877,6 +1907,65 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   system_logs + 4 de apply_price_list, incluida la regla de oro con la tabla
   renombrada y los preflights cortando) y 37 aserciones Playwright contra el
   build real con la red interceptada (15 del panel + 22 del catálogo).
+- [x] **Escalabilidad: los 2 arreglos del análisis de rendimiento** (2026-08-20,
+  segunda tanda del día, punto 63; a pedido del usuario tras el análisis
+  medido en producción). (1) **RLS en forma InitPlan**
+  (`migration-2026-08-20-rls-initplan.sql`): las 25 policies llamaban
+  `is_admin()`/`current_vendedora_id()`/`is_vendedora()`/`auth.uid()` POR FILA
+  (SECURITY DEFINER = ni inline ni caché); el badge de pedidos nuevos tardaba
+  770 ms con 647 pedidos y crecía lineal hasta chocar con el timeout de 8 s a
+  ~10k filas. Recreadas con `(select f())` (InitPlan, una evaluación por
+  query); las 3 que usaban `can_vendedora_use_price_list(col)` — que no puede
+  ser InitPlan porque recibe la columna — pasaron a `col in (select
+  vendedora_usable_price_list_ids())` (función nueva DEFINER, mismo
+  significado, ejecutada una vez y hasheada; NO se inlineó en la policy porque
+  leería price_list_owners bajo su RLS circular). Más índice parcial
+  `orders_status_new_idx` para el badge. **Semántica idéntica verificada**:
+  snapshot de visibilidad de 6 personas × 13 tablas + 11 intentos de escritura,
+  igual antes/después sobre las policies VIVAS de producción (dump de
+  pg_policies); con 12k clients + 8k orders: badge 771→3 ms (×257), orders de
+  vendedora 995→2.9 ms (×343), clients de admin 502→1.7 ms (×295). **Regla
+  para el futuro: toda policy nueva usa `(select f())`, nunca `f()` pelada** —
+  y si se re-corre schema.sql entero (tiene la forma vieja), re-correr esta
+  migración después. (2) **La bandeja de Pedidos deja de bajar el histórico
+  con ítems** (`migration-2026-08-20-orders-units.sql` + frontend): ventana
+  por defecto de 90 días (selector 30/90/180/Todo — filtro de servidor vía el
+  4º parámetro nuevo de `fetchAll`), el listado ya no trae `items` (la fila
+  usa la columna GENERADA `orders.units`, blindada y con función que jamás
+  lanza) y los ítems se piden por pedido al desplegar/exportar/editar
+  (`ensureItems`, con loading y error visibles). Doble degradación: base sin
+  migración → la bandeja detecta 42703 y reintenta con el select viejo;
+  frontend viejo con base migrada → ignora la columna extra. Se quitó de paso
+  el retorno anticipado de "aún no hay pedidos" (escondía el selector de
+  ventana y aparecía durante la carga inicial). **Verificado**: equivalencia
+  RLS + tiempos en PostgreSQL 18 desechable, asserts de units (backfill, items
+  basura suman 0, no escribible, EXECUTE como authenticated) y 16 aserciones
+  Playwright de la bandeja (ventana en la URL, select sin items, ítems bajo
+  demanda, selector que re-consulta, fallback 42703), más las 37 de la primera
+  tanda re-corridas en verde sobre el build final.
+- [x] **⭐ Más vendidos + orden por precio en el catálogo** (2026-08-20,
+  tercera tanda del día, punto 64; a pedido del usuario: "quiero agregar un
+  apartado de mas vendidos, en base al registro de ordenes que se han hecho y
+  que se hacen... ademas de un filtro para ordenar los productos por precios").
+  `migration-2026-08-20-top-sellers.sql` + frontend (Catalog/FilterBar/
+  ProductCard). El top 12 por unidades pedidas en 60 días sale de cubetas
+  diarias (`product_sales_daily`, ver la tabla) que un trigger en orders
+  mantiene con la regla vieja-resta/nueva-suma — cubre conversión de
+  cotización, cancelar/reabrir, ediciones y hasta deletes, con la regla de
+  oro de que la estadística jamás tumba un pedido. `get_catalog` (copia de la
+  versión del UPC) marca `is_top` en las dos ramas — la lista `quote` también
+  ve el chip. En el catálogo: chip "⭐ Más vendidos" (primero de los
+  especiales, resetea con "Todos los estados"), badge apilable con ✨ Nuevo
+  (hex fijos, la imagen de fondo siempre es oscura) y selector de orden
+  "Orden del catálogo / Precio: mayor a menor / menor a mayor" (client-side
+  sobre lo filtrado, empates por nombre, **oculto para la lista quote**).
+  Degradación en ambos sentidos (sin migración no hay chip; frontend viejo
+  ignora `is_top`). **Verificado**: asserts SQL en PostgreSQL 18 (backfill
+  histórico, trigger camino por camino incluido el update de una vendedora
+  como authenticated, basura inofensiva, ranking/ventana/límite, ambas ramas
+  del catálogo, API cerrada, re-corrida idempotente que reconstruye cubetas
+  exactas) + 15 aserciones Playwright (chip/badges/orden/quote/backend viejo)
+  + la suite del carrito re-corrida en verde.
 
 ---
 
@@ -2071,8 +2160,9 @@ negro+dorado es idéntico en ambos modos).
 | `vendedores` | Nombre + teléfono de cada vendedora (2026-07-06; antes texto libre en `clients`). Desde el rol vendedora (2026-07-06): `user_id` (FK a `auth.users`, nullable, único) + `login_email` (solo display) para vincular su login. `sellercloud_rep_id` (2026-08-18, integer nullable, `migration-2026-08-18-sellercloud-salesrep.sql`): ID de empleado en SellerCloud (Settings → Employees), viaja como `OrderDetails.SalesRepresentative` al mandar un pedido con "Enviar a SellerCloud"; editable inline en la pestaña Vendedoras; null = la orden entra sin Sales Rep, con aviso |
 | `products` | Catálogo de productos (`availability`: 'available' \| 'preorder' \| 'flash', este último desde 2026-07-08 — etiqueta "Flash Sale" del Excel de inventario, sin relación con la tabla `flash_sales`). `product_line` (2026-07-08, texto libre, nullable): tipo real del perfume desde `PRODUCT_CATEGORY` del export SellerCloud (`Perfume` / `Perfume - Arabes`), **distinto** de `category` que acá guarda la marca/Brand. `new_until` (2026-07-09, timestamptz nullable): mientras `now() < new_until` el producto lleva la etiqueta ✨ Nuevo en catálogo y admin; se setea automático (+10 días) al crear el producto y es editable en el formulario. `stock` (2026-07-14, int nullable, `migration-2026-07-14-inventory-stock.sql`): InventoryAvailableQTY de SellerCloud — **no** se expone en el catálogo del cliente (`get_catalog` no lo incluye), solo visible en el admin. Decide la disponibilidad en cada carga/sync (`>= 1` available, `0`/negativo preorder, respetando flash); NO toca `active`. null = "todavía no se sabe el stock" (distinto de 0 = sin stock). **Desde 2026-08-04 esa regla vive en un trigger de la tabla** (`products_availability_from_stock`, `migration-2026-08-04-order-stock.sql`) y no solo en cada camino de escritura: cualquier insert/update con `stock` no-null y `availability <> 'flash'` deja `availability` derivada del stock, venga del sync, del Excel, del bulk, del formulario, del descuento de un pedido atendido o de un request directo. Eso además tapó un agujero real: `apply_price_list` ponía `availability = 'available'` a todos los productos de un Excel de precios sin columna `Type`, con stock 0 incluido. El `stock` también **baja solo** al marcar un pedido Atendido (ver `apply_order_stock`) y es editable a mano en el formulario de la pestaña Productos. `deactivated_by_stock` (2026-08-12, boolean not null default false, `migration-2026-08-12-hide-out-of-stock.sql`): desde esa fecha el trigger no solo pone la etiqueta, también **despublica** — `stock <= 0` deja el producto en `preorder` **y** `active = false`, así que sale del catálogo (revierte a propósito media decisión del 2026-07-14: "stock 0 se muestra como pre-order, ocultarlo es manual"). La columna **no** es "está sin stock" (eso ya lo dice `stock`) sino "esta regla fue la que lo apagó", y es lo único que permite reactivarlo solo cuando entre stock sin resucitar de paso lo que apagó una persona ni la exclusión de no-catálogo (SKU `-SPECIAL`, beauty/electronics/support/packing/test), que tienen stock de sobra. Invariante: `true` = inactivo por falta de stock, vuelve solo con `stock >= 1`; `false` = si está inactivo lo apagó una persona y solo una persona lo reactiva. Un producto `flash` con stock 0 conserva la etiqueta 🔥 pero **también** se despublica (la etiqueta no publica nada). Quién borra la bandera a propósito, porque es decisión humana: el botón Desactivar (fila o selección) del panel, la columna `Activo` del Excel de productos, y el UPDATE de `apply_price_list` que desactiva lo que quedó fuera del archivo. `upc` (2026-07-14, text nullable, `migration-2026-07-14-product-upc.sql`): código de barras, dato interno del admin (**no** lo expone `get_catalog`), visible/editable en la pestaña Productos y buscable. **Desde 2026-08-13** (`migration-2026-08-13-exclude-box-skus.sql`) hay una segunda invariante de publicación, independiente del stock: un SKU terminado en `-SPECIAL` o `-BOX` (`is_noncatalog_sku`) queda `active = false` en todo insert/update, vía el trigger `products_enforce_noncatalog` — son variantes internas de SellerCloud (`-BOX` = el mismo perfume vendido por caja) y no se publican nunca; la única forma de vender uno es cambiarle el `sku` |
 | `product_prices` | Precio por producto+lista (clave compuesta) |
+| `product_sales_daily` | **Unidades pedidas por producto y día** (2026-08-20, `migration-2026-08-20-top-sellers.sql`): PK `(product_id, day)`, `units` bigint; FK a products con cascade. La mantiene el trigger `orders_track_product_sales` (AFTER insert/update/delete en orders, SECURITY DEFINER, jamás lanza): si la versión vieja de la fila contaba (`kind='order'` no cancelado) resta sus unidades, si la nueva cuenta las suma — una sola regla para alta/conversión/cancelar/reabrir/editar/borrar; cubetas por el día del pedido (`created_at`), anotaciones tipo SellerCloud salen gratis por el early-exit. La lee `top_seller_ids(days, limit)` para el ⭐ Más vendidos del catálogo (`get_catalog` marca `is_top` con el top 12 de 60 días). RLS sin policies + revoke, y `apply_product_sales`/`top_seller_ids` sin EXECUTE para los roles de la API (si fueran públicos, cualquiera con la anon key inflaría el ranking). Se reconstruye entera re-corriendo la migración (backfill = truncate + recálculo desde orders) |
 | `flash_sales` | **LEGADO desde 2026-08-07**: ofertas con precio promo + fecha de expiración. La app ya no la lee (se eliminó la pestaña Flash Sales y la sección del catálogo). No se borró nada: la tabla y sus datos siguen ahí, sin migración de por medio, así que volver atrás es reponer código. `compute_order_items` todavía la consulta para revalorizar una línea vieja marcada `flash` de un pedido anterior — sin ofertas vigentes cae al precio de lista, que es lo correcto |
-| `orders` | Pedidos del checkout — fuente de verdad (precios recalculados en el servidor) con `status` 'new' \| 'done' \| 'cancelled'. `stock_applied` (2026-08-04, boolean not null default false, `migration-2026-08-04-order-stock.sql`): ¿este pedido ya descontó su stock? Marcar Atendido descuenta las cantidades de `products.stock`, reabrir/cancelar las devuelve, y esta bandera — **no** el estado — es la que evita el doble descuento (un pedido puede ir done → new → done varias veces). `request_id` (2026-08-05, uuid nullable + índice único **parcial** `where request_id is not null`, `migration-2026-08-05-order-capture.sql`): identifica al **carrito**, no al envío — `CartContext` lo genera una vez y lo rota al vaciar el carrito, así reintentar un envío que falló devuelve el pedido ya guardado en vez de duplicarlo. Null en los pedidos previos al cambio y en los que llegan de un frontend sin actualizar (de ahí que el índice sea parcial). Las dos columnas están blindadas por el trigger `orders_guard_items_edit` igual que `items`/`total`/`status`/`kind` |
+| `orders` | Pedidos del checkout — fuente de verdad (precios recalculados en el servidor) con `status` 'new' \| 'done' \| 'cancelled'. `stock_applied` (2026-08-04, boolean not null default false, `migration-2026-08-04-order-stock.sql`): ¿este pedido ya descontó su stock? Marcar Atendido descuenta las cantidades de `products.stock`, reabrir/cancelar las devuelve, y esta bandera — **no** el estado — es la que evita el doble descuento (un pedido puede ir done → new → done varias veces). `request_id` (2026-08-05, uuid nullable + índice único **parcial** `where request_id is not null`, `migration-2026-08-05-order-capture.sql`): identifica al **carrito**, no al envío — `CartContext` lo genera una vez y lo rota al vaciar el carrito, así reintentar un envío que falló devuelve el pedido ya guardado en vez de duplicarlo. Null en los pedidos previos al cambio y en los que llegan de un frontend sin actualizar (de ahí que el índice sea parcial). Las dos columnas están blindadas por el trigger `orders_guard_items_edit` igual que `items`/`total`/`status`/`kind`. `units` (2026-08-20, integer **generado** de `items` vía `order_items_units()`, `migration-2026-08-20-orders-units.sql`): total de unidades del pedido, existe para que la bandeja no baje el jsonb `items` completo — no se puede escribir (la deriva Postgres) y su función jamás lanza (un error ahí rompería todo insert de pedidos); índice parcial `orders_status_new_idx` para el badge de pendientes (misma fecha, `migration-2026-08-20-rls-initplan.sql`) |
 | `order_failures` | **Los pedidos que el cliente envió y NO entraron** (2026-08-05, `migration-2026-08-05-order-capture.sql`). Existe porque un pedido de ~10k se perdió sin dejar rastro: `create_order` lo rechazó con un `return null` mudo (superaba el tope de líneas de entonces, 200) y el único registro del rechazo era un `console.warn` en el teléfono del cliente. Guarda `client_id` (nullable, `on delete set null`), `token_hint` (los primeros 8 caracteres, para rastrear sin guardar la credencial completa), `reason` (texto legible: 'token inválido' \| 'payload vacío o mal formado' \| 'demasiadas líneas: N (el tope es 1000)' \| 'ningún ítem válido…'), `line_count`, `kind`, `items` (el payload, **solo si el token era válido** — con token inválido se guarda nada más el motivo y el conteo, para que nadie con la anon key infle la tabla) y `recovered_order_id` (FK a `orders`, null = sin recuperar, que es lo que muestra el aviso de `OrdersAdmin.jsx`). RLS de **solo lectura**, mismo criterio que `admin_audit_log`: admin todo, vendedora los de sus propios clientes, `anon` nada, y sin policy de insert/update/delete para nadie — solo la escribe `create_order` (SECURITY DEFINER). El `grant select to authenticated` es explícito y no heredado de los default privileges de Supabase |
 | `admins` | user_id de Supabase Auth autorizados como admin. Desde 2026-08-05 la **escribe solo el superadmin** (policies `superadmin_all` + `admin_read_only`; antes tenía `admin_all`, o sea que cualquier admin podía nombrar admins vía API aunque no hubiera UI) |
 | `superadmins` | El perfil superadmin (2026-08-05, `migration-2026-08-05-superadmin.sql`): `user_id` + `created_at`, sembrada con `support5@firstchoiceonline.com`. **RLS activo y CERO policies** — desde la app no existe para nadie, ni para el propio superadmin; solo la leen las funciones SECURITY DEFINER y el SQL Editor. Tabla aparte y no una columna en `admins` justamente porque `admins` era escribible por cualquier admin: la marca de "llave maestra" no puede vivir en una tabla que el resto puede tocar. Sumar/quitar superadmins es a propósito solo por SQL |
@@ -2125,6 +2215,12 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
 ### `get_catalog(p_token text) → jsonb`
 - Acceso: `anon` y `authenticated`
 - Resuelve el cliente por token. Token inválido → `null` (sin mensaje).
+- Desde 2026-08-20 (`migration-2026-08-20-top-sellers.sql`) cada producto
+  trae además `is_top`: ¿está en el top 12 por unidades pedidas de los
+  últimos 60 días? Se resuelve UNA vez por llamada vía `top_seller_ids(60,
+  12)` (la ventana y el tamaño viven ahí) contra las cubetas de
+  `product_sales_daily`; las dos ramas lo llevan — la lista `quote` también
+  ve el chip ⭐.
 - Todas las listas regionales/Special se tratan igual: un producto solo
   aparece si tiene precio cargado en `product_prices` para esa lista.
   **Excepción: `quote`** (2026-07-08) — ver abajo.
@@ -2682,6 +2778,7 @@ por qué no entró sin ir a los logs de la función.
 - **`authenticated` + `is_admin() = true`**: acceso total (policy `admin_all` en todas las tablas) **menos `admins` y `price_list_owners`** desde 2026-08-05, donde solo lee.
 - **Rol superadmin** (2026-08-05, `migration-2026-08-05-superadmin.sql`): tabla `superadmins` con RLS activo y **sin ninguna policy** — invisible e inescribible desde la app para todos, incluido él mismo; solo la ven las funciones SECURITY DEFINER y el SQL Editor. `is_admin()` pasa a ser "en `admins` **o** superadmin". `admins` y `price_list_owners` salieron del loop de `admin_all` y quedaron con `superadmin_all` (for all) + `admin_read_only` (select). El motivo concreto: `admin_all` sobre `admins` significaba que **cualquier admin podía nombrar admins con un request directo** (nunca hubo UI, pero el permiso estaba); poner UI encima de eso habría convertido el agujero en un botón, y una marca de superadmin guardada ahí habría sido auto-otorgable. Las 12 RPC `sa_*` validan `is_superadmin()` adentro, así que la pestaña oculta es solo comodidad.
 - No hay políticas para `anon` sobre las tablas → denegado implícitamente.
+- **FORMA de las policies desde 2026-08-20 (`migration-2026-08-20-rls-initplan.sql`): toda llamada a función va envuelta — `(select is_admin())`, nunca `is_admin()` pelada.** Las funciones de rol son SECURITY DEFINER (Postgres no las inlinea ni cachea) y en la forma pelada se evalúan UNA VEZ POR FILA: con los datos reales de producción eso era 770 ms para contar 647 pedidos, creciendo lineal hasta el timeout. Envueltas son un InitPlan (una evaluación por query): mismas policies, misma semántica (verificada persona por persona), ×257–×343 más rápido. `can_vendedora_use_price_list(col)` no puede ser InitPlan (recibe la columna): las policies de `price_lists`/`product_prices`/`price_list_owners` usan `col in (select vendedora_usable_price_list_ids())` — función DEFINER nueva con la misma regla, ejecutada una vez y hasheada. **Al escribir una policy nueva, usar siempre la forma envuelta**; y ojo: `schema.sql` conserva la forma vieja — si se re-corre entero, re-correr esta migración después.
 - **Rol vendedora** (2026-07-06): `authenticated` + `is_vendedora() = true` (vía `vendedores.user_id = auth.uid()`) obtiene, mediante policies aditivas a `admin_all` (Postgres las combina con OR para el mismo comando):
   - `select` en `vendedores` limitado a su propia fila (`user_id = auth.uid()`).
   - `select` en `clients` y `orders` limitado a `vendedora_id = current_vendedora_id()` (en `orders`, vía `client_id in (select id from clients where ...)`).
@@ -2694,6 +2791,7 @@ por qué no entró sin ir a los logs de la función.
 - **Trigger `orders_guard_items_edit`** (2026-07-17, ampliado el mismo día; 2026-08-04 suma `stock_applied`): antes de cualquier `update` en `orders`, si cambian `items`, `total`, `status`, `kind` o `stock_applied` y no está prendida la bandera de sesión `app.allow_order_edit` (transacción-local, la prenden `update_order_items`/`update_order_status`/`convert_quote_to_order`, cada una antes de escribir), tira excepción. La policy `vendedora_update_own_orders` le da a una vendedora `update` crudo sobre sus propios pedidos (pensada solo para cambiar `status` desde `OrdersAdmin.jsx`); sin este trigger, esa misma policy le hubiera permitido reescribir cualquiera de esas columnas a mano, sin pasar por ninguna RPC ni quedar auditado — incluida `stock_applied`, con lo que podría saltearse o duplicar el descuento de stock de un pedido. Ojo al probarlo: el trigger compara con `is distinct from`, así que un `update` que escribe el **mismo** valor que ya estaba no cuenta como cambio y pasa (no es un agujero: no cambia nada).
 - **Trigger `products_availability_from_stock`** (2026-08-04; ampliado 2026-08-12): antes de cualquier `insert`/`update` en `products`, si `stock` no es null y `availability` no es `'flash'`, pisa `availability` con `stock >= 1 ? 'available' : 'preorder'`. **Desde 2026-08-12 también decide la publicación**: `stock <= 0` pone `active = false` + `deactivated_by_stock = true` (solo si venía activo, para no pisar la bandera de lo que ya estaba apagado), y `stock >= 1` reactiva **únicamente** lo que tenga la bandera puesta. Por eso un producto en 0 no puede quedar publicado venga la escritura de donde venga, y "Activar" a mano sobre uno sin stock no lo publica: lo deja marcado para publicarse cuando haya. Convierte en invariante de la tabla la regla que antes vivía repetida en cada camino de escritura (`sync_upsert_products` en SQL, `resolveAvailability()` en `ProductsAdmin.jsx`) y que `apply_price_list` rompía sin querer. No es seguridad sino consistencia de datos, pero el criterio es el mismo que `clients_enforce_owner_vendedora`: la garantía vive en la base, no en la UI.
 - **Trigger `products_enforce_noncatalog`** (2026-08-13, `migration-2026-08-13-exclude-box-skus.sql`): antes de cualquier `insert`/`update` en `products`, si `is_noncatalog_sku(sku)` (SKU terminado en `-SPECIAL` o `-BOX`) fuerza `active = false` y `deactivated_by_stock = false`. Es lo que hace que "nunca se muestran" sea cierto y no solo un backfill: `apply_price_list` escribe `active = true` para todo lo que trae precio, y los Excel de precios salen del mismo export de SellerCloud. **El orden importa**: los BEFORE ... FOR EACH ROW se disparan por orden alfabético de nombre y cada uno recibe el NEW del anterior, así que `products_availability_from_stock` corre primero (puede prender el producto cuando entra stock) y este tiene la última palabra. Si se renombra alguno de los dos, mantener ese orden. La bandera va en `false` a propósito: significa "vuelve cuando entre stock", y a un `-BOX` lo apaga su SKU. **`is_noncatalog_sku` no lleva `revoke execute from public`** (a diferencia de las funciones del sync) y sí un `grant execute` explícito a `authenticated, anon, service_role`: el privilegio EXECUTE de lo que se llama dentro de un trigger se chequea contra el usuario que hace el UPDATE — el rol `authenticated` del panel —, así que sin ese permiso cualquier edición de producto se cae con `permission denied for function`.
+- **Trigger `orders_track_product_sales`** (2026-08-20, `migration-2026-08-20-top-sellers.sql`): AFTER insert/update/delete en `orders`, mantiene las cubetas de `product_sales_daily` (⭐ Más vendidos) con la regla vieja-resta/nueva-suma sobre las filas que cuentan (`kind='order'` no cancelado). Es **SECURITY DEFINER a propósito**: el update directo de una vendedora (policy `vendedora_update_own_orders`) tiene que poder anotar la estadística sin que `authenticated` tenga privilegio alguno sobre la tabla de cubetas — y su helper `apply_product_sales` queda sin EXECUTE para los roles de la API (público, permitiría inflar el ranking con la anon key; dentro de una función DEFINER el EXECUTE se chequea contra el dueño, no contra quien dispara — a diferencia del caso `is_noncatalog_sku`, cuyo trigger NO es definer). Jamás lanza: un fallo del contador termina en warning, nunca en un pedido caído.
 - **Headers** (meta en `index.html` + `netlify.toml`): `Referrer-Policy:
   no-referrer` — crítico porque el token viaja en la URL (`?c=<token>`) y
   las imágenes de producto se cargan de dominios externos; sin esto el token
@@ -3182,3 +3280,7 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 
 62. **Sistema centralizado de logs de errores y eventos operativos** (2026-08-20, a pedido del usuario) — tabla `system_logs` + RPC `log_event`/`get_system_logs`/`purge_system_logs` (`migration-2026-08-20-system-logs.sql`) y pestaña **⚙️ Sistema** solo-superadmin. Los errores vivían dispersos (`order_failures`, `orders.sellercloud_error`, contadores efímeros de `apply_price_list`, `sync_runs`) y los del navegador del cliente no quedaban en ninguna parte; esto no reemplaza nada de aquello, es la **vista transversal** consultable. Cuatro decisiones que sostienen el diseño: (1) **`log_event` nunca lanza** — severity inválida o insert roto terminan en `raise warning` + null, y el `logEvent()` del frontend (`src/utils/systemLog.js`, fetch directo con anon key + `keepalive` para sobrevivir al salto a WhatsApp) es fire-and-forget con catch mudo: un log jamás rompe el flujo que lo llama, regla verificada renombrando la tabla en las pruebas. (2) **anon puede escribir** (el catálogo del cliente es donde no había rastro) pero con message ≤2,000 / context ≤8 KB, y **nadie lee por API**: RLS sin policies + revoke, la lectura es solo `get_system_logs` con `is_superadmin()`. (3) El resumen de `apply_price_list` va **dentro de su transacción** (`migration-2026-08-20-price-apply-log.sql`, misma firma y retorno) y el error de esa RPC se loguea **desde el frontend**, porque una excepción revierte la transacción entera incluido el log. (4) Los `js_error` globales llevan **throttle 5/min + dedupe de consecutivos** (un error en loop = 1 fila por carga de página) y la URL va **sin query string** — `?c=<token>` es la credencial del cliente. Eventos por source: `order_capture/order_create_failed` (error, reason rejected|network), `order_outbox/outbox_retry_failed` (warning) y `outbox_exhausted` (critical, una sola vez por pendiente), `sellercloud_push/push_ok|push_failed|push_html_response|push_annotate_failed` (info/error/error/critical, desde la Edge Function vía la RPC con el JWT del caller — sigue sin usar service_role), `price_upload/price_apply_summary|price_apply_failed`, `product_upload/product_upload_summary|_failed`, `frontend/js_error`; `sync` queda reservado para n8n. Verificado con asserts SQL en PostgreSQL 18 desechable y 37 aserciones Playwright (15 panel + 22 catálogo) contra el build real con la red interceptada.
 
+
+63. **Escalabilidad: RLS en forma InitPlan + bandeja de Pedidos con ventana e ítems bajo demanda** (2026-08-20, segunda tanda del día, a pedido del usuario: "arma e implementa esos 2 arreglos para asegurar la escalabilidad del sistema" — tras el análisis de rendimiento medido en producción). **(1)** `migration-2026-08-20-rls-initplan.sql`: las 25 policies llamaban las funciones de rol POR FILA (son SECURITY DEFINER: ni inline ni caché) — el badge de "pedidos nuevos" tardaba 770 ms con 647 pedidos y el costo crecía lineal con clients+orders+prices hacia el statement_timeout de 8 s. Recreadas con `(select f())` (InitPlan), y las 3 de listas con dueñas pasaron de `can_vendedora_use_price_list(col)` a `col in (select vendedora_usable_price_list_ids())` (función DEFINER nueva, misma regla, una ejecución hasheada por query; no se inlineó en la policy porque leería `price_list_owners` bajo su propio RLS circular). Índice parcial `orders_status_new_idx` de yapa. **Semántica idéntica demostrada**: snapshot de visibilidad de 6 personas × 13 tablas + 11 intentos de escritura sobre las policies vivas de producción, igual antes/después; con 12k clients + 8k orders: 771→3 ms (×257), 995→2.9 ms (×343), 502→1.7 ms (×295). **Regla nueva del proyecto: toda policy usa la forma envuelta** — y si se re-corre `schema.sql` (forma vieja), re-correr esta migración. **(2)** `migration-2026-08-20-orders-units.sql` + frontend: la bandeja bajaba TODO el historial con el jsonb `items` adentro (~3 MB hoy, ~55 MB/año al ritmo real de ~250 pedidos/semana). Ahora: ventana de 90 días por defecto (selector 30/90/180/Todo, filtro de servidor vía el 4º parámetro nuevo de `fetchAll`), select sin `items` (la fila muestra la columna **generada** `orders.units`, no escribible, con función que jamás lanza — un error ahí rompería todo insert de pedidos) e ítems por pedido recién al desplegar/exportar/editar (`ensureItems`, con loading/error en la fila). Degrada en los dos sentidos: sin la migración la bandeja detecta 42703 y reintenta con el select viejo; el frontend viejo ignora la columna extra. Se quitó el retorno anticipado de "aún no hay pedidos" (escondía el selector de ventana y aparecía durante la carga). Verificado con el snapshot RLS + asserts de units en PostgreSQL 18 y 16 aserciones Playwright de la bandeja (más las 37 de la primera tanda re-corridas en verde).
+
+64. **⭐ Más vendidos + orden por precio en el catálogo del cliente** (2026-08-20, tercera tanda del día, a pedido del usuario) — `migration-2026-08-20-top-sellers.sql` + Catalog/FilterBar/ProductCard. El "más vendido" lo decide la base desde los pedidos REALES (`kind='order'` no cancelados; una cotización cuenta al convertirse, un cancelado deja de contar), por unidades pedidas en una **ventana móvil de 60 días**, top 12. La mecánica que no es obvia: ni agregado por apertura de catálogo (costo lineal recién eliminado del panel) ni job programado (no hay pg_cron) — cubetas por producto y día (`product_sales_daily`) mantenidas por un trigger AFTER en orders con UNA regla que cubre todos los caminos: si la fila vieja contaba se resta, si la nueva cuenta se suma (cubetas por `created_at`, no `now()`: editar un pedido viejo ajusta su día; las anotaciones de SellerCloud/stock salen gratis por early-exit). Regla de oro heredada de system_logs: la estadística JAMÁS tumba un pedido (trigger con catch + warning; basura suma 0), y si desconfía se reconstruye re-corriendo la migración (backfill = truncate + recálculo). `top_seller_ids(days, limit)` y `apply_product_sales` son SECURITY DEFINER **sin EXECUTE para la API** (públicas permitirían inflar el ranking con la anon key); el trigger es DEFINER para que el update directo de una vendedora (policy `vendedora_update_own_orders`) pueda anotar sin privilegios sobre la tabla. `get_catalog` (copia de la versión UPC) marca `is_top` en las DOS ramas — la lista `quote` también lo ve: es información comercial, no un precio. En el frontend: chip "⭐ Más vendidos" (patrón de ✨ Nuevo: solo aparece si algo viene marcado, se resetea con "Todos los estados"), badge apilable con Nuevo en hex fijos (imagen de fondo siempre oscura), y **selector de orden por precio** (Orden del catálogo / mayor a menor / menor a mayor) client-side sobre lo filtrado con desempate por nombre, **oculto para la lista quote** (sin precios no hay qué ordenar). Degradación en ambos sentidos, mismo patrón que el UPC. Verificado: asserts SQL (backfill histórico, trigger camino por camino, conversión de cotización, authenticated sin permission denied, ranking/ventana/límite, ambas ramas, API cerrada, idempotencia con recheck) y 15 aserciones Playwright + la suite del carrito en verde.

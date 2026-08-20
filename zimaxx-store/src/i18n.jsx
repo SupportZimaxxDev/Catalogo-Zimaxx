@@ -493,6 +493,19 @@ const dict = {
     systemNoLogs: 'No hay eventos registrados con estos filtros.',
     systemMigrationMissing:
       'Falta correr migration-2026-08-20-system-logs.sql en la base de datos: la RPC get_system_logs todavía no existe.',
+
+    // Ventana de tiempo de la bandeja de Pedidos (2026-08-20): la bandeja ya
+    // no trae el histórico entero por defecto.
+    ordersRangeDays: 'Últimos {n} días',
+    ordersRangeAll: 'Todo el historial',
+    orderItemsFailed: 'No se pudieron cargar los ítems del pedido',
+
+    // ⭐ Más vendidos + orden por precio en el catálogo (2026-08-20).
+    topSellers: 'Más vendidos',
+    topSeller: 'Más vendido',
+    sortDefault: 'Orden del catálogo',
+    sortPriceDesc: 'Precio: mayor a menor',
+    sortPriceAsc: 'Precio: menor a mayor',
   },
   en: {
     search: 'Search by name, category or UPC...',
@@ -953,6 +966,16 @@ const dict = {
     systemNoLogs: 'No events recorded with these filters.',
     systemMigrationMissing:
       'migration-2026-08-20-system-logs.sql has not been run on the database yet: the get_system_logs RPC does not exist.',
+
+    ordersRangeDays: 'Last {n} days',
+    ordersRangeAll: 'All history',
+    orderItemsFailed: 'Could not load the order items',
+
+    topSellers: 'Best sellers',
+    topSeller: 'Best seller',
+    sortDefault: 'Catalog order',
+    sortPriceDesc: 'Price: high to low',
+    sortPriceAsc: 'Price: low to high',
   },
 }
 

@@ -35,6 +35,13 @@ export default function Catalog() {
   const [line, setLine] = useState('')
   const [availability, setAvailability] = useState('')
   const [onlyNew, setOnlyNew] = useState(false)
+  // ⭐ Más vendidos (2026-08-20): filtra a los productos que get_catalog marcó
+  // con is_top (top 12 por unidades pedidas en los últimos 60 días, calculado
+  // en la base desde los pedidos reales).
+  const [onlyTop, setOnlyTop] = useState(false)
+  // Orden por precio (2026-08-20): '' = orden del catálogo (categoría+nombre,
+  // como viene del servidor), 'price_desc' / 'price_asc'.
+  const [sortBy, setSortBy] = useState('')
   // Render progresivo: 3,000+ tarjetas de golpe traban el scroll en móvil.
   // Se cargan más automáticamente a medida que el cliente scrollea.
   const [visible, sentinelRef] = useInfiniteRows(48, [search, category, line, availability, onlyNew])
@@ -83,15 +90,23 @@ export default function Catalog() {
   const hasFlashType = useMemo(() => products.some((p) => p.availability === 'flash'), [products])
   // is_new lo calcula get_catalog en el servidor (now() < products.new_until).
   const hasNew = useMemo(() => products.some((p) => p.is_new), [products])
+  // is_top lo calcula get_catalog desde los pedidos reales (2026-08-20). Con
+  // una base sin la migración llega undefined y el chip no aparece — mismo
+  // patrón de degradación que is_new/upc.
+  const hasTop = useMemo(() => products.some((p) => p.is_top), [products])
+  // El selector de orden por precio solo tiene sentido si hay precios: un
+  // cliente de la lista 'quote' no ve ninguno.
+  const hasPrices = useMemo(() => products.some((p) => p.price != null), [products])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return products.filter(
+    const list = products.filter(
       (p) =>
         (!category || p.category === category) &&
         (!line || p.product_line === line) &&
         (!availability || p.availability === availability) &&
         (!onlyNew || p.is_new) &&
+        (!onlyTop || p.is_top) &&
         (!q ||
           p.name.toLowerCase().includes(q) ||
           (p.category ?? '').toLowerCase().includes(q) ||
@@ -100,7 +115,22 @@ export default function Catalog() {
           // buscarse — si no, el cliente lo lee en el catálogo y no lo puede usar.
           (p.upc ?? '').toLowerCase().includes(q)),
     )
-  }, [products, search, category, line, availability, onlyNew])
+    // El sort va sobre la copia que ya devolvió filter. Empates por nombre
+    // para que el orden sea estable entre renders; un precio null (no debería
+    // haber, salvo lista quote donde el selector ni se muestra) va al final.
+    if (sortBy === 'price_asc' || sortBy === 'price_desc') {
+      const dir = sortBy === 'price_asc' ? 1 : -1
+      list.sort((a, b) => {
+        const pa = a.price == null ? null : Number(a.price)
+        const pb = b.price == null ? null : Number(b.price)
+        if (pa == null && pb == null) return a.name.localeCompare(b.name)
+        if (pa == null) return 1
+        if (pb == null) return -1
+        return pa === pb ? a.name.localeCompare(b.name) : (pa - pb) * dir
+      })
+    }
+    return list
+  }, [products, search, category, line, availability, onlyNew, onlyTop, sortBy])
 
   const validClient = !!client
   const showFilters = validClient && !loading
@@ -133,6 +163,12 @@ export default function Catalog() {
             hasNew={hasNew}
             onlyNew={onlyNew}
             onOnlyNewChange={setOnlyNew}
+            hasTop={hasTop}
+            onlyTop={onlyTop}
+            onOnlyTopChange={setOnlyTop}
+            hasPrices={hasPrices}
+            sortBy={sortBy}
+            onSortChange={setSortBy}
           />
         )}
       </div>

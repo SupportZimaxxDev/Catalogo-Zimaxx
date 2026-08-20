@@ -195,6 +195,50 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
   — el stock y los precios pueden moverse entre que el cliente arma el pedido
   y la asesora lo cierra, así que hay que confirmarlos con ella.
 
+### ⭐ Más vendidos y orden por precio (2026-08-20)
+
+Dos agregados al catálogo del cliente, a pedido del usuario:
+
+- **⭐ Más vendidos**: chip de filtro (junto a ✨ Nuevo) y badge en la tarjeta
+  para los productos que más se venden **de verdad** — el top 12 por unidades
+  pedidas en los últimos 60 días, calculado en la base desde los pedidos
+  reales (`kind = 'order'` no cancelados: una cotización cuenta recién cuando
+  se convierte, un cancelado deja de contar). Cómo se mantiene sin costo por
+  apertura de catálogo (`migration-2026-08-20-top-sellers.sql`):
+  - **`product_sales_daily`**: cubetas de unidades por producto y día,
+    mantenidas por el trigger `orders_track_product_sales` con una sola regla
+    que cubre todos los caminos — si la versión vieja de la fila contaba se
+    resta, si la nueva cuenta se suma (alta, carga manual, conversión de
+    cotización, cancelar/reabrir, edición de ítems, delete). Las cubetas van
+    por el día del pedido (`created_at`), así editar un pedido viejo ajusta su
+    día original; las anotaciones (SellerCloud, stock) salen gratis.
+  - **La regla de oro de siempre**: la estadística jamás rompe un pedido — el
+    trigger atrapa sus errores (warning) e ítems basura suman 0. Si el
+    contador alguna vez desconfía, re-correr la migración lo reconstruye
+    entero (el backfill trunca y recalcula desde `orders`).
+  - `get_catalog` marca `is_top` en las dos ramas (la lista `quote` también lo
+    ve: es información comercial, no un precio) resolviendo el top **una vez
+    por llamada** vía `top_seller_ids(60, 12)` — la ventana y el tamaño viven
+    ahí, en un solo lugar. Ni la tabla ni las funciones nuevas son
+    alcanzables por la API (si `apply_product_sales` fuera pública, cualquiera
+    con la anon key podría inflar el ranking).
+  - Degradación: frontend nuevo + base sin migración → `is_top` llega
+    `undefined` y el chip/badge no aparecen (mismo patrón que el UPC).
+- **Orden por precio**: selector "Orden del catálogo / Precio: mayor a menor /
+  menor a mayor" a la derecha de los chips. Es orden client-side sobre lo ya
+  filtrado (combinable con búsqueda y chips), con empates por nombre para que
+  no "baile" entre renders. **Se oculta para la lista `quote`** — sin precios
+  no hay nada que ordenar.
+
+Verificado con asserts SQL en PostgreSQL 18 desechable (backfill desde
+pedidos históricos, el trigger camino por camino —incluida la conversión de
+cotización y el update de una vendedora como `authenticated`—, basura que no
+tumba nada, ranking/ventana/límite, `is_top` en ambas ramas, funciones no
+alcanzables por la API, y la migración re-corrida reconstruyendo cubetas
+exactas) y 15 aserciones Playwright contra el build real (chip que filtra,
+badges conviviendo, orden asc/desc, quote sin selector, backend viejo sin
+chip ni badges con el orden funcionando igual).
+
 ### Flujo del pedido
 
 1. Cliente abre su link → catálogo con sus precios → arma carrito.
@@ -971,6 +1015,75 @@ contra el build real con la red interceptada (checkout fallido en las dos
 variantes, outbox con reintento/agotamiento/vencimiento, throttle y dedupe de
 js_error, pestaña Sistema completa, guard de rol y degradación sin migración).
 
+### Escalabilidad: policies en forma InitPlan y bandeja con ventana (2026-08-20)
+
+El análisis de rendimiento de hoy (medido en producción, no estimado) encontró
+los dos limitantes que iban a doler primero al seguir creciendo. Los dos
+quedaron arreglados el mismo día:
+
+**1. Las policies RLS llamaban funciones POR FILA**
+(`migration-2026-08-20-rls-initplan.sql`). La query más cara de todo el
+sistema era el badge de "pedidos nuevos": contar 647 pedidos tardaba **770 ms**
+(y corre en cada cambio de pestaña). El EXPLAIN mostró que las policies
+evaluaban `is_admin()` / `current_vendedora_id()` —funciones SECURITY DEFINER,
+imposibles de inlinear— una vez por cada fila: 230 de los 245 ms del plan se
+iban en recorrer las 2,000 filas de `clients` llamando funciones. Eso crecía
+lineal con clientes+pedidos+precios y chocaba con el `statement_timeout` de
+8 s alrededor de las ~10k filas. El arreglo es el patrón estándar de Supabase:
+
+- Las **25 policies** se recrearon envolviendo cada llamada sin argumentos en
+  un sub-select — `(select is_admin())` — que el planner convierte en un
+  **InitPlan**: se evalúa una vez por query y se compara como constante.
+- `can_vendedora_use_price_list(price_list_id)` recibe la columna y no puede
+  ser InitPlan: las 3 policies que la usaban ahora comparan contra
+  **`vendedora_usable_price_list_ids()`** (función nueva, SECURITY DEFINER,
+  misma semántica: listas sin dueñas + listas donde la vendedora es dueña),
+  que se ejecuta una vez y se hashea. No se inlineó la lógica en la policy a
+  propósito: leería `price_list_owners` bajo su propio RLS (circular) en vez
+  de saltarlo como hace la función DEFINER.
+- De paso, índice parcial `orders_status_new_idx` para el badge.
+- **La semántica no cambió en nada**: verificado con un snapshot de
+  visibilidad de 6 personas (superadmin, admin, 3 vendedoras con lista
+  personal/compartida/ninguna, y un logueado sin rol) × 13 tablas + 11
+  intentos de escritura, idéntico antes y después. Medido con 12k clientes +
+  8k pedidos (≈6 meses de crecimiento): badge **771 ms → 3 ms (×257)**, orders
+  de una vendedora **995 ms → 2.9 ms (×343)**, clients de un admin **502 ms →
+  1.7 ms (×295)**.
+- **OJO al escribir policies nuevas**: siempre `(select f())`, nunca `f()`
+  pelada — una policy nueva en la forma vieja reintroduce el problema. Y
+  `schema.sql` todavía tiene las policies en la forma vieja: si algún día se
+  re-corre entero, re-correr esta migración después.
+
+**2. La bandeja de Pedidos bajaba TODO el historial con los ítems adentro.**
+Con ~250 pedidos/semana eso eran ~3 MB hoy, ~14 MB a los 3 meses, ~55 MB al
+año. Tres cambios (frontend + `migration-2026-08-20-orders-units.sql`):
+
+- **Ventana por defecto de 90 días**, con selector 30/90/180/Todo el
+  historial. Es un filtro del servidor (recarga), no un recorte visual; el
+  encabezado dice qué ventana se está viendo. `fetchAll` ganó un cuarto
+  parámetro opcional (`applyFilter`) para encadenar condiciones al conteo y a
+  cada página.
+- **El listado ya no baja `items`**: la fila solo mostraba el total de
+  unidades, que ahora es la columna **generada** `orders.units` (la deriva
+  Postgres de `items` en cada escritura; blindada — no acepta escrituras, no
+  puede desincronizarse, y su función `order_items_units` no lanza nunca: un
+  error ahí rompería cualquier insert de pedidos). Los ítems completos se
+  piden **por pedido** al desplegar la fila o al actuar (PDF/Excel/editar) —
+  `ensureItems`, con estado de carga y de error en la fila.
+- **Degrada solo en los dos sentidos**: si la migración de `units` no corrió,
+  el select nuevo da 42703 y la bandeja reintenta con el select viejo (items
+  incluidos) — más pesada pero funcionando; el frontend viejo con la base
+  migrada ni se entera (una columna de más). Ninguna de las dos migraciones
+  bloquea el deploy.
+
+Verificado: la migración RLS con el snapshot de equivalencia de arriba
+(re-aplicada, plan con InitPlan y cero llamadas por fila residuales) y la de
+units con sus propios asserts (backfill, items basura/null/no-array que suman
+0 en vez de reventar, columna no escribible, EXECUTE como authenticated); la
+bandeja con 16 aserciones Playwright contra el build real (ventana de 90 días
+en la URL, select sin items y con units, ítems bajo demanda al desplegar y al
+exportar, selector que re-consulta, y el fallback 42703 completo).
+
 ---
 
 ## 3. Formatos de Excel aceptados
@@ -1707,22 +1820,32 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 
 ## 7. Roadmap / pendientes
 
-> **⚠️ MIGRACIONES NUEVAS DEL 2026-08-20 — DOS, en este orden:**
+> **⚠️ MIGRACIONES NUEVAS DEL 2026-08-20 — CUATRO, en este orden:**
 > 1. `migration-2026-08-20-system-logs.sql` (tabla `system_logs` + `log_event`
->    + `get_system_logs` + `purge_system_logs`)
+>    + `get_system_logs` + `purge_system_logs`) — **corrida en producción el
+>    mismo día** (verificado por sondeo: la tabla ya existe)
 > 2. `migration-2026-08-20-price-apply-log.sql` (`apply_price_list` deja su
->    resumen en el log; **requiere la anterior**, el preflight corta si falta)
+>    resumen en el log; **requiere la 1**, el preflight corta si falta) —
+>    **corrida en producción el mismo día**
+> 3. `migration-2026-08-20-rls-initplan.sql` (las 25 policies en forma
+>    InitPlan + `vendedora_usable_price_list_ids()` + índice del badge — el
+>    arreglo de los reads del panel de 770 ms; ver "Escalabilidad" en la
+>    sección 2)
+> 4. `migration-2026-08-20-orders-units.sql` (columna generada `orders.units`
+>    para que la bandeja no baje los ítems)
+> 5. `migration-2026-08-20-top-sellers.sql` (⭐ Más vendidos: cubetas
+>    `product_sales_daily` + trigger + backfill + `is_top` en `get_catalog`;
+>    ver "Más vendidos y orden por precio" en la sección 1)
 >
-> **Ninguna bloquea el deploy del frontend** en ningún sentido: se pueden
-> correr antes (no tocan nada existente — la 2 reemplaza `apply_price_list`
-> con la misma firma y el mismo retorno) o después (el frontend nuevo degrada:
-> los `logEvent()` fallan en silencio por diseño y la pestaña ⚙️ Sistema
-> muestra "falta correr la migración" en vez de romper). Sin correrlas, eso
-> sí, **no se loguea nada**. Después de correrlas, opcional: programar la
-> retención con pg_cron (la instrucción está al pie de la migración 1) y
-> redesplegar la Edge Function `sellercloud-push-order` (ganó los logs de
-> push; sin redeploy sigue funcionando como hasta hoy, solo que sin loguear).
-> Ver "Logs del sistema" en la sección 2.
+> Las cinco son **independientes del deploy del frontend** (se pueden correr
+> antes o después; el frontend degrada con gracia en todos los casos: los
+> `logEvent()` fallan en silencio por diseño, la pestaña ⚙️ Sistema avisa qué
+> falta, la bandeja reintenta con el select viejo si `units` no existe, y sin
+> `is_top` el chip ⭐ no aparece). La 3, la 4 y la 5 no dependen entre sí ni
+> de las de logs. Después de correrlas, opcional: programar la retención con
+> pg_cron (instrucción al pie de la migración 1) y redesplegar la Edge
+> Function `sellercloud-push-order` (ganó los logs de push; sin redeploy sigue
+> funcionando igual, solo que sin loguear).
 >
 > **⚠️ MIGRACIONES PENDIENTES AL 2026-08-14 — CUATRO.** Las tres del 2026-08-13
 > (`exclude-box-skus`, `recover-as-quote`, `dismiss-order-failures`: el detalle

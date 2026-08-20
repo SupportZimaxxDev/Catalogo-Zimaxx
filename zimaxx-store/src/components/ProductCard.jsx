@@ -47,10 +47,23 @@ function ProductCard({ product }) {
           🔥 {t('flashSale')}
         </span>
       )}
-      {/* A la derecha para no chocar con el badge de Pre-Order/Flash Sale. */}
-      {product.is_new && (
-        <span className="absolute right-2 top-2 z-10 rounded-full bg-green-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white ring-1 ring-white/20">
-          ✨ {t('newTag')}
+      {/* A la derecha para no chocar con el badge de Pre-Order/Flash Sale.
+          En columna: un producto puede ser ✨ Nuevo y ⭐ Más vendido a la vez.
+          El de Más vendido usa hex fijos de la paleta por el mismo motivo que
+          el de Pre-Order: la imagen de fondo es oscura siempre y las clases
+          del tema se invierten en dark mode. */}
+      {(product.is_new || product.is_top) && (
+        <span className="absolute right-2 top-2 z-10 flex flex-col items-end gap-1">
+          {product.is_new && (
+            <span className="rounded-full bg-green-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white ring-1 ring-white/20">
+              ✨ {t('newTag')}
+            </span>
+          )}
+          {product.is_top && (
+            <span className="rounded-full bg-[#16130d] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#e8c552] shadow-md shadow-black/30 ring-1 ring-[#c9a227]">
+              ⭐ {t('topSeller')}
+            </span>
+          )}
         </span>
       )}
       <ProductImage src={product.image_url} alt={product.name} />
