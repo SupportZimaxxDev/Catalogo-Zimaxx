@@ -155,7 +155,8 @@ export default function AdminLayout() {
   if (
     !isSuper &&
     (location.pathname.startsWith('/admin/superadmin') ||
-      location.pathname.startsWith('/admin/metrics'))
+      location.pathname.startsWith('/admin/metrics') ||
+      location.pathname.startsWith('/admin/system'))
   ) {
     return <Navigate to="/admin" replace />
   }
@@ -169,6 +170,7 @@ export default function AdminLayout() {
     { to: '/admin/orders', label: t('orders'), badge: newOrders },
     ...(isSuper ? [{ to: '/admin/superadmin', label: `🔐 ${t('superadmin')}` }] : []),
     ...(isSuper ? [{ to: '/admin/metrics', label: `📈 ${t('metrics')}` }] : []),
+    ...(isSuper ? [{ to: '/admin/system', label: `⚙️ ${t('system')}` }] : []),
   ]
 
   return (

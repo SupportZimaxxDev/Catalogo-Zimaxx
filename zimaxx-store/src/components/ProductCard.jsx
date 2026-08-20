@@ -12,7 +12,11 @@ const BULK_STEPS = [10, 15, 20]
 // listas de cientos de tarjetas — sin esto, cada tecla del buscador o cada
 // lote nuevo del scroll infinito re-renderizaba TODAS las tarjetas ya
 // visibles, no solo las nuevas.
-function ProductCard({ product }) {
+//
+// isFav/onToggleFav (2026-08-20): el corazón de favoritos. onToggleFav viene
+// memoizado desde Catalog (useCallback), así el memo sigue funcionando y al
+// marcar un favorito solo re-renderiza la tarjeta tocada.
+function ProductCard({ product, isFav, onToggleFav }) {
   const { t } = useI18n()
   const cart = useCart()
   const price = product.price == null ? null : Number(product.price)
@@ -47,13 +51,42 @@ function ProductCard({ product }) {
           🔥 {t('flashSale')}
         </span>
       )}
-      {/* A la derecha para no chocar con el badge de Pre-Order/Flash Sale. */}
-      {product.is_new && (
-        <span className="absolute right-2 top-2 z-10 rounded-full bg-green-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white ring-1 ring-white/20">
-          ✨ {t('newTag')}
+      {/* A la derecha para no chocar con el badge de Pre-Order/Flash Sale.
+          En columna: un producto puede ser ✨ Nuevo y ⭐ Más vendido a la vez.
+          El de Más vendido usa hex fijos de la paleta por el mismo motivo que
+          el de Pre-Order: la imagen de fondo es oscura siempre y las clases
+          del tema se invierten en dark mode. */}
+      {(product.is_new || product.is_top) && (
+        <span className="absolute right-2 top-2 z-10 flex flex-col items-end gap-1">
+          {product.is_new && (
+            <span className="rounded-full bg-green-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white ring-1 ring-white/20">
+              ✨ {t('newTag')}
+            </span>
+          )}
+          {product.is_top && (
+            <span className="rounded-full bg-[#16130d] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#e8c552] shadow-md shadow-black/30 ring-1 ring-[#c9a227]">
+              ⭐ {t('topSeller')}
+            </span>
+          )}
         </span>
       )}
-      <ProductImage src={product.image_url} alt={product.name} />
+      <div className="relative">
+        <ProductImage src={product.image_url} alt={product.name} />
+        {/* Corazón de favoritos (2026-08-20), abajo a la derecha de la imagen
+            para no chocar con los badges de arriba. Fondo oscuro traslúcido
+            fijo: la imagen es oscura siempre, el corazón blanco/rojo se lee
+            en los dos temas. */}
+        {onToggleFav && (
+          <button
+            onClick={() => onToggleFav(product.id)}
+            aria-label={isFav ? t('favRemove') : t('favAdd')}
+            aria-pressed={!!isFav}
+            className="absolute bottom-2 right-2 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-base shadow-md shadow-black/30 backdrop-blur-sm transition-transform hover:scale-110 active:scale-95"
+          >
+            {isFav ? '❤️' : '🤍'}
+          </button>
+        )}
+      </div>
       <div className="flex flex-1 flex-col gap-1.5 p-3.5">
         {product.category && (
           <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-secondary-dark">

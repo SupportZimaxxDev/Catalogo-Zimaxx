@@ -4,6 +4,7 @@ import { supabase, fetchAll, updateByIds } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { parseSheet, pick, detectImageColumn, looksLikeImageUrl, downloadMissingPhotosExcel } from '../../utils/excel'
 import { generateSku } from '../../utils/token'
+import { logEvent } from '../../utils/systemLog'
 import {
   UploadZone,
   ProductFilters,
@@ -386,9 +387,27 @@ export default function ProductsAdmin() {
           excluded ? ` · ${excluded} ${t('nonCatalogExcluded')}` : ''
         }`,
       })
+      // Resumen por corrida en system_logs (2026-08-20), mismo patrón que
+      // price_apply_summary. Acá lo emite el frontend porque la carga son
+      // upserts directos a products, no una RPC donde dejarlo del lado SQL.
+      logEvent(
+        'info',
+        'product_upload',
+        'product_upload_summary',
+        `Excel de productos: ${created} creados, ${updated} actualizados`,
+        {
+          rows_in_file: rows.length,
+          created,
+          updated,
+          skipped: skipped.length,
+          junk,
+          non_catalog_excluded: excluded,
+        },
+      )
       await load()
     } catch (err) {
       setUploadResult({ ok: false, message: err.message })
+      logEvent('error', 'product_upload', 'product_upload_failed', err.message)
     }
     setUploadBusy(false)
   }

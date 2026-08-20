@@ -52,6 +52,36 @@ function json(body: unknown, status = 200) {
   })
 }
 
+// Deja el resultado del push en system_logs (2026-08-20, RPC log_event de
+// migration-2026-08-20-system-logs.sql), además del sellercloud_error que ya
+// queda en el pedido: el error del pedido se pisa con cada intento, el log
+// acumula la historia y se ve desde la pestaña ⚙️ Sistema.
+//
+// Va por la RPC con el JWT de quien apretó — NO con la service_role key — a
+// propósito: esta función no usa service_role para nada (ver la cabecera) y
+// un log no es motivo para empezar. log_event está granteada a authenticated
+// y ella misma nunca lanza; el catch de acá cubre el resto (red caída hacia
+// PostgREST): un fallo del log JAMÁS hace fallar el push.
+async function logPush(
+  caller: ReturnType<typeof createClient>,
+  severity: 'info' | 'warning' | 'error' | 'critical',
+  event: string,
+  message: string | null,
+  context: Record<string, unknown>,
+) {
+  try {
+    await caller.rpc('log_event', {
+      p_severity: severity,
+      p_source: 'sellercloud_push',
+      p_event: event,
+      p_message: message ? message.slice(0, 2000) : null,
+      p_context: context,
+    })
+  } catch {
+    /* el log se pierde en silencio; el push sigue su curso */
+  }
+}
+
 function config(): Config {
   const raw = Deno.env.get('SELLERCLOUD_BASE_URL') ?? ''
   const baseUrl = normalizeBaseUrl(raw)
@@ -236,6 +266,16 @@ Deno.serve(async (req) => {
 
   const extras: OrderExtras = { salesRepId: repId, marketingSourceId }
 
+  // Lo que identifica al push en cualquier log, con o sin éxito. Nunca los
+  // ítems: el pedido completo ya vive en orders.
+  const logContext = {
+    order_id: orderId,
+    client: client?.name ?? null,
+    sellercloud_customer_id: Number(sellercloudId),
+    total: order.total,
+    line_count: items.length,
+  }
+
   let result: { orderId: number; warnings: string[] }
   try {
     result = await pushOrder(config(), Number(sellercloudId), items, extras)
@@ -248,6 +288,13 @@ Deno.serve(async (req) => {
       p_sellercloud_order_id: null,
       p_error: message,
     })
+    // El mensaje ya trae el contexto endurecido de sellercloud.ts (paso,
+    // status, Content-Type, URL y primeros bytes del cuerpo). Una respuesta
+    // HTML tiene evento propio: es la firma del SELLERCLOUD_BASE_URL
+    // apuntando al portal en vez de a la API (pasó el 2026-08-18) y así se
+    // filtra de un vistazo.
+    const isHtml = /página web, no la API/i.test(message)
+    await logPush(caller, 'error', isHtml ? 'push_html_response' : 'push_failed', message, logContext)
     return json({ error: message }, 502)
   }
 
@@ -267,6 +314,15 @@ Deno.serve(async (req) => {
     p_error: warning,
   })
   if (markError) {
+    // critical y no error: la orden EXISTE allá y acá no quedó anotada — es
+    // exactamente el estado que produce duplicados si alguien reintenta.
+    await logPush(
+      caller,
+      'critical',
+      'push_annotate_failed',
+      `La orden se creó en SellerCloud (#${result.orderId}) pero no se pudo anotar acá: ${markError.message}`,
+      { ...logContext, sellercloud_order_id: result.orderId },
+    )
     return json(
       {
         error: `La orden se creó en SellerCloud (#${result.orderId}) pero no se pudo anotar acá: ${markError.message}. NO la vuelvas a mandar.`,
@@ -275,6 +331,14 @@ Deno.serve(async (req) => {
       500,
     )
   }
+
+  await logPush(
+    caller,
+    'info',
+    'push_ok',
+    `Orden #${result.orderId} creada en SellerCloud`,
+    { ...logContext, sellercloud_order_id: result.orderId, warning },
+  )
 
   return json({
     ok: true,

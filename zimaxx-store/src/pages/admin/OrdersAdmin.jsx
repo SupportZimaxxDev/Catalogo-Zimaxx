@@ -19,7 +19,29 @@ const STATUS_STYLES = {
 
 // El join a vendedora solo lo necesita el filtro que ve el admin; a una
 // vendedora RLS ya le recorta la consulta a sus propios pedidos.
-const ORDER_SELECT = '*, clients(name, phone, vendedora_id, vendedores(name))'
+//
+// SIN `items` desde 2026-08-20 (análisis de rendimiento): el jsonb de ítems
+// pesa 4.2 KB promedio por pedido (hasta 69 KB) y la fila de la tabla solo
+// mostraba su total de unidades — que ahora viene en la columna generada
+// `units` (migration-2026-08-20-orders-units.sql). Los ítems completos se
+// piden POR PEDIDO al desplegar la fila o al actuar sobre él (ensureItems).
+// Con ~250 pedidos/semana, bajar todo con items eran ~14 MB a los 3 meses.
+const ORDER_SELECT =
+  'id, client_id, created_at, kind, status, total, stock_applied, request_id, ' +
+  'sellercloud_order_id, sellercloud_pushed_at, sellercloud_error, units, ' +
+  'clients(name, phone, vendedora_id, vendedores(name))'
+
+// Si la migración de `units` todavía no corrió, el select de arriba da 42703
+// (columna inexistente): se degrada al select viejo con items incluidos — más
+// pesado, pero la bandeja funciona igual. Así ni la migración bloquea el
+// deploy ni el deploy espera a la migración.
+const ORDER_SELECT_LEGACY = '*, clients(name, phone, vendedora_id, vendedores(name))'
+
+// Ventana de tiempo por defecto de la bandeja (2026-08-20): los pedidos
+// crecen ~250 por semana y "traer todo" crece sin techo — la operación diaria
+// vive en lo reciente. 0 = todo el historial (para buscar algo viejo).
+const RANGES = [30, 90, 180, 0]
+const DEFAULT_RANGE_DAYS = 90
 
 // Link directo a la orden en el PORTAL de SellerCloud (2026-08-19, a pedido
 // del usuario). El host del portal es fc2.delta — la API usa fc2.api, son
@@ -46,6 +68,12 @@ export default function OrdersAdmin() {
   // cuando en realidad todavía están viniendo).
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
+  // Ventana de tiempo (2026-08-20): cuántos días hacia atrás trae la bandeja.
+  const [rangeDays, setRangeDays] = useState(DEFAULT_RANGE_DAYS)
+  // Ítems bajo demanda (2026-08-20): id del pedido cuyos ítems están viniendo,
+  // y el último fallo al traerlos (se muestra en la fila desplegada).
+  const [detailLoading, setDetailLoading] = useState(null)
+  const [detailError, setDetailError] = useState(null) // { id, message }
 
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
@@ -108,22 +136,55 @@ export default function OrdersAdmin() {
     }
   }
 
-  // Todos los pedidos, sin tope (2026-08-07). Antes traía los últimos 200 y
-  // el conteo del encabezado mentía apenas se pasaba de ahí: decía "200"
-  // hubiera 200 o 900, y los pedidos viejos no se podían ni ver ni marcar
-  // atendidos. `fetchAll` pagina de a 1,000 (el corte de PostgREST) pidiendo
-  // las páginas en paralelo. Se ordena descendente acá porque `fetchAll`
-  // pagina ascendente para que el `range` sea estable.
-  const loadOrders = async () => {
+  // Los pedidos de la ventana elegida (2026-08-20; hasta hoy era "todos, sin
+  // tope" — 2026-08-07 — que con ~250 pedidos nuevos por semana crecía sin
+  // techo: eran ~3 MB con los items adentro y serían ~55 MB al año). La
+  // ventana por defecto son 90 días y "Todo el historial" sigue disponible en
+  // el selector. `fetchAll` pagina de a 1,000 (el corte de PostgREST)
+  // pidiendo las páginas en paralelo. Se ordena descendente acá porque
+  // `fetchAll` pagina ascendente para que el `range` sea estable.
+  const loadOrders = async (days = rangeDays) => {
     // `['created_at', 'id']` y no solo la fecha: sin una clave única el
     // paginado en paralelo puede saltearse una fila en el borde de una página
     // (ver fetchAll) — o sea un pedido que está en la base y no aparece en la
     // bandeja, que es justo el síntoma que se reportó el 2026-08-12.
-    const all = await fetchAll('orders', ORDER_SELECT, ['created_at', 'id'])
+    const since = days > 0 ? new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString() : null
+    const windowFilter = since ? (q) => q.gte('created_at', since) : null
+    let all
+    try {
+      all = await fetchAll('orders', ORDER_SELECT, ['created_at', 'id'], windowFilter)
+    } catch (e) {
+      // 42703 = la columna `units` no existe: la migración
+      // migration-2026-08-20-orders-units.sql todavía no corrió. Se degrada
+      // al select viejo (items incluidos) en vez de dejar la bandeja caída.
+      if (e?.code !== '42703') throw e
+      all = await fetchAll('orders', ORDER_SELECT_LEGACY, ['created_at', 'id'], windowFilter)
+    }
     const list = all.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
     setOrders(list)
     loadLivePricing(list)
     return list
+  }
+
+  // Trae los ítems de UN pedido y los funde en el estado (2026-08-20): el
+  // listado ya no los baja. Idempotente — si ya están (los trajo esto mismo,
+  // el select legacy, o los dejó una edición/conversión), no pide nada.
+  const ensureItems = async (o) => {
+    if (o.items !== undefined) return o
+    setDetailLoading(o.id)
+    setDetailError(null)
+    try {
+      const { data, error } = await supabase.from('orders').select('items').eq('id', o.id).single()
+      if (error) throw error
+      const items = data?.items ?? []
+      setOrders((prev) => prev.map((x) => (x.id === o.id ? { ...x, items } : x)))
+      return { ...o, items }
+    } catch (e) {
+      setDetailError({ id: o.id, message: e.message ?? String(e) })
+      throw e
+    } finally {
+      setDetailLoading(null)
+    }
   }
 
   // Manda el pedido a SellerCloud como orden On Hold (2026-08-17). El trabajo
@@ -176,13 +237,18 @@ export default function OrdersAdmin() {
       .limit(50)
       .then(({ data }) => setFailures(data ?? []))
 
+  // Recarga al montar Y al cambiar la ventana. Los fallos (order_failures) no
+  // llevan ventana: son una alarma acotada a 50 filas, no un listado.
   useEffect(() => {
-    loadOrders()
+    setLoading(true)
+    setLoadError(false)
+    setExpanded(null)
+    loadOrders(rangeDays)
       .catch(() => setLoadError(true))
       .finally(() => setLoading(false))
     loadFailures()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [rangeDays])
 
   // Rescata el pedido perdido: lo crea SIEMPRE como cotización de ese
   // cliente (2026-08-13, con precios vigentes) y marca el fallo como
@@ -277,21 +343,45 @@ export default function OrdersAdmin() {
   const displayOf = (o) =>
     (o.kind === 'quote' && livePricing[o.id]) || { items: o.items ?? [], total: o.total }
 
-  const exportOrder = (o) => {
-    const stamp = new Date(o.created_at).toISOString().slice(0, 10)
-    downloadOrderExcel(displayOf(o).items ?? [], `${stamp}-${o.id.slice(0, 8)}`)
+  // Las acciones que necesitan los ítems los aseguran primero (2026-08-20):
+  // una cotización con livePricing ya los tiene recalculados; el resto los
+  // pide ensureItems si el listado no los trajo.
+  const withItems = (o) => (o.kind === 'quote' && livePricing[o.id] ? Promise.resolve(o) : ensureItems(o))
+
+  const exportOrder = async (o) => {
+    try {
+      const oo = await withItems(o)
+      const stamp = new Date(oo.created_at).toISOString().slice(0, 10)
+      downloadOrderExcel(displayOf(oo).items ?? [], `${stamp}-${oo.id.slice(0, 8)}`)
+    } catch {
+      /* el aviso quedó en detailError */
+    }
   }
 
-  const exportPdf = (o) => {
-    const d = displayOf(o)
-    downloadOrderPdf({ t, clientName: o.clients?.name ?? '', items: d.items ?? [], total: d.total })
+  const exportPdf = async (o) => {
+    try {
+      const oo = await withItems(o)
+      const d = displayOf(oo)
+      downloadOrderPdf({ t, clientName: oo.clients?.name ?? '', items: d.items ?? [], total: d.total })
+    } catch {
+      /* el aviso quedó en detailError */
+    }
   }
 
   const startEdit = async (o) => {
-    setEditing(o.id)
     setEditError('')
+    // Los ítems van ANTES de abrir el editor: abrirlo vacío y que se llene
+    // solo es exactamente el tipo de cuadro fantasma que ya se reportó una
+    // vez en el modal manual (2026-08-17).
+    let oo
+    try {
+      oo = await ensureItems(o)
+    } catch {
+      return
+    }
+    setEditing(oo.id)
     setEditItems(
-      (o.items ?? []).map((i) => ({ id: i.id, sku: i.sku, name: i.name, qty: i.qty, flash: !!i.flash })),
+      (oo.items ?? []).map((i) => ({ id: i.id, sku: i.sku, name: i.name, qty: i.qty, flash: !!i.flash })),
     )
     setProductQuery('')
     if (products === null) {
@@ -486,16 +576,11 @@ export default function OrdersAdmin() {
     </>
   )
 
-  if (orders.length === 0) {
-    return (
-      <div className="space-y-4">
-        <h2 className="text-xl font-bold">{t('orders')}</h2>
-        {failuresNotice}
-        {manualBlock}
-        <p className="text-primary/60">{t('noOrders')}</p>
-      </div>
-    )
-  }
+  // Ya no hay retorno anticipado con la bandeja vacía (2026-08-20): con la
+  // ventana de tiempo, "0 pedidos" puede significar "0 en los últimos 90
+  // días" y el selector para ampliarla tiene que quedar visible. De paso se
+  // arregla que durante la carga inicial se mostraba "aún no hay pedidos"
+  // sin esperar la respuesta.
 
   // Aviso del efecto en stock dentro del modal de confirmación (2026-08-04):
   // solo aplica a pedidos reales — una cotización nunca mueve inventario.
@@ -511,9 +596,11 @@ export default function OrdersAdmin() {
 
   return (
     <div className="space-y-4">
-      {/* El número es el total real, no "los últimos N": la bandeja carga
-          todos los pedidos (2026-08-07). Con filtros puestos muestra
-          "coinciden / total". */}
+      {/* El número es el total DE LA VENTANA elegida (90 días por defecto,
+          2026-08-20; entre 2026-08-07 y hoy era el histórico entero, que
+          crece ~250 pedidos/semana). Con filtros puestos muestra
+          "coinciden / total", y al lado dice qué ventana es para que el
+          número no se lea como el histórico. */}
       <h2 className="text-xl font-bold">
         {t('orders')}{' '}
         {loading ? (
@@ -522,6 +609,9 @@ export default function OrdersAdmin() {
           <>
             ({filtered.length}
             {filtered.length !== orders.length ? ` / ${orders.length}` : ''})
+            <span className="ml-2 text-sm font-normal text-primary/40">
+              · {rangeDays === 0 ? t('ordersRangeAll') : t('ordersRangeDays', { n: rangeDays })}
+            </span>
           </>
         )}
       </h2>
@@ -547,6 +637,19 @@ export default function OrdersAdmin() {
             className={`${inputCls} w-full pl-10`}
           />
         </div>
+        {/* La ventana es un filtro DEL SERVIDOR (recarga la bandeja), no un
+            recorte client-side como los demás selects. */}
+        <select
+          value={rangeDays}
+          onChange={(e) => setRangeDays(Number(e.target.value))}
+          className={inputCls}
+        >
+          {RANGES.map((n) => (
+            <option key={n} value={n}>
+              {n === 0 ? t('ordersRangeAll') : t('ordersRangeDays', { n })}
+            </option>
+          ))}
+        </select>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
@@ -604,7 +707,14 @@ export default function OrdersAdmin() {
               return (
               <Fragment key={o.id}>
               <tr
-                onClick={() => setExpanded(expanded === o.id ? null : o.id)}
+                onClick={() => {
+                  const next = expanded === o.id ? null : o.id
+                  setExpanded(next)
+                  // Los ítems del detalle llegan recién acá (2026-08-20): el
+                  // listado ya no los baja. Si falla, la fila desplegada
+                  // muestra el motivo (detailError).
+                  if (next) withItems(o).catch(() => {})
+                }}
                 className="cursor-pointer border-b border-primary/5 align-top hover:bg-primary/[0.02]"
               >
                 <td className="whitespace-nowrap p-3 text-primary/60">
@@ -629,7 +739,10 @@ export default function OrdersAdmin() {
                 </td>
                 <td className="p-3">
                   <span className="inline-flex items-center gap-1 text-primary/60">
-                    {(o.items ?? []).reduce((n, i) => n + (i.qty ?? 0), 0)} {t('items')}
+                    {/* units la calcula la base (columna generada); el
+                        reduce queda de respaldo para el select legacy (base
+                        sin migration-2026-08-20-orders-units.sql). */}
+                    {o.units ?? (o.items ?? []).reduce((n, i) => n + (i.qty ?? 0), 0)} {t('items')}
                     <svg
                       viewBox="0 0 24 24"
                       className={`h-3 w-3 shrink-0 transition-transform ${expanded === o.id ? 'rotate-180' : ''}`}
@@ -821,6 +934,16 @@ export default function OrdersAdmin() {
               {expanded === o.id && (
                 <tr className="border-b border-primary/10 bg-primary/[0.02]">
                   <td colSpan={7} className="p-4">
+                    {/* Mientras los ítems vienen (o si no vinieron), el
+                        detalle lo dice — una tabla vacía se leería como
+                        "pedido sin ítems", que es mentira. */}
+                    {detailLoading === o.id ? (
+                      <p className="py-2 text-center text-xs text-primary/50">{t('loading')}</p>
+                    ) : detailError?.id === o.id ? (
+                      <p className="py-2 text-center text-xs font-medium text-red-600 dark:text-red-400">
+                        {t('orderItemsFailed')} — {detailError.message}
+                      </p>
+                    ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs">
                         <thead>
@@ -848,6 +971,7 @@ export default function OrdersAdmin() {
                         </tbody>
                       </table>
                     </div>
+                    )}
                   </td>
                 </tr>
               )}

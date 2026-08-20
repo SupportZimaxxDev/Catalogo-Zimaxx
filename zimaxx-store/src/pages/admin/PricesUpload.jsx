@@ -4,6 +4,7 @@ import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import { parseSheet, normalizeHeader } from '../../utils/excel'
 import { money } from '../../utils/format'
+import { logEvent } from '../../utils/systemLog'
 import {
   ProductFilters,
   isNewProduct,
@@ -257,6 +258,15 @@ export default function PricesUpload() {
       await load()
     } catch (err) {
       setResult({ ok: false, message: err.message })
+      // El resumen de una carga que SÍ entró lo escribe la propia RPC dentro
+      // de su transacción (price_apply_summary). El fallo solo puede loguearse
+      // desde acá: una excepción en la RPC revierte la transacción entera,
+      // incluido cualquier log que hubiera dejado adentro (2026-08-20, ver
+      // migration-2026-08-20-price-apply-log.sql).
+      logEvent('error', 'price_upload', 'price_apply_failed', err.message, {
+        list_code: selectedListCode,
+        rows_in_file: preview.rows.length,
+      })
     }
     setCommitting(false)
   }

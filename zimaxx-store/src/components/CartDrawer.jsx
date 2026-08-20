@@ -5,6 +5,7 @@ import { money } from '../utils/format'
 import { buildOrderMessage, whatsappUrl } from '../utils/whatsapp'
 import { downloadOrderPdf } from '../utils/pdf'
 import { clearPending, flushPending, loadPending, postWithRetry, savePending } from '../utils/orderOutbox'
+import { logEvent } from '../utils/systemLog'
 
 // Pedido mínimo del negocio: no se puede enviar una orden por debajo de
 // este monto.
@@ -104,6 +105,13 @@ export default function CartDrawer({ token, client }) {
 
   // Cierra el envío según cómo terminó el registro. El carrito se vacía solo
   // cuando el pedido está realmente guardado.
+  //
+  // Los dos finales malos quedan además en system_logs (2026-08-20,
+  // order_create_failed): el rechazo ya deja su payload en order_failures y el
+  // fallo de red deja el pendiente en el teléfono — esto no reemplaza ninguna
+  // de las dos redes, es lo que las hace VISIBLES en la pestaña ⚙️ Sistema
+  // sin esperar a que alguien mire la bandeja o a que el cliente vuelva.
+  // Nunca los ítems ni el token: nombre del cliente, conteo y total alcanzan.
   const settle = (kind, res) => {
     if (res === 'ok') {
       clearPending()
@@ -117,11 +125,25 @@ export default function CartDrawer({ token, client }) {
       clearPending()
       setSent(null)
       setFailed({ kind, reason: 'rejected' })
+      logEvent(
+        'error',
+        'order_capture',
+        'order_create_failed',
+        'El servidor rechazó el registro del pedido (el payload quedó en order_failures)',
+        { reason: 'rejected', kind, client: clientName, lines: cart.items.length, total: cart.total },
+      )
     } else {
       // Queda pendiente en el almacenamiento del teléfono: lo reintenta el
       // efecto de arriba en esta misma visita o en la siguiente.
       setSent(null)
       setFailed({ kind, reason: 'error' })
+      logEvent(
+        'error',
+        'order_capture',
+        'order_create_failed',
+        'No se pudo hablar con la base (red/timeout); el pedido queda pendiente de reintento',
+        { reason: 'network', kind, client: clientName, lines: cart.items.length, total: cart.total },
+      )
     }
   }
 

@@ -475,6 +475,48 @@ const dict = {
       'Falta correr migration-2026-08-06-sa-metrics.sql en la base de datos: la RPC sa_metrics_overview todavía no existe.',
     invalidZeroPriceHint:
       'Precio en 0: cuenta como sin precio, así que el producto NO sale en el catálogo. Volvé a cargarlo con el precio real.',
+
+    // Pestaña ⚙️ Sistema (2026-08-20, solo superadmin): logs de errores y
+    // eventos operativos (system_logs).
+    system: 'Sistema',
+    systemIntro:
+      'Errores y eventos operativos de todo el sistema: pedidos que no entraron, envíos a SellerCloud, cargas de precios y productos, errores del navegador.',
+    systemRefresh: 'Actualizar',
+    systemSeverity: 'Severidad',
+    systemSource: 'Origen',
+    systemEvent: 'Evento',
+    systemMessage: 'Mensaje',
+    systemContext: 'Detalle',
+    systemAllSeverities: 'Todas las severidades',
+    systemAllSources: 'Todos los orígenes',
+    systemLoadMore: 'Cargar más',
+    systemNoLogs: 'No hay eventos registrados con estos filtros.',
+    systemMigrationMissing:
+      'Falta correr migration-2026-08-20-system-logs.sql en la base de datos: la RPC get_system_logs todavía no existe.',
+
+    // Ventana de tiempo de la bandeja de Pedidos (2026-08-20): la bandeja ya
+    // no trae el histórico entero por defecto.
+    ordersRangeDays: 'Últimos {n} días',
+    ordersRangeAll: 'Todo el historial',
+    orderItemsFailed: 'No se pudieron cargar los ítems del pedido',
+
+    // ⭐ Más vendidos + orden por precio en el catálogo (2026-08-20).
+    topSellers: 'Más vendidos',
+    topSeller: 'Más vendido',
+    sortDefault: 'Orden del catálogo',
+    sortPriceDesc: 'Precio: mayor a menor',
+    sortPriceAsc: 'Precio: menor a mayor',
+
+    // Más vendidos por línea + Mujer/Hombre/Sets + Favoritos (2026-08-20,
+    // cuarta tanda del día).
+    topSellersArabic: 'Más vendidos árabes',
+    topSellersDesigner: 'Más vendidos diseñador',
+    filterWomen: 'Mujer',
+    filterMen: 'Hombre',
+    filterSets: 'Sets',
+    favorites: 'Favoritos',
+    favAdd: 'Agregar a favoritos',
+    favRemove: 'Quitar de favoritos',
   },
   en: {
     search: 'Search by name, category or UPC...',
@@ -919,6 +961,41 @@ const dict = {
       'migration-2026-08-06-sa-metrics.sql has not been run on the database yet: the sa_metrics_overview RPC does not exist.',
     invalidZeroPriceHint:
       'Price is 0: that counts as no price, so the product does NOT show in the catalog. Upload it again with the real price.',
+
+    system: 'System',
+    systemIntro:
+      'Errors and operational events across the whole system: orders that failed to register, SellerCloud pushes, price and product uploads, browser errors.',
+    systemRefresh: 'Refresh',
+    systemSeverity: 'Severity',
+    systemSource: 'Source',
+    systemEvent: 'Event',
+    systemMessage: 'Message',
+    systemContext: 'Details',
+    systemAllSeverities: 'All severities',
+    systemAllSources: 'All sources',
+    systemLoadMore: 'Load more',
+    systemNoLogs: 'No events recorded with these filters.',
+    systemMigrationMissing:
+      'migration-2026-08-20-system-logs.sql has not been run on the database yet: the get_system_logs RPC does not exist.',
+
+    ordersRangeDays: 'Last {n} days',
+    ordersRangeAll: 'All history',
+    orderItemsFailed: 'Could not load the order items',
+
+    topSellers: 'Best sellers',
+    topSeller: 'Best seller',
+    sortDefault: 'Catalog order',
+    sortPriceDesc: 'Price: high to low',
+    sortPriceAsc: 'Price: low to high',
+
+    topSellersArabic: 'Best sellers - Arab',
+    topSellersDesigner: 'Best sellers - Designer',
+    filterWomen: 'Women',
+    filterMen: 'Men',
+    filterSets: 'Sets',
+    favorites: 'Favorites',
+    favAdd: 'Add to favorites',
+    favRemove: 'Remove from favorites',
   },
 }
 
