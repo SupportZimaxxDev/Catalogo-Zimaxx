@@ -18,10 +18,13 @@ import {
 const EMPTY = { sku: '', upc: '', name: '', category: '', image_url: '', active: true, new_until: '', stock: '' }
 
 // Etiqueta "Nuevo" (2026-07-09): los productos recién creados la llevan
-// automáticamente por ~10 días ("una semana, quizás un poco más") y el
-// catálogo permite filtrar por ellos. La fecha queda editable en el
-// formulario de edición por si una promo necesita más o menos tiempo.
-const NEW_TAG_DAYS = 10
+// automáticamente por ~5 semanas ("1 mes/5 semanas aprox", pedido del
+// 2026-08-24; hasta entonces eran 10 días) y el catálogo permite filtrar
+// por ellos. La fecha queda editable en el formulario de edición por si
+// una promo necesita más o menos tiempo. Debe coincidir con el
+// interval '35 days' de sync_upsert_products
+// (migration-2026-08-24-new-tag-35-days.sql).
+const NEW_TAG_DAYS = 35
 
 const toIso = (local) => (local ? new Date(local).toISOString() : null)
 const isoToLocal = (iso) => {

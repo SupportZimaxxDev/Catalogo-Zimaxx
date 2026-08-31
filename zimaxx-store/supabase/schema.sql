@@ -207,10 +207,11 @@ alter table public.products
   add column if not exists product_line text;
 
 -- Etiqueta "Nuevo" (2026-07-09): al crear un producto (alta manual o
--- carga masiva) el admin le pone new_until = ahora + ~10 días. Mientras
--- now() < new_until el catálogo muestra el badge y permite filtrar por
--- nuevos; después expira solo, sin limpieza manual. La fecha es editable
--- desde el formulario de edición del producto en el panel admin.
+-- carga masiva) el admin le pone new_until = ahora + ~35 días (5 semanas
+-- desde 2026-08-24, migration-2026-08-24-new-tag-35-days.sql; antes eran
+-- ~10). Mientras now() < new_until el catálogo muestra el badge y permite
+-- filtrar por nuevos; después expira solo, sin limpieza manual. La fecha
+-- es editable desde el formulario de edición del producto en el panel admin.
 alter table public.products
   add column if not exists new_until timestamptz;
 
@@ -850,6 +851,92 @@ grant execute on function public.update_client_price_list(uuid, uuid) to authent
 revoke execute on function public.get_my_role() from public, anon;
 grant execute on function public.get_my_role() to authenticated;
 
+-- ---------- RPC: update_client_info ----------
+-- Editar nombre y teléfono de un cliente (2026-08-25,
+-- migration-2026-08-25-update-client-info.sql). Mismo criterio que
+-- update_client_price_list: admin edita cualquiera, una vendedora solo
+-- sus propios clientes, y el cambio queda auditado sí o sí en
+-- admin_audit_log. El teléfono se guarda normalizado (solo dígitos) y el
+-- duplicado se chequea por últimos 10 dígitos — la misma regla que el
+-- índice único parcial clients_phone_normalized_key, replicada acá solo
+-- para dar un mensaje claro (el índice sigue siendo la garantía real).
+create or replace function public.update_client_info(p_client_id uuid, p_name text, p_phone text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_client public.clients%rowtype;
+  v_name   text := btrim(coalesce(p_name, ''));
+  v_phone  text := regexp_replace(coalesce(p_phone, ''), '\D', '', 'g');
+  v_email  text;
+begin
+  select * into v_client from public.clients where id = p_client_id;
+  if not found then
+    raise exception 'cliente no encontrado';
+  end if;
+
+  if not public.is_admin() then
+    if not public.is_vendedora() or v_client.vendedora_id is distinct from public.current_vendedora_id() then
+      raise exception 'no tenés permiso para editar este cliente';
+    end if;
+  end if;
+
+  if v_name = '' then
+    raise exception 'el nombre no puede quedar vacío';
+  end if;
+  if length(v_phone) < 7 then
+    raise exception 'el teléfono tiene que tener al menos 7 dígitos';
+  end if;
+
+  -- Sin cambios reales: no ensuciar la auditoría con una fila que no
+  -- cambió nada (el guardado repetido del mismo valor es un no-op).
+  if v_name = v_client.name and v_phone = v_client.phone then
+    return jsonb_build_object('ok', true, 'changed', false);
+  end if;
+
+  -- Duplicado por últimos 10 dígitos. Un cliente marcado allow_shared_phone
+  -- se salta el chequeo (compartir con su par es justamente lo legítimo);
+  -- para todos los demás se compara contra TODOS los clientes, incluidos
+  -- los marcados — a propósito MÁS estricto que el índice parcial (que
+  -- ignora las filas marcadas en ambas puntas): un tercer cliente con el
+  -- número del par rompería la deduplicación por teléfono del Excel, y es
+  -- la misma regla que ya aplica el alta manual en el frontend.
+  if not v_client.allow_shared_phone and exists (
+    select 1 from public.clients c
+    where c.id <> p_client_id
+      and right(regexp_replace(c.phone, '\D', '', 'g'), 10) = right(v_phone, 10)
+  ) then
+    raise exception 'ya existe otro cliente con ese teléfono';
+  end if;
+
+  select email into v_email from auth.users where id = auth.uid();
+
+  begin
+    update public.clients set name = v_name, phone = v_phone where id = p_client_id;
+  exception when unique_violation then
+    raise exception 'ya existe otro cliente con ese teléfono';
+  end;
+
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, client_id, client_name, detail)
+  values
+    ('update_client_info', auth.uid(), v_email, p_client_id, v_client.name,
+     jsonb_build_object(
+       'from_name',  v_client.name,
+       'to_name',    v_name,
+       'from_phone', v_client.phone,
+       'to_phone',   v_phone
+     ));
+
+  return jsonb_build_object('ok', true, 'changed', true);
+end;
+$$;
+
+revoke execute on function public.update_client_info(uuid, text, text) from public;
+grant execute on function public.update_client_info(uuid, text, text) to authenticated;
+
 -- ---------- RPC: apply_price_list ----------
 -- Carga de listas de precio, una lista por archivo (2026-07-17,
 -- migration-2026-07-17-apply-price-list.sql): reemplaza el upsert directo
@@ -1064,8 +1151,8 @@ alter table public.admin_audit_log   enable row level security;
 -- admin_audit_log: solo lectura para admin. Sin policy de insert/update/
 -- delete para nadie — es inmutable para cualquier usuario autenticado, solo
 -- la escriben las funciones SECURITY DEFINER (reassign_client/delete_client/
--- update_client_price_list/update_order_items/update_order_status/
--- convert_quote_to_order). Va acá y no junto a la tabla porque la policy
+-- update_client_price_list/update_client_info/update_order_items/
+-- update_order_status/convert_quote_to_order). Va acá y no junto a la tabla porque la policy
 -- necesita que `is_admin()` ya exista.
 drop policy if exists admin_read_audit on public.admin_audit_log;
 create policy admin_read_audit on public.admin_audit_log

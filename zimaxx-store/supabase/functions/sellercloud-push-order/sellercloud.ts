@@ -26,6 +26,14 @@
 // confirmara allá, pero el control pasó a estar ANTES — solo un pedido ya
 // marcado Atendido en el panel se puede enviar (lo exige index.ts), así que la
 // revisión humana ya ocurrió y el hold era un paso de más.
+//
+// 2026-08-28: toda orden viaja con "Allow shipping without payment" prendido
+// (ShippingMethodDetails.AllowShippingEvenNotPaid en el create). Sin él,
+// SellerCloud usa el default del cliente (AllowShippingUnPaidOrders, false en
+// casi todos) y las órdenes entraban bloqueadas para despachar sin cobrar.
+// Como el create de esta API puede ignorar campos en silencio, pushOrder lo
+// verifica releyendo la orden (donde el campo se llama distinto:
+// ShippingDetails.AllowShippingWithoutPaymentValue).
 
 export const CHANNEL_WHOLESALE = 21
 
@@ -297,6 +305,32 @@ export async function readOrderRep(
   }
 }
 
+// Relee la orden recién creada por GET /Orders/{id} para verificar que el
+// "Allow shipping without payment" quedó prendido (el create lo manda como
+// ShippingMethodDetails.AllowShippingEvenNotPaid, 2026-08-28). Va por la
+// orden ÚNICA y no por el listado como readOrderRep: el DTO del listado no
+// trae ShippingDetails, el de la orden única sí — y ahí el campo se llama
+// AllowShippingWithoutPaymentValue. Devuelve null si el campo no vino, para
+// que el llamador avise "no se pudo verificar" en vez de inventar un false.
+export async function readOrderAllowUnpaidShipping(
+  cfg: Config,
+  token: string,
+  orderId: number,
+  f: Fetcher = fetch,
+): Promise<boolean | null> {
+  const url = `${cfg.baseUrl}/rest/api/Orders/${orderId}`
+  const res = await f(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+  })
+  const data = await readJson(res, `No se pudo releer la orden ${orderId}`, url)
+  const v = pick(data, 'ShippingDetails.AllowShippingWithoutPaymentValue')
+  return typeof v === 'boolean' ? v : null
+}
+
 // Los datos del cliente salen de SellerCloud en el momento del envío, no de
 // nuestra base: allá es donde viven el email y las direcciones, y son
 // obligatorios para crear la orden. Copiarlos a `clients` sería una segunda
@@ -483,6 +517,15 @@ export function buildOrderPayload(
       ...(Number.isFinite(salesRep) && salesRep > 0 ? { SalesRepresentative: salesRep } : {}),
       ...(Number.isFinite(marketing) && marketing > 0 ? { MarketingSource: marketing } : {}),
     },
+    // Despacho sin pago SIEMPRE permitido (2026-08-28): sin este campo, la
+    // orden hereda el default del cliente en SellerCloud (AllowShippingUnPaidOrders,
+    // false en casi todos) y entraba bloqueada para despachar hasta cobrarse —
+    // el negocio despacha antes de cobrar. En el modelo del create el campo es
+    // ShippingMethodDetails.AllowShippingEvenNotPaid; al RELEER la orden vuelve
+    // con otro nombre: ShippingDetails.AllowShippingWithoutPaymentValue.
+    ShippingMethodDetails: {
+      AllowShippingEvenNotPaid: true,
+    },
     ShippingAddress: toOrderAddress(addrs.ShippingAddress, details),
     BillingAddress: toOrderAddress(addrs.BillingAddress, details),
     Products: usable.map((i) => ({
@@ -602,6 +645,32 @@ export async function pushOrder(
         )
       }
     }
+  }
+
+  // El "Allow shipping without payment" viaja en el create (2026-08-28), pero
+  // esta API ya demostró contestar 200 y no aplicar un campo (el rep,
+  // 2026-08-19): se verifica SIEMPRE releyendo la orden única. A diferencia
+  // del rep no hay PUT que lo corrija — el UpdateOrderRequest no trae el
+  // campo — así que si no quedó, el remedio es prenderlo a mano allá.
+  try {
+    const allow = await readOrderAllowUnpaidShipping(cfg, token, orderId, f)
+    if (allow === false) {
+      warnings.push(
+        `La orden #${orderId} quedó SIN "Allow shipping without payment" ` +
+          '(SellerCloud no aplicó el campo del create). Prendéselo a mano allá ' +
+          'para que se pueda despachar antes de cobrarse.',
+      )
+    } else if (allow == null) {
+      warnings.push(
+        `No se pudo verificar el "Allow shipping without payment" de la orden #${orderId} ` +
+          '(la relectura no trajo el campo). Revisalo allá.',
+      )
+    }
+  } catch (e) {
+    warnings.push(
+      `No se pudo verificar el "Allow shipping without payment" de la orden #${orderId}: ` +
+        `${(e as Error).message}`,
+    )
   }
 
   return { orderId, warnings }

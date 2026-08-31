@@ -453,7 +453,7 @@ estar en el navegador ni en la base, así que el HTTP lo hace una Edge Function:
   igual en Node, y por eso se puede probar entero contra un servidor falso sin
   desplegar nada.
 - `.../index.ts` — el envoltorio de Edge Function: valida, arma y anota.
-- `tests/sc-push-tests.mjs` — la suite del cliente (22 comprobaciones, Node
+- `tests/sc-push-tests.mjs` — la suite del cliente (29 comprobaciones, Node
   puro contra un servidor falso; ver "Cómo está verificado" más abajo).
 - `migration-2026-08-17-sellercloud-push.sql` — `orders.sellercloud_order_id` /
   `sellercloud_pushed_at` / `sellercloud_error`, y la RPC
@@ -465,9 +465,10 @@ estar en el navegador ni en la base, así que el HTTP lo hace una Edge Function:
 | --- | --- |
 | Token | `POST {base}/rest/api/token` con `{Username, Password}` → `access_token`, dura 60 min |
 | Cliente | `GET {base}/rest/api/Customers/{id}` |
-| Crear orden | `POST {base}/rest/api/Orders/` con `CustomerDetails` + `OrderDetails{CompanyID, Channel: 21}` + direcciones + `Products[]` |
+| Crear orden | `POST {base}/rest/api/Orders/` con `CustomerDetails` + `OrderDetails{CompanyID, Channel: 21}` + direcciones + `Products[]` + `ShippingMethodDetails{AllowShippingEvenNotPaid: true}` (2026-08-28, ver abajo) |
 | Asignar el rep | `PUT {base}/rest/api/Orders/{id}` con `{ SalesRep1: <id> }` (2026-08-19, ver abajo) |
 | Órdenes (lectura) | `GET {base}/rest/api/Orders` — cada fila trae `SalesRepEmail` + `SalesRepId`; con `model.orderIDs=` filtra órdenes puntuales (así se verifica qué quedó aplicado) |
+| Orden única (lectura) | `GET {base}/rest/api/Orders/{id}` — a diferencia del listado trae `ShippingDetails`, y ahí se verifica `AllowShippingWithoutPaymentValue` (2026-08-28) |
 
 Canal Wholesale = 21. (Hasta el 2026-08-18 había un paso `PUT
 {base}/api/Orders/StatusCode` para dejar la orden On Hold = 200; se quitó con
@@ -502,6 +503,22 @@ el cambio de modalidad — el candado de Atendido lo reemplaza.)
 > el mismo `PUT /api/Orders/{id}` del rep, pero con OTRO shape más
 > (`AddressWithSeparateAddrLinesDto`: `AddressLine1` en vez de `Address`) —
 > tres nombres distintos para el mismo campo según el endpoint.
+
+> **Toda orden viaja con "Allow shipping without payment" prendido**
+> (2026-08-28, reporte del usuario: pedidos entraban a SellerCloud con
+> `allowShippingWithoutPaymentValue`/`Visible` en false y el negocio despacha
+> antes de cobrar). No era un mapeo nuestro en false: el payload directamente
+> **no mandaba el campo**, y SellerCloud entonces hereda el default del
+> cliente (`AllowShippingUnPaidOrders`, que está en false en casi todos los
+> clientes de la cuenta). El campo tiene un nombre en cada punta: en el create
+> es `ShippingMethodDetails.AllowShippingEvenNotPaid` y al releer la orden
+> vuelve como `ShippingDetails.AllowShippingWithoutPaymentValue` — mismo
+> patrón de la API de tres nombres para la misma cosa. Como el create de esta
+> API ya demostró aceptar campos sin aplicarlos (el rep), `pushOrder`
+> **verifica releyendo la orden única** (`GET /Orders/{id}`; el DTO del
+> listado no trae `ShippingDetails`) y avisa con warning si no quedó — y acá
+> no hay PUT que lo corrija (el `UpdateOrderRequest` no trae el campo), así
+> que el remedio del warning es prenderlo a mano allá.
 
 **Sales Rep y Marketing Source (2026-08-18).** La orden queda además con el
 Sales Rep de **la vendedora del pedido** y el Marketing Source **"catalogo
@@ -601,7 +618,7 @@ supabase secrets set SELLERCLOUD_MARKETING_SOURCE_ID=...     # opcional: ID de "
 > marca usa la primera; `Addresses` vacía da el error "cargásela allá".
 
 **Cómo está verificado.** La suite del cliente de la API vive en el repo
-desde el 2026-08-19 — **`tests/sc-push-tests.mjs`, 22 comprobaciones, se
+desde el 2026-08-19 — **`tests/sc-push-tests.mjs`, 29 comprobaciones, se
 corre con `node tests/sc-push-tests.mjs`** (Node 23+; `sellercloud.ts` no
 importa nada de Deno a propósito). Corre contra un servidor falso que
 reproduce los vicios REALES de esta API: el create que ignora el Sales Rep,
@@ -610,8 +627,11 @@ vacía, y el shape verdadero del cliente (direcciones en la lista `Addresses`
 con `ContactName`/`CompanyName`). Cubre el camino feliz completo
 (create → PUT solo con `SalesRep1` → relectura), el mapeo de direcciones
 (nombre partido, fallback al nombre del cliente, sin claves basura), la
-degradación a warning de todo fallo posterior al create, y que extras basura
-(NaN, 0, negativos) no viajan. Las suites anteriores (86 y 100
+degradación a warning de todo fallo posterior al create, que extras basura
+(NaN, 0, negativos) no viajan, y el flag de despacho sin pago (2026-08-28:
+viaja en el create, se verifica en la orden única, y sus tres fallos —
+create que lo ignora, respuesta sin `ShippingDetails`, GET con 500 — degradan
+a warning). Las suites anteriores (86 y 100
 comprobaciones, 2026-08-17/18: token renovado al vencer, credenciales malas,
 cliente sin email/dirección cortando antes de crear, el 200 con HTML en cada
 paso, el resolvedor correo→ID) quedaban en el scratchpad de cada sesión y se
@@ -1392,8 +1412,8 @@ las filas renderizadas por el scroll infinito), y la barra sticky ofrece:
 
 - **Activar / Desactivar** (2026-07-14).
 - **Etiqueta** (2026-08-07): 🔥 Flash Sale · Pre-Order · Disponible.
-- **✨ Nuevo** (2026-08-07): Marcar (pone `new_until` a +10 días) o Quitar
-  (lo deja en `null`).
+- **✨ Nuevo** (2026-08-07): Marcar (pone `new_until` a +35 días — 5 semanas,
+  desde 2026-08-24; antes +10) o Quitar (lo deja en `null`).
 
 Ojo con Disponible/Pre-Order: **las decide el stock**. El trigger
 `products_availability_from_stock` las recalcula en cualquier escritura sobre
@@ -1468,6 +1488,18 @@ crearlo "suelto" ni para otra vendedora — lo impone una policy RLS
 catálogo sin precios de la sección 1 — se puede cambiar de/hacia esa
 lista en cualquier momento desde el mismo selector, igual que cualquier
 otro nivel.
+
+**Editar nombre/teléfono** (botón "Editar" por fila, 2026-08-25): convierte
+las celdas Nombre y Tel en inputs, con Guardar/Cancelar (Enter guarda,
+Escape cancela). Guarda vía la RPC `update_client_info`
+(`migration-2026-08-25-update-client-info.sql`): admin edita cualquier
+cliente, una vendedora solo los suyos, y el cambio queda auditado en el
+Registro de movimientos como "Edición de cliente". El teléfono se guarda
+normalizado a solo dígitos y un duplicado (mismos últimos 10 dígitos que
+otro cliente, con o sin código de país) se rechaza con el mismo mensaje
+amigable del alta. Antes, un dato mal cargado solo se corregía re-subiendo
+Excel — que matchea por teléfono, así que un **teléfono** mal cargado
+creaba un duplicado en vez de corregirse.
 
 ---
 
@@ -1883,6 +1915,37 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 
 ## 7. Roadmap / pendientes
 
+> **🚨 MIGRACIÓN NUEVA DEL 2026-08-26 — URGENTE, arregla un error activo en
+> producción:** `migration-2026-08-26-fix-apply-order-stock-missing.sql`.
+> Convertir en pedido una cotización YA MARCADA ATENDIDA falla con "function
+> public.apply_order_stock(uuid, integer) does not exist" (le pasó a una
+> vendedora el 2026-08-26). Causa: `migration-2026-08-04-order-stock.sql`
+> nunca corrió en producción (los docs la daban por corrida con evidencia
+> equivocada) y la 08-06 dejó `convert_quote_to_order` llamando a ese helper
+> inexistente. El fix trae SOLO las dos piezas que faltan: el helper
+> `apply_order_stock` y `update_order_status` en su versión con stock (la viva
+> era la 2026-07-17 — o sea que "Marcar atendido" nunca había descontado
+> stock). **NO correr la 08-04 vieja en su lugar**: pisaría el trigger de
+> disponibilidad del 08-12 y el convert del 08-06. Sin cambio de frontend, no
+> hay nada que desplegar. Trae preflight y es idempotente; probada en PG 18
+> local reproduciendo el estado exacto de producción (repro del error + 7
+> bloques de assert post-fix + re-corrida + `schema.sql` encima).
+>
+> **⚠️ MIGRACIÓN NUEVA DEL 2026-08-24 — UNA:**
+> `migration-2026-08-24-new-tag-35-days.sql` — la etiqueta ✨ Nuevo pasa de
+> ~10 días a **5 semanas (35 días)**, a pedido del usuario. Reescribe
+> `sync_upsert_products` (idéntica a la versión de
+> `migration-2026-07-14-product-upc.sql`) cambiando solo el `new_until` del
+> INSERT: `now() + interval '35 days'`. **Independiente del deploy del
+> frontend** (la otra mitad de la duración, `NEW_TAG_DAYS = 35` en
+> `ProductsAdmin.jsx`, va en el mismo commit): sin la migración los productos
+> nuevos del sync siguen entrando con 10 días y nada se rompe. **También
+> extiende +25 días las etiquetas vigentes** (a pedido del usuario, segunda
+> iteración del día): el backfill corre sobre todo `new_until` en el futuro —
+> las expiradas no reviven, las null no se tocan — y trae un guard que lo
+> salta si la función viva ya dice `35 days`, así que re-correr la migración
+> no suma 25 días dos veces. El NOTICE reporta cuántas extendió.
+>
 > **⚠️ MIGRACIONES NUEVAS DEL 2026-08-20 — CUATRO, en este orden:**
 > 1. `migration-2026-08-20-system-logs.sql` (tabla `system_logs` + `log_event`
 >    + `get_system_logs` + `purge_system_logs`) — **corrida en producción el
@@ -2039,7 +2102,12 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   (2026-07-14) agrega `products.upc` (código de barras; nació como dato interno
   del admin y desde 2026-08-14 también se le muestra al cliente, ver
   `migration-2026-08-14-catalog-upc.sql`) y hace que `sync_upsert_products` lo
-  guarde (campo `upc` del payload). **El workflow de n8n está armado y corriendo en producción**
+  guarde (campo `upc` del payload).
+  `migration-2026-08-24-new-tag-35-days.sql` (2026-08-24, **pendiente**)
+  reescribe esa misma versión cambiando solo la duración de la etiqueta
+  ✨ Nuevo de los productos que el sync crea: `new_until = now() + 35 días`
+  (5 semanas; antes 10), y de paso extiende +25 días las etiquetas que estén
+  vigentes al correrla (backfill con guard, idempotente). **El workflow de n8n está armado y corriendo en producción**
   (confirmado por el usuario el 2026-08-04: mantiene el stock de los
   productos actualizado constantemente, además del resync completo de
   clientes dos veces al día). Se había detectado antes por evidencia
@@ -2209,19 +2277,24 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   cotización fallaba, "Convertir en pedido" fallaba, marcar atendido/
   cancelar/reabrir fallaba (ya no es un `update` directo), y las
   cotizaciones se veían sin precio en vez de mostrar el precio vigente.
-- **✅ `migration-2026-08-04-order-stock.sql` corrida** en producción
-  (verificado el 2026-08-12: `orders.stock_applied` existe). Agrega esa columna,
-  el trigger
-  `products_availability_from_stock`, el helper `apply_order_stock`, y
-  reescribe `update_order_status`/`convert_quote_to_order` para mover el
-  stock — ver "Descuento de stock al atender un pedido" en la sección 2).
-  Requiere que `migration-2026-07-17-orders-edit-live-quotes.sql` ya esté
-  corrida (esta reescribe funciones que aquella crea). Crea también
-  `products.stock` con `if not exists`, por si acaso, pero esa columna **ya
-  existe**: `migration-2026-07-14-inventory-stock.sql` está corrida y el sync
-  de n8n mantiene el inventario al día (confirmado por el usuario el
-  2026-08-04 — este README y el `ZIMAXX-STORE-INFO.md` la listaban como
-  pendiente por error). O sea que el descuento tiene de dónde restar.
+- **⛔ `migration-2026-08-04-order-stock.sql` NUNCA corrió — y ya NO hay que
+  correrla** (corrección 2026-08-26; antes este ítem decía "corrida, verificado
+  el 2026-08-12: `orders.stock_applied` existe", pero esa columna también la
+  crea `migration-2026-08-05-order-capture.sql`, que sí corrió — la evidencia
+  probaba la migración equivocada). Consecuencias que estuvieron vivas hasta el
+  2026-08-26: "Marcar atendido" nunca descontó stock (invisible: el sync de n8n
+  pisa `products.stock` con SellerCloud igual), y convertir una cotización YA
+  ATENDIDA en pedido fallaba con "function public.apply_order_stock(uuid,
+  integer) does not exist" (la `migration-2026-08-06-require-price.sql`, sí
+  corrida, dejó `convert_quote_to_order` llamando al helper inexistente en esa
+  rama). Correr la 08-04 ahora pisaría el trigger de disponibilidad del 08-12 y
+  el convert del 08-06 con versiones viejas — el fix es
+  `migration-2026-08-26-fix-apply-order-stock-missing.sql` (solo
+  `apply_order_stock` + `update_order_status` con stock, copiadas de
+  `schema.sql`, con preflight; probada en PG 18 local reproduciendo el estado
+  exacto de producción). Los pedidos atendidos antes del fix quedan con
+  `stock_applied = false`: no descontarles retroactivo y reabrirlos no
+  devuelve nada, que es lo correcto.
 - `migration-2026-07-15-fix-duplicate-client-phones.sql` corrida en
   producción (2026-07-16): limpió 315 clientes duplicados que había
   creado el sync por el bug de formato de teléfono, corrigió
@@ -2276,5 +2349,5 @@ supabase/migration-*.sql  Deltas idempotentes para producción (no re-correr el 
 supabase/functions/admin-create-vendedora-user/  Edge Function (Deno) — crea el usuario de Auth de una vendedora, requiere deploy manual
 supabase/functions/superadmin-users/  Edge Function (Deno) — cambia contraseñas y crea admins (Admin API de Auth), requiere deploy manual (⚠️ 2026-08-19: NO está desplegada en producción — redesplegarla)
 supabase/functions/sellercloud-push-order/  Edge Function (Deno) — crea la orden en SellerCloud + Sales Rep y direcciones vía PUT (v11 en producción, 2026-08-19)
-tests/sc-push-tests.mjs  Suite del cliente de SellerCloud (22 comprobaciones, Node contra un servidor falso)
+tests/sc-push-tests.mjs  Suite del cliente de SellerCloud (29 comprobaciones, Node contra un servidor falso)
 ```

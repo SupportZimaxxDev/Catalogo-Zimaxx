@@ -206,6 +206,14 @@ export default function ClientsAdmin() {
   // cambio pendiente a la vez, { clientId, listId } | null.
   const [pendingList, setPendingList] = useState(null)
 
+  // Edición de nombre/teléfono (2026-08-25): un solo cliente en edición a
+  // la vez, { clientId, name, phone } | null. Vía RPC update_client_info,
+  // mismo criterio que update_client_price_list: admin edita cualquiera,
+  // una vendedora solo los suyos (que es todo lo que ve), y el cambio
+  // queda auditado en admin_audit_log sí o sí.
+  const [editForm, setEditForm] = useState(null)
+  const [editBusy, setEditBusy] = useState(false)
+
   // Alta individual (2026-07-07): la vendedora no elige a quién asignar,
   // el RLS (vendedora_insert_own_clients) exige que sea ella misma — acá
   // se completa con la única fila de `vendedores` que puede leer, la suya.
@@ -546,6 +554,54 @@ export default function ClientsAdmin() {
   }
   const cancelListChange = () => setPendingList(null)
 
+  const startEdit = (client) => {
+    setActionError('')
+    setEditForm({ clientId: client.id, name: client.name, phone: client.phone })
+  }
+
+  // Enter guarda, Escape cancela — mismo gesto que el teléfono editable
+  // de la pestaña Vendedoras.
+  const editKeys = (e) => {
+    if (e.key === 'Enter') saveEdit()
+    if (e.key === 'Escape') setEditForm(null)
+  }
+
+  // El botón Guardar ya se deshabilita con datos inválidos; las
+  // validaciones de acá abajo las repite la RPC server-side (con los
+  // mensajes en español que muestra el banner). El duplicado se chequea
+  // antes por los últimos 10 dígitos — misma regla que el índice único de
+  // la base y que el alta (phoneKey) — para dar el mensaje amigable en el
+  // idioma del panel en vez del error crudo.
+  const saveEdit = async () => {
+    setActionError('')
+    const client = clients.find((c) => c.id === editForm.clientId)
+    const name = editForm.name.trim()
+    const phone = cleanPhone(editForm.phone)
+    if (!client || !name || phone.length < 7) return
+    if (
+      !client.allow_shared_phone &&
+      clients.some((c) => c.id !== client.id && phoneKey(c.phone) === phoneKey(phone))
+    ) {
+      setActionError(t('phoneInUse'))
+      return
+    }
+    setEditBusy(true)
+    const { error } = await supabase.rpc('update_client_info', {
+      p_client_id: client.id,
+      p_name: name,
+      p_phone: phone,
+    })
+    setEditBusy(false)
+    if (error) {
+      setActionError(error.message)
+      return
+    }
+    // Reflejar el cambio sin recargar todo (mismo criterio que updateList):
+    // la RPC guarda exactamente esto (nombre trimmeado, teléfono en dígitos).
+    setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, name, phone } : c)))
+    setEditForm(null)
+  }
+
   // Reasignar el cliente a otra vendedora (o dejarlo sin asignar). Vía RPC
   // reassign_client (SECURITY DEFINER): valida admin, rechaza listas
   // personales y deja registro en admin_audit_log. No se usa un update
@@ -794,8 +850,32 @@ export default function ClientsAdmin() {
           <tbody>
             {filtered.slice(0, visibleRows).map((c) => (
               <tr key={c.id} className="border-b border-line/60 transition-colors hover:bg-gold-pale/20">
-                <td className="p-3 font-medium">{c.name}</td>
-                <td className="p-3 font-mono text-xs text-primary/60">{c.phone}</td>
+                <td className="p-3 font-medium">
+                  {editForm?.clientId === c.id ? (
+                    <input
+                      autoFocus
+                      value={editForm.name}
+                      onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                      onKeyDown={editKeys}
+                      className="w-40 rounded-lg border border-secondary/60 bg-surface px-2 py-1 text-xs font-normal outline-none transition-colors focus:border-secondary"
+                    />
+                  ) : (
+                    c.name
+                  )}
+                </td>
+                <td className="p-3 font-mono text-xs text-primary/60">
+                  {editForm?.clientId === c.id ? (
+                    <input
+                      inputMode="tel"
+                      value={editForm.phone}
+                      onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                      onKeyDown={editKeys}
+                      className="w-32 rounded-lg border border-secondary/60 bg-surface px-2 py-1 font-mono text-xs outline-none transition-colors focus:border-secondary"
+                    />
+                  ) : (
+                    c.phone
+                  )}
+                </td>
                 <td className="p-3">
                   {isAdmin ? (
                     <div className="flex flex-col gap-1.5">
@@ -871,44 +951,75 @@ export default function ClientsAdmin() {
                 </td>
                 <td className="p-3">
                   <div className="flex items-center justify-end gap-2">
-                    <button
-                      onClick={() => copyLink(c)}
-                      className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all ${
-                        copiedId === c.id
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-secondary/15 text-secondary-dark hover:bg-secondary/30'
-                      }`}
-                    >
-                      {copiedId === c.id ? `✓ ${t('copied')}` : t('copyLink')}
-                    </button>
-                    {isAdmin &&
-                      (confirmDeleteId === c.id ? (
-                        <span className="flex items-center gap-1.5">
-                          <span className="text-xs text-primary/60">{t('deleteConfirmClient')}</span>
-                          <button
-                            onClick={() => deleteClient(c)}
-                            className="rounded-full bg-red-600 px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-red-700"
-                          >
-                            {t('yes')}
-                          </button>
-                          <button
-                            onClick={() => setConfirmDeleteId(null)}
-                            className="rounded-full border border-line px-3 py-1.5 text-xs font-semibold text-primary/60 transition-colors hover:border-primary/40"
-                          >
-                            {t('no')}
-                          </button>
-                        </span>
-                      ) : (
+                    {editForm?.clientId === c.id ? (
+                      <>
                         <button
-                          onClick={() => {
-                            setActionError('')
-                            setConfirmDeleteId(c.id)
-                          }}
-                          className="rounded-full px-3 py-1.5 text-xs font-semibold text-red-600 transition-colors hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-900/40"
+                          onClick={saveEdit}
+                          disabled={
+                            editBusy || !editForm.name.trim() || cleanPhone(editForm.phone).length < 7
+                          }
+                          className="rounded-full bg-secondary px-3.5 py-1.5 text-xs font-bold text-ink transition-colors hover:bg-secondary-dark disabled:opacity-50"
                         >
-                          {t('deleteAction')}
+                          {t('save')}
                         </button>
-                      ))}
+                        <button
+                          onClick={() => setEditForm(null)}
+                          className="rounded-full border border-line px-3.5 py-1.5 text-xs font-semibold text-primary/60 transition-colors hover:border-primary/40"
+                        >
+                          {t('cancel')}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => copyLink(c)}
+                          className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all ${
+                            copiedId === c.id
+                              ? 'bg-green-100 text-green-800'
+                              : 'bg-secondary/15 text-secondary-dark hover:bg-secondary/30'
+                          }`}
+                        >
+                          {copiedId === c.id ? `✓ ${t('copied')}` : t('copyLink')}
+                        </button>
+                        {/* Editar nombre/teléfono (2026-08-25): visible también
+                            para vendedora — solo ve sus propios clientes, y la
+                            RPC igual valida server-side que sean suyos. */}
+                        <button
+                          onClick={() => startEdit(c)}
+                          className="rounded-full px-3 py-1.5 text-xs font-semibold text-primary/60 transition-colors hover:bg-gold-pale/60"
+                        >
+                          {t('edit')}
+                        </button>
+                        {isAdmin &&
+                          (confirmDeleteId === c.id ? (
+                            <span className="flex items-center gap-1.5">
+                              <span className="text-xs text-primary/60">{t('deleteConfirmClient')}</span>
+                              <button
+                                onClick={() => deleteClient(c)}
+                                className="rounded-full bg-red-600 px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-red-700"
+                              >
+                                {t('yes')}
+                              </button>
+                              <button
+                                onClick={() => setConfirmDeleteId(null)}
+                                className="rounded-full border border-line px-3 py-1.5 text-xs font-semibold text-primary/60 transition-colors hover:border-primary/40"
+                              >
+                                {t('no')}
+                              </button>
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                setActionError('')
+                                setConfirmDeleteId(c.id)
+                              }}
+                              className="rounded-full px-3 py-1.5 text-xs font-semibold text-red-600 transition-colors hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-900/40"
+                            >
+                              {t('deleteAction')}
+                            </button>
+                          ))}
+                      </>
+                    )}
                   </div>
                 </td>
               </tr>
