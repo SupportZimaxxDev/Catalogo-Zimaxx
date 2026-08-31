@@ -22,10 +22,14 @@ const state = {
   requests: [], // { method, path, body }
   orderRep: 0,
   orderMkt: 0,
+  orderAllowShip: false, // queda lo que el create aplicó
   applyMktOnCreate: true, // ¿el create aplica MarketingSource?
+  applyAllowShipOnCreate: true, // ¿el create aplica AllowShippingEvenNotPaid?
   failPut: false, // el PUT devuelve 500
   ignorePut: false, // el PUT devuelve 200 pero no aplica
-  emptyReadback: false, // la relectura no encuentra la orden
+  emptyReadback: false, // la relectura del LISTADO no encuentra la orden
+  failSingleGet: false, // GET /Orders/{id} devuelve 500
+  omitShipDetails: false, // GET /Orders/{id} contesta sin ShippingDetails
   lastCreatePayload: null,
 }
 
@@ -73,6 +77,9 @@ const server = createServer((req, res) => {
       state.lastCreatePayload = body
       state.orderRep = 0 // el servidor IGNORA SalesRepresentative
       state.orderMkt = state.applyMktOnCreate ? (body?.OrderDetails?.MarketingSource ?? 0) : 0
+      state.orderAllowShip = state.applyAllowShipOnCreate
+        ? body?.ShippingMethodDetails?.AllowShippingEvenNotPaid === true
+        : false
       return json(200, 777)
     }
     if (req.method === 'PUT' && path === '/rest/api/Orders/777') {
@@ -84,6 +91,20 @@ const server = createServer((req, res) => {
       if (state.emptyReadback) return json(200, { Items: [] })
       return json(200, {
         Items: [{ ID: 777, SalesRepId: state.orderRep, MarketingSourceID: state.orderMkt }],
+      })
+    }
+    if (req.method === 'GET' && path === '/rest/api/Orders/777') {
+      // La orden ÚNICA (a diferencia del listado) trae ShippingDetails, y el
+      // flag ahí se llama distinto que en el create — nombres reales de la
+      // doc de la API (get-single-order).
+      if (state.failSingleGet) return json(500, { Message: 'boom' })
+      if (state.omitShipDetails) return json(200, { ID: 777 })
+      return json(200, {
+        ID: 777,
+        ShippingDetails: {
+          AllowShippingWithoutPaymentValue: state.orderAllowShip,
+          AllowShippingWithoutPaymentVisible: state.orderAllowShip,
+        },
       })
     }
     json(404, { error: `sin ruta: ${req.method} ${path}` })
@@ -112,10 +133,14 @@ function reset(over = {}) {
     requests: [],
     orderRep: 0,
     orderMkt: 0,
+    orderAllowShip: false,
     applyMktOnCreate: true,
+    applyAllowShipOnCreate: true,
     failPut: false,
     ignorePut: false,
     emptyReadback: false,
+    failSingleGet: false,
+    omitShipDetails: false,
     lastCreatePayload: null,
   })
   Object.assign(state, over)
@@ -135,6 +160,11 @@ reset()
   const puts = putsTo777()
   check('feliz: un solo PUT, con SalesRep1 y nada más', puts.length === 1 && JSON.stringify(puts[0].body) === '{"SalesRep1":75448}', JSON.stringify(puts))
   check('feliz: la orden quedó con el rep', state.orderRep === 75448)
+  check(
+    'feliz: el create manda AllowShippingEvenNotPaid en true (2026-08-28)',
+    state.lastCreatePayload?.ShippingMethodDetails?.AllowShippingEvenNotPaid === true,
+    JSON.stringify(state.lastCreatePayload?.ShippingMethodDetails),
+  )
 }
 
 // 1b) Direcciones (2026-08-19): el create recibe OrderAddressDto de verdad —
@@ -214,15 +244,64 @@ reset({ applyMktOnCreate: false })
   )
 }
 
-// 5) Sin rep ni marketing: ni PUT ni relectura, cero requests de más.
+// 5) Sin rep ni marketing: ni PUT ni relectura del LISTADO. La única request
+//    de más es el GET de la orden única, que verifica el flag de despacho sin
+//    pago y corre SIEMPRE (2026-08-28).
 reset()
 {
   const r = await pushOrder(cfg, 123, ITEMS, {})
   const extra = state.requests.filter(
     (x) => (x.method === 'PUT') || (x.method === 'GET' && x.path.startsWith('/rest/api/Orders?')),
   )
+  const singleGets = state.requests.filter(
+    (x) => x.method === 'GET' && x.path === '/rest/api/Orders/777',
+  )
   check('sin-extras: sin warnings', r.warnings.length === 0, JSON.stringify(r.warnings))
-  check('sin-extras: no hay PUT ni relectura', extra.length === 0, JSON.stringify(extra))
+  check('sin-extras: no hay PUT ni relectura del listado', extra.length === 0, JSON.stringify(extra))
+  check('sin-extras: un solo GET de verificación del flag', singleGets.length === 1)
+}
+
+// 5b) El create acepta AllowShippingEvenNotPaid pero NO lo aplica (el mismo
+//     vicio que el rep): la relectura de la orden única lo pesca y avisa que
+//     el remedio es manual (no hay PUT para este campo).
+reset({ applyAllowShipOnCreate: false })
+{
+  const r = await pushOrder(cfg, 123, ITEMS, {})
+  check(
+    'allow-ignorado: warning de que quedó sin el flag',
+    r.warnings.length === 1 && r.warnings[0].includes('quedó SIN "Allow shipping without payment"'),
+    JSON.stringify(r.warnings),
+  )
+  check('allow-ignorado: la orden se devuelve igual', r.orderId === 777)
+}
+
+// 5c) La orden única contesta sin ShippingDetails: aviso suave de "no se pudo
+//     verificar", nunca un false inventado.
+reset({ omitShipDetails: true })
+{
+  const r = await pushOrder(cfg, 123, ITEMS, {})
+  check(
+    'allow-sin-campo: warning suave de verificación',
+    r.warnings.length === 1 &&
+      r.warnings[0].includes('No se pudo verificar el "Allow shipping without payment"') &&
+      r.warnings[0].includes('no trajo el campo'),
+    JSON.stringify(r.warnings),
+  )
+}
+
+// 5d) El GET de la orden única falla con 500: la orden queda, aviso con el
+//     motivo real adentro.
+reset({ failSingleGet: true })
+{
+  const r = await pushOrder(cfg, 123, ITEMS, {})
+  check(
+    'allow-get-500: warning con el motivo',
+    r.warnings.length === 1 &&
+      r.warnings[0].includes('No se pudo verificar el "Allow shipping without payment"') &&
+      r.warnings[0].includes('500'),
+    JSON.stringify(r.warnings),
+  )
+  check('allow-get-500: la orden se devuelve igual', r.orderId === 777)
 }
 
 // 6) Rep null pero marketing sí: sin PUT, la relectura solo verifica marketing.

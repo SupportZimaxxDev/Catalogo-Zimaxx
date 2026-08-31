@@ -20,6 +20,7 @@ import { inputCls } from './ui'
 const ACTION_STYLES = {
   delete_client: 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
   update_price_list: 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
+  update_client_info: 'bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300',
   reassign_client: 'bg-gold-pale text-secondary-dark',
   edit_order_items: 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
   update_order_status: 'bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300',
@@ -45,6 +46,7 @@ const ACTION_LABELS = {
   reassign_client: 'actionReassign',
   delete_client: 'actionDelete',
   update_price_list: 'actionUpdateList',
+  update_client_info: 'actionUpdateClientInfo',
   edit_order_items: 'actionEditOrder',
   update_order_status: 'actionUpdateOrderStatus',
   convert_quote_to_order: 'actionConvertQuote',
@@ -70,6 +72,7 @@ const ACTION_FILTERS = [
   ['reassign_client', 'actionReassign'],
   ['delete_client', 'actionDelete'],
   ['update_price_list', 'actionUpdateList'],
+  ['update_client_info', 'actionUpdateClientInfo'],
   ['edit_order_items', 'actionEditOrder'],
   ['update_order_status', 'actionUpdateOrderStatus'],
   ['convert_quote_to_order', 'actionConvertQuote'],
@@ -138,6 +141,18 @@ export default function AuditLogAdmin() {
     }
     if (a.action === 'update_price_list') {
       return `${a.detail?.from_list ?? '—'} → ${a.detail?.to_list ?? '—'}`
+    }
+    if (a.action === 'update_client_info') {
+      // Solo lo que cambió: editar únicamente el teléfono no tiene por qué
+      // mostrar "Nombre → Nombre" (y viceversa).
+      const parts = []
+      if (a.detail?.from_name !== a.detail?.to_name) {
+        parts.push(`${a.detail?.from_name ?? '—'} → ${a.detail?.to_name ?? '—'}`)
+      }
+      if (a.detail?.from_phone !== a.detail?.to_phone) {
+        parts.push(`${a.detail?.from_phone ?? '—'} → ${a.detail?.to_phone ?? '—'}`)
+      }
+      return parts.join(' · ')
     }
     if (a.action === 'edit_order_items') {
       const before = a.detail?.before_items?.length ?? 0

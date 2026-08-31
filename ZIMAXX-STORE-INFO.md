@@ -29,8 +29,9 @@
 > el frontend nuevo degrada (los `logEvent()` fallan en silencio por diseño,
 > la pestaña ⚙️ Sistema avisa qué migración falta, y la bandeja reintenta con
 > el select viejo si `units` no existe — 42703). La Edge Function
-> `sellercloud-push-order` ganó logs de push: **redesplegarla** para tenerlos
-> (sin redeploy sigue andando como hasta hoy).
+> `sellercloud-push-order` ganó logs de push: **redesplegada el 2026-08-28**
+> junto con el fix del punto 70 ("Allow shipping without payment" en true en
+> el create) — ese redeploy activó también estos logs de push.
 > Ver puntos 62 y 63 y las secciones "Logs del sistema" y "Escalabilidad" del
 > README.
 >
@@ -78,7 +79,41 @@
 > estado real (2026-08-12)" — la lista de pendientes de este doc ya se equivocó
 > en las dos direcciones antes.
 >
-> Creado: 2026-07-02. Última actualización: 2026-08-20, quinta tanda
+> Creado: 2026-07-02. Última actualización: 2026-08-28 (**las órdenes
+> entraban a SellerCloud sin "Allow shipping without payment"**, punto 70:
+> el create no mandaba el campo y SellerCloud hereda el default del cliente
+> (false en casi todos); ahora viaja
+> `ShippingMethodDetails.AllowShippingEvenNotPaid: true` y `pushOrder` lo
+> verifica releyendo la orden única (`GET /Orders/{id}` →
+> `ShippingDetails.AllowShippingWithoutPaymentValue`) con warning si no quedó.
+> Función **redesplegada el mismo día** (el usuario corrió el deploy; ojo: el
+> comando falla con "Cannot find project ref" si se corre desde la raíz del
+> repo — el link vive en `zimaxx-store/`) — sin migración ni deploy de
+> frontend; suite en 29 comprobaciones, todas en verde).
+> Antes: 2026-08-26 (**fix del incidente
+> "function public.apply_order_stock(uuid, integer) does not exist"** al
+> convertir en pedido una cotización ya Atendida. Punto 69:
+> `migration-2026-08-04-order-stock.sql` **NUNCA corrió en producción** — la
+> auditoría del 2026-08-12 la dio por corrida con evidencia equivocada
+> (`orders.stock_applied` también la crea la 08-05, que sí corrió) — y quedó
+> latente porque la 08-06 reescribió `convert_quote_to_order` llamando al
+> helper inexistente en una rama que recién hoy se ejecutó por primera vez.
+> Fix: `migration-2026-08-26-fix-apply-order-stock-missing.sql` **pendiente de
+> correr** — SOLO las dos piezas que faltan (`apply_order_stock` +
+> `update_order_status` con stock); NO re-correr la 08-04, pisaría el trigger
+> del 08-12 y el convert del 08-06 con versiones viejas. Sin cambio de
+> frontend).
+> Antes: 2026-08-24 (**la etiqueta
+> ✨ Nuevo pasa de ~10 días a 5 semanas** — 35 días, a pedido del usuario:
+> "extiéndelo a que dure 1 mes/5 semanas aprox". Punto 67: `NEW_TAG_DAYS = 35`
+> en `ProductsAdmin.jsx` (alta manual, Excel de productos y bloque) +
+> `migration-2026-08-24-new-tag-35-days.sql` **pendiente de correr** — el
+> INSERT de `sync_upsert_products` pasa a `now() + interval '35 days'` y un
+> backfill extiende +25 días las etiquetas vigentes (a pedido del usuario,
+> segunda iteración del día; expiradas no reviven, con guard idempotente).
+> Independiente del deploy: sin la migración el sync sigue poniendo 10 días
+> y nada se rompe).
+> Antes: 2026-08-20, quinta tanda
 > (**los ❤️ favoritos pasan a la base**, punto 66, a pedido del usuario: "pq
 > no hacemos una tabla y rpc por token mejor? y asi queda un registro de los
 > favoritos de cada uno de los clientes" — tabla `client_favorites` escrita
@@ -391,10 +426,11 @@
 > con botón "Armar otro pedido". (3) **Descuento de stock al marcar un
 > pedido Atendido** + disponibilidad derivada del stock por trigger, ver
 > el punto 46 para el detalle y las 3 decisiones que confirmó el usuario.
-> `migration-2026-08-04-order-stock.sql`, **corrida en producción** (verificado
-> el 2026-08-12: `orders.stock_applied` existe; requería
-> `migration-2026-07-17-orders-edit-live-quotes.sql` antes, porque reescribe
-> funciones que aquella crea, y esa ya estaba). Además se
+> `migration-2026-08-04-order-stock.sql` — **CORRECCIÓN 2026-08-26: NUNCA
+> corrió en producción** (el "verificado el 2026-08-12: `orders.stock_applied`
+> existe" era evidencia equivocada — esa columna también la crea la 08-05, que
+> sí corrió). Ver el punto 69: el reemplazo es
+> `migration-2026-08-26-fix-apply-order-stock-missing.sql`. Además se
 > corrigió un bug preexistente de i18n: la key `inStock` estaba duplicada
 > (catálogo "Disponible" vs admin "Con stock") y la del admin pisaba a la
 > otra, así que el chip de disponibilidad del catálogo del cliente decía
@@ -1276,8 +1312,22 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   un `update` directo), y las cotizaciones se ven sin precio en vez de
   mostrar el precio vigente. El frontend (OrdersAdmin, CartDrawer,
   AuditLogAdmin) ya se puede desplegar.
-- [x] **`migration-2026-08-04-order-stock.sql` CORRIDA** (verificado el 2026-08-12 sondeando PostgREST, ver “Auditoría del estado real”;
-  la columna `orders.stock_applied` existe). Lo que hizo (2026-08-04): agrega `orders.stock_applied`, el trigger
+- [ ] **`migration-2026-08-04-order-stock.sql` NUNCA CORRIÓ — NO correrla ya; usar la del 2026-08-26** (corrección
+  2026-08-26: la auditoría del 2026-08-12 la dio por corrida porque "la columna
+  `orders.stock_applied` existe", pero esa columna también la crea
+  `migration-2026-08-05-order-capture.sql` con `add column if not exists`, y esa
+  sí corrió — la evidencia probaba la migración equivocada. Verificado contra
+  `pg_proc` con `supabase db query --linked`: `apply_order_stock` no existe y
+  `update_order_status` es la versión 2026-07-17 sin stock. Consecuencias
+  reales: "Marcar atendido" nunca descontó stock — invisible porque el sync de
+  n8n pisa `products.stock` con SellerCloud igual — y convertir una cotización
+  YA ATENDIDA en pedido revienta con "function public.apply_order_stock(uuid,
+  integer) does not exist", el incidente del 2026-08-26. **Correr la 08-04
+  AHORA sería un error**: su trigger de disponibilidad pisaría la versión
+  ampliada del 08-12 (`deactivated_by_stock`) y su `convert_quote_to_order`
+  pisaría la del 08-06 (require-price). El fix es
+  `migration-2026-08-26-fix-apply-order-stock-missing.sql`, ver el punto 69).
+  Lo que hacía (2026-08-04): agrega `orders.stock_applied`, el trigger
   `products_availability_from_stock` sobre `products`, el helper
   `apply_order_stock`, suma `stock_applied` al trigger
   `orders_guard_items_edit`, y reescribe `update_order_status` /
@@ -2043,6 +2093,102 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   token/producto/estado en cada toggle, y el servidor pisando lo optimista al
   recargar), más carrito (22) y top-sellers (15) re-corridas en verde.
 
+- [ ] **La etiqueta ✨ Nuevo dura 5 semanas** (2026-08-24, punto 67):
+  `migration-2026-08-24-new-tag-35-days.sql` **pendiente de correr** — reescribe
+  `sync_upsert_products` (idéntica a la versión viva de
+  `migration-2026-07-14-product-upc.sql`) cambiando solo el `new_until` del
+  INSERT: `now() + interval '10 days'` → `'35 days'`. **Independiente del
+  deploy del frontend** en los dos sentidos: sin la migración, los productos
+  nuevos del sync siguen entrando con 10 días y nada se rompe; sin el deploy,
+  el alta manual/Excel sigue poniendo 10 (la constante `NEW_TAG_DAYS` vive en
+  `ProductsAdmin.jsx`, cambiada a 35 en el mismo commit). **También extiende
+  +25 días las etiquetas vigentes al correrla** (segunda iteración del día, a
+  pedido del usuario): expiradas no reviven, null no se tocan, y el backfill
+  se salta a sí mismo si la función viva ya dice `35 days` — re-correr la
+  migración no duplica los 25 días. El NOTICE dice cuántas extendió.
+
+- [ ] **Editar nombre y teléfono del cliente desde el panel** (2026-08-25,
+  punto 68): `migration-2026-08-25-update-client-info.sql` **pendiente de
+  correr** — nueva RPC `update_client_info(p_client_id, p_name, p_phone)`
+  (SECURITY DEFINER, mismo criterio que `update_client_price_list`: admin
+  cualquiera, vendedora solo los suyos, auditada sí o sí como
+  `'update_client_info'`; teléfono normalizado a dígitos, duplicados por
+  últimos 10 dígitos con la regla de `allow_shared_phone`, no-op sin fila
+  de auditoría). UI: botón **Editar** por fila en Clientes (inputs inline
+  de nombre y teléfono + Guardar/Cancelar, Enter/Escape), acción nueva en
+  el Registro de movimientos ("Edición de cliente", muestra solo lo que
+  cambió). Sin la migración, el botón Editar da "function ... does not
+  exist" al guardar; el resto del panel no se afecta. **Verificado**:
+  build de Vite en verde, 10 casos SQL en cluster PG 18 desechable
+  (roles admin/vendedora/sin rol, normalización de formato sucio, no-op,
+  duplicados con y sin `allow_shared_phone` incluido que un tercero no
+  puede tomar el número del par compartido, trigger de clients intacto,
+  grants revocados de public) y 21 aserciones Playwright del flujo de UI
+  (inputs precargados, Guardar deshabilitado con datos inválidos, la RPC
+  recibe el teléfono ya limpio, la fila se actualiza sin recargar, el
+  duplicado se ataja client-side sin llegar a la RPC, Enter/Escape, y el
+  error del servidor queda en el banner con la edición abierta). Detalle
+  en las secciones RPC y "Panel admin" de este documento.
+
+- [ ] **Fix: `apply_order_stock` no existe en producción** (2026-08-26, punto
+  69): `migration-2026-08-26-fix-apply-order-stock-missing.sql` **pendiente de
+  correr**. Incidente: una vendedora convirtió una cotización YA MARCADA
+  ATENDIDA y el panel mostró "function public.apply_order_stock(uuid, integer)
+  does not exist". Causa: `migration-2026-08-04-order-stock.sql` nunca corrió
+  (la auditoría del 2026-08-12 la marcó corrida con evidencia equivocada —
+  `orders.stock_applied` también la crea la 08-05) y la 08-06 dejó
+  `convert_quote_to_order` llamando al helper inexistente en la rama
+  "cotización ya atendida", que PL/pgSQL solo resuelve al ejecutarla — recién
+  hoy pasó alguien por ahí. La migración trae SOLO las dos piezas que faltan,
+  copiadas de `schema.sql`: `apply_order_stock` (helper sin grants, revoke a
+  public) y `update_order_status` versión con stock (en producción seguía la
+  2026-07-17: **"Marcar atendido" nunca descontó stock hasta ahora**; nadie lo
+  notó porque el sync de n8n pisa `products.stock` con SellerCloud). **NO
+  re-correr la 08-04 para esto**: pisaría el trigger de disponibilidad del
+  08-12 y el convert del 08-06 con versiones viejas. Trae preflight (corta si
+  faltan `orders.stock_applied`, `products.stock`, `is_vendedora()` o
+  `admin_audit_log`). Sin cambio de frontend — no hay nada que desplegar. Ojo
+  post-fix: los pedidos atendidos ANTES quedan con `stock_applied = false`; no
+  descontarles retroactivo (el sync ya pisó el stock mil veces) y reabrirlos
+  no devuelve nada, que es lo correcto. **Verificado** en cluster PG 18
+  desechable partiendo del estado real de producción (schema de HEAD +
+  downgrade a `update_order_status` 07-17 + drop del helper): la repro dio el
+  error EXACTO del panel, y post-fix 7 bloques de assert en verde (conversión
+  atendida descuenta y audita con `detail->stock`, reabrir devuelve /
+  re-atender descuenta / repetir no-op, cotización no mueve stock, guard de
+  `stock_applied` intacto, stock null salteado con motivo, permisos), más
+  re-corrida de la migración (idempotente) y `schema.sql` completo encima en
+  limpio.
+
+- [x] **Las órdenes entraban a SellerCloud sin "Allow shipping without
+  payment"** (2026-08-28, punto 70, reporte del usuario): Edge Function
+  **redesplegada el mismo día** (el usuario corrió `supabase functions deploy
+  sellercloud-push-order`; falla con "Cannot find project ref" desde la raíz
+  del repo — hay que correrlo desde `zimaxx-store/`, donde vive el link. Sin
+  migración ni deploy de frontend; el redeploy activó de paso los logs de
+  push del 2026-08-20 que seguían pendientes). El negocio
+  despacha antes de cobrar y las órdenes llegaban con
+  `allowShippingWithoutPaymentValue`/`Visible` en false. **No era un mapeo
+  nuestro en false**: `buildOrderPayload` directamente no mandaba el campo, y
+  SellerCloud entonces hereda el default del CLIENTE
+  (`AllowShippingUnPaidOrders`, false en casi todos — se ve en
+  `Clientes detalle.txt`). Fix en `sellercloud.ts`: el create ahora manda
+  `ShippingMethodDetails.AllowShippingEvenNotPaid: true` (nombre del campo en
+  el modelo del POST, doc oficial create-new-sales-order) y, como este create
+  ya demostró aceptar campos sin aplicarlos (el rep, 2026-08-19), `pushOrder`
+  **verifica releyendo la orden única** — `GET /Orders/{id}`, nueva
+  `readOrderAllowUnpaidShipping`; el DTO del listado no trae
+  `ShippingDetails`, el de la orden única sí, y ahí el campo se llama
+  `ShippingDetails.AllowShippingWithoutPaymentValue` (tercer patrón de
+  nombres distintos por endpoint de esta API). Si no quedó prendido, warning
+  con remedio manual — **no hay PUT que lo corrija**: el `UpdateOrderRequest`
+  no trae el campo. Los tres fallos de la verificación (create que lo ignora,
+  respuesta sin `ShippingDetails`, GET con 500) degradan a warning, nunca a
+  error de envío. **Verificado**: `tests/sc-push-tests.mjs` pasó de 22 a
+  **29 comprobaciones**, todas en verde (el server falso ganó la ruta de la
+  orden única y los tres modos de fallo). Las órdenes YA creadas con el flag
+  en false se corrigen a mano en SellerCloud (no hay endpoint para editarlo).
+
 ---
 
 
@@ -2095,7 +2241,7 @@ migración (`schema.sql` y `diagnostico-2026-08-12-*.sql` no cuentan).
 | `migration-2026-07-16-reassign-vendedora-mismatches.sql` | ✅ corrida | 2026-07-16, confirmado por el usuario (reasignó 21 clientes) |
 | `migration-2026-07-17-apply-price-list.sql` | ✅ corrida | confirmado por el usuario (2026-08-12); además el preflight de `require-price` exige `apply_price_list` y esa corrió |
 | `migration-2026-07-17-orders-edit-live-quotes.sql` | ✅ corrida | `get_quotes_live_pricing` → `P0001 no autorizado` |
-| `migration-2026-08-04-order-stock.sql` | ✅ corrida | `orders.stock_applied` existe |
+| ~~`migration-2026-08-04-order-stock.sql`~~ | ⛔ **NUNCA CORRIÓ — y ya NO correrla** (corrección 2026-08-26; la evidencia "`orders.stock_applied` existe" era de la 08-05, que también crea esa columna con `if not exists`) | verificado contra `pg_proc` con `supabase db query --linked`: `apply_order_stock` no existe, `update_order_status` es la versión 07-17 sin stock. Correrla ahora pisaría el trigger del 08-12 y el convert del 08-06. La reemplaza `migration-2026-08-26-fix-apply-order-stock-missing.sql` (punto 69) |
 | `migration-2026-08-04-shared-price-lists.sql` | ✅ corrida | el preflight de `superadmin` exige `price_list_owners` + helpers y esa corrió |
 | `migration-2026-08-05-superadmin.sql` | ✅ corrida | 2026-08-05, confirmado por el usuario; la pestaña 🔐 Superadmin funciona |
 | `migration-2026-08-05-order-capture.sql` | ✅ corrida | `order_failures` responde, `orders.request_id` existe, `recover_order_failure` existe |
@@ -2116,6 +2262,14 @@ la anon key dejó una sola pendiente confirmada
 (`migration-2026-08-12-hide-out-of-stock.sql`) y tres sin determinar; el usuario
 corrió la primera y confirmó las otras tres el mismo día. La única que sigue sin
 correr es `restrict-vendedora-luzmar`, y está bien así: quedó reemplazada.
+
+**⚠️ Corrección a ese cierre (2026-08-26):** ese sondeo dio UNA fila por
+corrida que no lo estaba — `migration-2026-08-04-order-stock.sql` (ver su fila
+tachada arriba y el punto 69). La lección para futuras auditorías: una columna
+`add column if not exists` que crean DOS migraciones no sirve de evidencia de
+ninguna de las dos; hay que sondear algo exclusivo de la migración (acá,
+`apply_order_stock` en `pg_proc`, o si la versión viva de `update_order_status`
+nombra el helper).
 
 La tabla vale hasta el 2026-08-12; la fila del 2026-08-13 es la única posterior y
 sigue pendiente (ver el aviso del principio del documento).
@@ -2234,7 +2388,7 @@ negro+dorado es idéntico en ambos modos).
 | `price_list_owners` | Dueñas de una lista de precio (2026-08-04, `migration-2026-08-04-shared-price-lists.sql` — **reemplaza** a la columna `price_lists.owner_vendedora_id` de 2026-07-09, que se dropeó). PK `(price_list_id, vendedora_id)`, así que una lista puede tener **varias** dueñas: sin filas = lista general (la usa cualquier vendedora), una fila = lista personal (comportamiento idéntico al de antes), varias = lista **compartida** (solo esas vendedoras la ven, y cada cliente queda con una de ellas). `is_primary` (índice único parcial: una sola por lista) marca la dueña por defecto — la que se asigna cuando un cliente entra a la lista con una vendedora que no es dueña. RLS: admin todo; una vendedora solo lee las filas de las listas que puede usar, y desde 2026-08-05 la escritura es **solo del superadmin** (antes era `admin_all`), desde la pestaña 🔐 Superadmin |
 | `clients` | Clientes con token único, lista asignada y `vendedora_id` (FK a `vendedores`). Desde la v2 del sync (2026-07-10): `sellercloud_id` (integer unique nullable, el General.ID de SellerCloud — llave del sync automático; null en clientes cargados a mano/Excel) y `price_list_id` pasó a ser **nullable** (los clientes nuevos del sync entran sin lista; un cliente sin lista ve catálogo vacío y no puede pedir hasta que se la asignen a mano) |
 | `vendedores` | Nombre + teléfono de cada vendedora (2026-07-06; antes texto libre en `clients`). Desde el rol vendedora (2026-07-06): `user_id` (FK a `auth.users`, nullable, único) + `login_email` (solo display) para vincular su login. `sellercloud_rep_id` (2026-08-18, integer nullable, `migration-2026-08-18-sellercloud-salesrep.sql`): ID de empleado en SellerCloud (Settings → Employees), viaja como `OrderDetails.SalesRepresentative` al mandar un pedido con "Enviar a SellerCloud"; editable inline en la pestaña Vendedoras; null = la orden entra sin Sales Rep, con aviso |
-| `products` | Catálogo de productos (`availability`: 'available' \| 'preorder' \| 'flash', este último desde 2026-07-08 — etiqueta "Flash Sale" del Excel de inventario, sin relación con la tabla `flash_sales`). `product_line` (2026-07-08, texto libre, nullable): tipo real del perfume desde `PRODUCT_CATEGORY` del export SellerCloud (`Perfume` / `Perfume - Arabes`), **distinto** de `category` que acá guarda la marca/Brand. `new_until` (2026-07-09, timestamptz nullable): mientras `now() < new_until` el producto lleva la etiqueta ✨ Nuevo en catálogo y admin; se setea automático (+10 días) al crear el producto y es editable en el formulario. `stock` (2026-07-14, int nullable, `migration-2026-07-14-inventory-stock.sql`): InventoryAvailableQTY de SellerCloud — **no** se expone en el catálogo del cliente (`get_catalog` no lo incluye), solo visible en el admin. Decide la disponibilidad en cada carga/sync (`>= 1` available, `0`/negativo preorder, respetando flash); NO toca `active`. null = "todavía no se sabe el stock" (distinto de 0 = sin stock). **Desde 2026-08-04 esa regla vive en un trigger de la tabla** (`products_availability_from_stock`, `migration-2026-08-04-order-stock.sql`) y no solo en cada camino de escritura: cualquier insert/update con `stock` no-null y `availability <> 'flash'` deja `availability` derivada del stock, venga del sync, del Excel, del bulk, del formulario, del descuento de un pedido atendido o de un request directo. Eso además tapó un agujero real: `apply_price_list` ponía `availability = 'available'` a todos los productos de un Excel de precios sin columna `Type`, con stock 0 incluido. El `stock` también **baja solo** al marcar un pedido Atendido (ver `apply_order_stock`) y es editable a mano en el formulario de la pestaña Productos. `deactivated_by_stock` (2026-08-12, boolean not null default false, `migration-2026-08-12-hide-out-of-stock.sql`): desde esa fecha el trigger no solo pone la etiqueta, también **despublica** — `stock <= 0` deja el producto en `preorder` **y** `active = false`, así que sale del catálogo (revierte a propósito media decisión del 2026-07-14: "stock 0 se muestra como pre-order, ocultarlo es manual"). La columna **no** es "está sin stock" (eso ya lo dice `stock`) sino "esta regla fue la que lo apagó", y es lo único que permite reactivarlo solo cuando entre stock sin resucitar de paso lo que apagó una persona ni la exclusión de no-catálogo (SKU `-SPECIAL`, beauty/electronics/support/packing/test), que tienen stock de sobra. Invariante: `true` = inactivo por falta de stock, vuelve solo con `stock >= 1`; `false` = si está inactivo lo apagó una persona y solo una persona lo reactiva. Un producto `flash` con stock 0 conserva la etiqueta 🔥 pero **también** se despublica (la etiqueta no publica nada). Quién borra la bandera a propósito, porque es decisión humana: el botón Desactivar (fila o selección) del panel, la columna `Activo` del Excel de productos, y el UPDATE de `apply_price_list` que desactiva lo que quedó fuera del archivo. `upc` (2026-07-14, text nullable, `migration-2026-07-14-product-upc.sql`): código de barras, dato interno del admin (**no** lo expone `get_catalog`), visible/editable en la pestaña Productos y buscable. **Desde 2026-08-13** (`migration-2026-08-13-exclude-box-skus.sql`) hay una segunda invariante de publicación, independiente del stock: un SKU terminado en `-SPECIAL` o `-BOX` (`is_noncatalog_sku`) queda `active = false` en todo insert/update, vía el trigger `products_enforce_noncatalog` — son variantes internas de SellerCloud (`-BOX` = el mismo perfume vendido por caja) y no se publican nunca; la única forma de vender uno es cambiarle el `sku` |
+| `products` | Catálogo de productos (`availability`: 'available' \| 'preorder' \| 'flash', este último desde 2026-07-08 — etiqueta "Flash Sale" del Excel de inventario, sin relación con la tabla `flash_sales`). `product_line` (2026-07-08, texto libre, nullable): tipo real del perfume desde `PRODUCT_CATEGORY` del export SellerCloud (`Perfume` / `Perfume - Arabes`), **distinto** de `category` que acá guarda la marca/Brand. `new_until` (2026-07-09, timestamptz nullable): mientras `now() < new_until` el producto lleva la etiqueta ✨ Nuevo en catálogo y admin; se setea automático al crear el producto (+35 días — 5 semanas — desde 2026-08-24, `migration-2026-08-24-new-tag-35-days.sql` + `NEW_TAG_DAYS`; antes +10) y es editable en el formulario. `stock` (2026-07-14, int nullable, `migration-2026-07-14-inventory-stock.sql`): InventoryAvailableQTY de SellerCloud — **no** se expone en el catálogo del cliente (`get_catalog` no lo incluye), solo visible en el admin. Decide la disponibilidad en cada carga/sync (`>= 1` available, `0`/negativo preorder, respetando flash); NO toca `active`. null = "todavía no se sabe el stock" (distinto de 0 = sin stock). **Desde 2026-08-04 esa regla vive en un trigger de la tabla** (`products_availability_from_stock`, `migration-2026-08-04-order-stock.sql`) y no solo en cada camino de escritura: cualquier insert/update con `stock` no-null y `availability <> 'flash'` deja `availability` derivada del stock, venga del sync, del Excel, del bulk, del formulario, del descuento de un pedido atendido o de un request directo. Eso además tapó un agujero real: `apply_price_list` ponía `availability = 'available'` a todos los productos de un Excel de precios sin columna `Type`, con stock 0 incluido. El `stock` también **baja solo** al marcar un pedido Atendido (ver `apply_order_stock`) y es editable a mano en el formulario de la pestaña Productos. `deactivated_by_stock` (2026-08-12, boolean not null default false, `migration-2026-08-12-hide-out-of-stock.sql`): desde esa fecha el trigger no solo pone la etiqueta, también **despublica** — `stock <= 0` deja el producto en `preorder` **y** `active = false`, así que sale del catálogo (revierte a propósito media decisión del 2026-07-14: "stock 0 se muestra como pre-order, ocultarlo es manual"). La columna **no** es "está sin stock" (eso ya lo dice `stock`) sino "esta regla fue la que lo apagó", y es lo único que permite reactivarlo solo cuando entre stock sin resucitar de paso lo que apagó una persona ni la exclusión de no-catálogo (SKU `-SPECIAL`, beauty/electronics/support/packing/test), que tienen stock de sobra. Invariante: `true` = inactivo por falta de stock, vuelve solo con `stock >= 1`; `false` = si está inactivo lo apagó una persona y solo una persona lo reactiva. Un producto `flash` con stock 0 conserva la etiqueta 🔥 pero **también** se despublica (la etiqueta no publica nada). Quién borra la bandera a propósito, porque es decisión humana: el botón Desactivar (fila o selección) del panel, la columna `Activo` del Excel de productos, y el UPDATE de `apply_price_list` que desactiva lo que quedó fuera del archivo. `upc` (2026-07-14, text nullable, `migration-2026-07-14-product-upc.sql`): código de barras, dato interno del admin (**no** lo expone `get_catalog`), visible/editable en la pestaña Productos y buscable. **Desde 2026-08-13** (`migration-2026-08-13-exclude-box-skus.sql`) hay una segunda invariante de publicación, independiente del stock: un SKU terminado en `-SPECIAL` o `-BOX` (`is_noncatalog_sku`) queda `active = false` en todo insert/update, vía el trigger `products_enforce_noncatalog` — son variantes internas de SellerCloud (`-BOX` = el mismo perfume vendido por caja) y no se publican nunca; la única forma de vender uno es cambiarle el `sku` |
 | `product_prices` | Precio por producto+lista (clave compuesta) |
 | `client_favorites` | **Favoritos del catálogo por cliente** (2026-08-20, `migration-2026-08-20-client-favorites.sql`): PK `(client_id, product_id)` + `created_at` (desde cuándo le interesa), FKs con cascade a clients y products. Se escribe SOLO vía la RPC `set_favorite` (por token, DEFINER — anon no tiene ni grant sobre la tabla y no hay policy de insert para nadie); lo lee `get_catalog` (`is_fav`) y, con RLS de solo lectura en forma InitPlan, el panel: admin todo, vendedora los de sus clientes (UI pendiente de que se pida). Tope de 500 por cliente aplicado en la RPC |
 | `product_sales_daily` | **Unidades pedidas por producto y día** (2026-08-20, `migration-2026-08-20-top-sellers.sql`): PK `(product_id, day)`, `units` bigint; FK a products con cascade. La mantiene el trigger `orders_track_product_sales` (AFTER insert/update/delete en orders, SECURITY DEFINER, jamás lanza): si la versión vieja de la fila contaba (`kind='order'` no cancelado) resta sus unidades, si la nueva cuenta las suma — una sola regla para alta/conversión/cancelar/reabrir/editar/borrar; cubetas por el día del pedido (`created_at`), anotaciones tipo SellerCloud salen gratis por el early-exit. La lee `top_seller_ids(days, limit)` para el ⭐ Más vendidos del catálogo (`get_catalog` marca `is_top` con el top 12 de 60 días). RLS sin policies + revoke, y `apply_product_sales`/`top_seller_ids` sin EXECUTE para los roles de la API (si fueran públicos, cualquiera con la anon key inflaría el ranking). Se reconstruye entera re-corriendo la migración (backfill = truncate + recálculo desde orders) |
@@ -2465,6 +2619,10 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
   solo lo llaman `update_order_status` y `convert_quote_to_order`, ambas
   SECURITY DEFINER del mismo dueño (mismo patrón que
   `compute_order_items`).
+- **En producción recién existe desde
+  `migration-2026-08-26-fix-apply-order-stock-missing.sql`** (la 08-04 nunca
+  corrió — ver el punto 69): hasta entonces convertir una cotización ya
+  Atendida fallaba con "does not exist" y "Marcar atendido" no descontaba.
 - `p_direction`: `-1` descuenta (pedido marcado Atendido), `1` devuelve
   (reabierto o cancelado). Cualquier otro valor → `raise exception`.
 - **Suma las cantidades por producto antes de tocar el stock**: un pedido
@@ -2775,8 +2933,9 @@ por qué no entró sin ir a los logs de la función.
   availability, image_url}`, upsert por `sku`. En updates, los campos
   opcionales solo pisan si vienen con dato (un export sin fotos no borra
   las URLs cargadas a mano); `new_until` no se toca en updates;
-  productos nuevos entran con `new_until = now() + 10 días`
-  (misma etiqueta ✨ Nuevo del alta manual). `availability` se normaliza
+  productos nuevos entran con `new_until = now() + 35 días`
+  (5 semanas desde 2026-08-24, `migration-2026-08-24-new-tag-35-days.sql`;
+  antes 10 — misma etiqueta ✨ Nuevo del alta manual). `availability` se normaliza
   a available/preorder/flash; valores desconocidos conservan el
   existente. Devuelve `{inserted, updated, skipped}`. **Desde 2026-07-13
   (`migration-2026-07-13-exclude-noncatalog.sql`)** salta (cuenta en
@@ -2869,6 +3028,13 @@ por qué no entró sin ir a los logs de la función.
 - `reassign_client`: cambia `clients.vendedora_id` (null = sin asignar). Si la lista del cliente **tiene dueñas** (ej. luzmar), el destino tiene que ser una de ellas — si no, `raise exception` (2026-08-04; antes rechazaba de plano cualquier cliente con lista personal, pero con una lista compartida repartir sus clientes entre las dueñas es justamente lo que hay que poder hacer; el trigger revertiría cualquier otro destino igual). Devuelve `{ok, from, to}`.
 - `delete_client`: borra el cliente. **Rechaza si tiene pedidos** (`orders.client_id`, FK RESTRICT sin cascade — borrarlo perdería el historial, y `orders` no guarda copia del nombre). Inserta la fila de auditoría ANTES del delete (snapshot). Devuelve `{ok}`.
 - Las lanza `ClientsAdmin.jsx` (select de vendedora por fila + botón Eliminar con confirmación inline); el mensaje de `raise exception` (en español) llega como `error.message` y se muestra en un banner. El **Registro de movimientos** (sección colapsable, solo admin) lee `admin_audit_log` directo (RLS `admin_read_audit`).
+
+### `update_client_info(p_client_id uuid, p_name text, p_phone text) → jsonb` (2026-08-25)
+- Edita nombre y teléfono de un cliente (`migration-2026-08-25-update-client-info.sql`). Mismo criterio que `update_client_price_list`: SECURITY DEFINER, admin edita cualquiera, **una vendedora solo sus propios clientes** (`vendedora_id = current_vendedora_id()`), y el cambio queda auditado sí o sí en `admin_audit_log` (acción `'update_client_info'`, detail `{from_name, to_name, from_phone, to_phone}`).
+- El teléfono se guarda **normalizado a solo dígitos** (igual que `cleanPhone` del frontend) y el nombre trimmeado. Valida: nombre no vacío, teléfono ≥ 7 dígitos.
+- **Duplicados por últimos 10 dígitos** (la clave del índice único parcial `clients_phone_normalized_key`): un cliente marcado `allow_shared_phone` se salta el chequeo (compartir con su par es lo legítimo); para el resto se compara contra **todos** los clientes, incluidos los marcados — a propósito más estricto que el índice (que ignora las filas marcadas en ambas puntas), porque un tercer cliente con el número del par rompería la deduplicación por teléfono del Excel; es la misma regla que ya aplica el alta manual. El handler de `unique_violation` atrapa la carrera y devuelve el mismo mensaje amigable.
+- **Guardar sin cambios es un no-op**: devuelve `{ok: true, changed: false}` sin escribir fila de auditoría.
+- Probada en cluster PG 18 desechable (10 casos: roles, normalización, no-op, duplicados en los 3 sabores de allow_shared_phone, trigger de clients intacto, grants). La lanza `ClientsAdmin.jsx` (botón Editar por fila).
 
 ---
 
@@ -3093,6 +3259,24 @@ por qué no entró sin ir a los logs de la función.
   la policy `vendedora_insert_own_clients` (RLS), no la UI.
 - Teléfono duplicado (constraint `clients.phone` único) muestra un error
   amigable (`phoneInUse` en `i18n.jsx`) en vez del mensaje crudo de Postgres.
+
+### Edición de nombre/teléfono del cliente (2026-08-25)
+- Botón **Editar** por fila (visible para admin y vendedora — la vendedora
+  solo ve sus propios clientes, y la RPC igual lo valida server-side):
+  convierte las celdas Nombre y Tel en inputs, con Guardar/Cancelar en la
+  columna de acciones (Enter guarda, Escape cancela, mismo gesto que el
+  teléfono editable de Vendedoras). Un solo cliente en edición a la vez.
+- Guarda vía RPC `update_client_info` (ver sección RPC): queda auditado en
+  `admin_audit_log` y aparece en el Registro de movimientos como
+  "Edición de cliente" (el detalle muestra solo lo que cambió).
+- Guardar se deshabilita con nombre vacío o teléfono de menos de 7 dígitos;
+  el duplicado por últimos 10 dígitos se chequea client-side primero
+  (mensaje `phoneInUse` en el idioma del panel) y la RPC lo repite
+  server-side.
+- El motivo: hasta ahora un dato mal cargado solo se corregía re-subiendo
+  un Excel (que matchea por teléfono — un **teléfono** mal cargado ni
+  siquiera se podía corregir por ahí: creaba un duplicado) o entrando a la
+  base a mano.
 
 ### Vendedoras (pestaña Vendedoras, `/admin/vendedoras`)
 - Alta manual: nombre (obligatorio) + teléfono (opcional, se puede
@@ -3389,3 +3573,5 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 65. **⭐ Más vendidos por línea + Mujer/Hombre/Sets + ❤️ Favoritos** (2026-08-20, cuarta tanda del día, a pedido del usuario) — `migration-2026-08-20-top-by-line.sql` (requiere la de top-sellers) + Catalog/FilterBar/ProductCard + `src/utils/favorites.js`. **Los ⭐ por línea**: el top global puede quedar dominado por la línea que más vende; `is_top_line` marca el top 12 DE cada `product_line` (`top_seller_ids_by_line`, `row_number()` particionado sobre las mismas cubetas de `product_sales_daily`; línea null no rankea) y los chips "árabes"/"diseñador" lo cruzan con `product_line` en el frontend — la base no queda casada con los nombres de las dos líneas de hoy; los tres ⭐ son excluyentes entre sí (un `topFilter`). **Mujer/Hombre/Sets sin migración**: no hay columna de género — el dato vive EN EL NOMBRE del export y la cobertura medida en producción es casi total (330 Men + 355 Women + 185 Unisex de 875 activos; 95 con "Set"), así que se deriva en `Catalog.jsx` con regex `\b` ("Women" no matchea "men") una sola vez por carga; **Mujer y Hombre incluyen unisex a propósito** (el chip responde "¿qué le puedo vender a…?"); excluyentes entre sí. **Favoritos**: localStorage por dispositivo y POR CLIENTE (`zimaxx_favs_<tokenHint>` — sin la clave por token, los corazones de A aparecerían en el catálogo de B al compartir teléfono); larga vida a propósito (no se borran al pedir, son "lo que siempre pido"); corazón en la esquina de la imagen con handler memoizado (ProductCard sigue memo) y chip "❤️ Favoritos (N)" que recién aparece con el primero; jamás lanzan, tope 500; limitación asumida: no viajan entre dispositivos (el camino futuro es tabla + RPC por token, como create_order). "Todos los estados" resetea ⭐+segmento+favoritos. Verificado: asserts SQL (ranking y límite POR línea, global intacto encabezado por un sin-línea, ambas ramas del catálogo, API cerrada, regresión top-sellers) y 21 aserciones Playwright (incluidas persistencia al recargar, aislamiento entre clientes y degradación sin `is_top_line`), más carrito (22) y top-sellers (15) re-corridas en verde.
 
 66. **Los ❤️ favoritos pasan a la base** (2026-08-20, quinta tanda del día, a pedido del usuario: "pq no hacemos una tabla y rpc por token mejor? y asi queda un registro de los favoritos de cada uno de los clientes" — pedido ANTES de deployar la v1 localStorage de la cuarta tanda, así que no hubo nada que migrar del lado del dispositivo) — `migration-2026-08-20-client-favorites.sql` (la cadena del catálogo queda 5 top-sellers → 6 top-by-line → 7 favorites, cada preflight corta si falta la anterior). El corazón deja de ser un dato del teléfono y pasa a ser **un dato del negocio**: `client_favorites (client_id, product_id, created_at)`, escrito SOLO vía `set_favorite(p_token, p_product_id, p_fav)` — por token como `create_order`, idempotente, **nunca lanza** (token inválido / producto apagado / tope de 500 → null; la RPC es pública por diseño y esos tres son el anti-abuso), ejecutable por `anon`; la tabla no tiene policy de escritura para nadie, y el panel la LEE con RLS en forma InitPlan (admin todo, vendedora sus clientes; la UI del panel queda para cuando se pida — el registro ya está consultable). `get_catalog` suma `is_fav` en las dos ramas (una resolución por llamada). El frontend queda **servidor-primero con caché**: localStorage pinta los corazones al instante y sirve de fallback si la migración no corrió (modo v1); al llegar `get_catalog`, el servidor pisa lo local y reescribe el caché; el toggle es optimista y `pushFavorite` viaja fire-and-forget con keepalive + 1 reintento — si aún así no llega, al recargar manda el servidor (pérdida asumida: un toggle hecho sin señal puede revertirse, preferible a bloquear el corazón esperando la red). Verificado: asserts SQL (idempotencia, basura → null sin filas, `is_fav` por rama con cada cliente viendo lo suyo, anon puede la RPC pero no la tabla, authenticated no inserta directo, RLS admin/vendedora-propia/vendedora-sin-clientes, forma InitPlan verificada en pg_policies, tope 500 con desmarcar vivo, cascade, migración ×2) y 26 aserciones Playwright (las 21 de la cuarta tanda + siembra desde `is_fav` sin localStorage previo, RPC capturada con token/producto/estado, y el servidor pisando lo optimista al recargar), más carrito y top-sellers re-corridas.
+
+67. **La etiqueta ✨ Nuevo pasa de ~10 días a 5 semanas** (2026-08-24, a pedido del usuario: "extiéndelo a que dure 1 mes/5 semanas aprox" — el valor original de 2026-07-09 salió de "~1 semana, quizás un poco más"). Se eligió 35 días (5 semanas exactas). La duración vivía en DOS lugares que tienen que coincidir: (a) `NEW_TAG_DAYS` en `ProductsAdmin.jsx` (alta manual, alta por Excel de productos y el botón ✨ Marcar del bloque — el frontend calcula el ISO y lo manda), cambiada a 35; (b) el INSERT de `sync_upsert_products` (`now() + interval '10 days'` para los productos nuevos que trae el sync de n8n), reescrito por `migration-2026-08-24-new-tag-35-days.sql` — idéntica a la versión viva de `migration-2026-07-14-product-upc.sql` cambiando solo el intervalo (la de exclude-box-skus del 2026-08-13 no tocaba esta función). **Segunda iteración el mismo día, a pedido del usuario ("si extiende los que ya tienen la etiqueta")**: la migración suma un backfill que extiende +25 días (la diferencia 10 → 35) todo `new_until` en el futuro, venga del sync, del Excel, del alta manual o del ✨ en bloque — las expiradas no reviven, las null no se tocan. Como un UPDATE así no es idempotente por naturaleza, el backfill va ANTES del `create or replace` y usa el cuerpo vivo de `sync_upsert_products` como marca: si ya dice `35 days`, la migración ya corrió y se salta (re-correrla no suma 25 dos veces); el NOTICE reporta cuántas extendió. Frontend y migración son independientes entre sí (cada lado degrada a "sigue poniendo 10 días" sin romper nada). **Verificado de verdad**: la migración probada contra un PostgreSQL 18 desechable (arnés con la tabla `products` mínima + `sync_is_noncatalog_product` verbatim del exclude-box-skus + roles de Supabase + la versión REAL de 10 días de product-upc como función viva, corriendo la migración DOS veces): producto nuevo entra con `new_until ≈ now() + 35 días`, el re-upsert del mismo SKU NO lo pisa, un `-BOX` se sigue salteando, contadores `{inserted, updated, skipped}` correctos, EXECUTE solo para `service_role`; el backfill extendió exactamente las 2 vigentes sembradas (+5 días → +30, +100 → +125), no revivió la expirada ni tocó la null, y la segunda corrida completa dijo "backfill saltado" sin mover ninguna fecha — más `npm run build` limpio.
