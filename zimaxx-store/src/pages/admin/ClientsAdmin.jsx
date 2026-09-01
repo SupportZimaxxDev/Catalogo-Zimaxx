@@ -12,6 +12,7 @@ import { SearchIcon, UploadZone, inputCls, useInfiniteRows } from './ui'
 const COLS = {
   name: ['nombre', 'name', 'cliente', 'client'],
   phone: ['telefono', 'phone', 'tel', 'celular', 'whatsapp'],
+  email: ['email', 'correo', 'e-mail', 'mail', 'correo electronico'],
   list: ['lista de precio', 'lista de precios', 'lista', 'price list', 'pricelist'],
   vendedora: ['vendedora', 'vendedor', 'sales rep', 'rep', 'asesora'],
   vendedoraPhone: [
@@ -53,6 +54,14 @@ function resolvePhone(row) {
 
 function resolveVendedora(row) {
   return pick(row, COLS.vendedora) || row.salesman || undefined
+}
+
+// Email opcional del archivo (2026-08-31). Devuelve undefined si la columna
+// no viene o el valor no parece un email — undefined significa "no tocar lo
+// guardado": re-subir un Excel viejo sin columna de correo no borra nada.
+function resolveEmail(row) {
+  const raw = String(pick(row, COLS.email) ?? '').trim().toLowerCase()
+  return raw && EMAIL_RE.test(raw) ? raw : undefined
 }
 
 // Cuentas de prueba de QA/integraciones coladas en el export real
@@ -121,7 +130,12 @@ const LIST_CODE_ALIASES = {
   special: 'special',
 }
 
-const EMPTY_CLIENT = { name: '', phone: '', price_list_id: '', vendedora_id: '' }
+const EMPTY_CLIENT = { name: '', phone: '', email: '', price_list_id: '', vendedora_id: '' }
+
+// Chequeo laxo de email (algo@algo.algo): atajar el typo obvio sin rechazar
+// correos raros pero reales. La RPC update_client_info aplica la misma regla
+// server-side. El email es opcional en todos los forms — vacío = sin correo.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 // Clave de match para deduplicar por teléfono (2026-07-15, bug real
 // detectado por el usuario: el mismo cliente quedó duplicado porque un
@@ -206,11 +220,17 @@ export default function ClientsAdmin() {
   // cambio pendiente a la vez, { clientId, listId } | null.
   const [pendingList, setPendingList] = useState(null)
 
-  // Edición de nombre/teléfono (2026-08-25): un solo cliente en edición a
-  // la vez, { clientId, name, phone } | null. Vía RPC update_client_info,
-  // mismo criterio que update_client_price_list: admin edita cualquiera,
-  // una vendedora solo los suyos (que es todo lo que ve), y el cambio
-  // queda auditado en admin_audit_log sí o sí.
+  // Edición de nombre/teléfono (2026-08-25) y SellerCloud ID (2026-08-31):
+  // un solo cliente en edición a la vez, { clientId, name, phone, scid } |
+  // null. Nombre/teléfono van por la RPC update_client_info (admin edita
+  // cualquiera, una vendedora solo los suyos) — la RPC exige p_email y para
+  // ella vacío = borrar, así que se le reenvía el email guardado tal cual:
+  // la columna Email se quitó de la tabla el 2026-09-01 (0 de 2755 clientes
+  // con correo, no había nada que mostrar) pero clients.email sigue en la
+  // base y lo llenan el alta, el Excel y el sync. El vínculo con SellerCloud
+  // va aparte por set_client_sellercloud_id (SOLO ADMIN: un ID equivocado
+  // manda los pedidos al cliente equivocado allá — el input ni se muestra a
+  // la vendedora). Todo queda auditado en admin_audit_log sí o sí.
   const [editForm, setEditForm] = useState(null)
   const [editBusy, setEditBusy] = useState(false)
 
@@ -263,9 +283,14 @@ export default function ClientsAdmin() {
       if (listFilter && c.price_list_id !== listFilter) return false
       if (repFilter && c.vendedora_id !== repFilter) return false
       if (terms.length === 0) return true
+      // El email entra en la búsqueda por términos (2026-08-31) y el ID de
+      // SellerCloud en la búsqueda por dígitos — así "¿de quién es la orden
+      // del cliente 51234 en SellerCloud?" se responde desde acá.
       return (
-        matchesTerms(terms, c.name, c.vendedores?.name) ||
-        (qDigits && cleanPhone(c.phone).includes(qDigits))
+        matchesTerms(terms, c.name, c.vendedores?.name, c.email) ||
+        (qDigits &&
+          (cleanPhone(c.phone).includes(qDigits) ||
+            String(c.sellercloud_id ?? '').includes(qDigits)))
       )
     })
   }, [clients, query, listFilter, repFilter])
@@ -377,6 +402,10 @@ export default function ClientsAdmin() {
         const forcedOwner = ownerFor(listId, vendedoraId)
         if (forcedOwner !== undefined) vendedoraId = forcedOwner
 
+        // Igual que vendedora_id: solo se toca si el archivo trae el dato —
+        // re-subir un export sin columna de correo no borra el guardado.
+        const email = resolveEmail(row)
+
         const existing = byPhone.get(phoneKey(phone))
         if (existing) {
           const { error } = await supabase
@@ -385,6 +414,7 @@ export default function ClientsAdmin() {
               name,
               price_list_id: listId,
               ...(vendedoraId !== undefined ? { vendedora_id: vendedoraId } : {}),
+              ...(email !== undefined ? { email } : {}),
             })
             .eq('id', existing.id)
           if (error) throw error
@@ -395,6 +425,7 @@ export default function ClientsAdmin() {
             .insert({
               name,
               phone,
+              email: email ?? null,
               token: generateToken(),
               price_list_id: listId,
               vendedora_id: vendedoraId ?? null,
@@ -429,7 +460,12 @@ export default function ClientsAdmin() {
     setNewClientError('')
     const name = newClientForm.name.trim()
     const phone = cleanPhone(newClientForm.phone)
+    const email = newClientForm.email.trim().toLowerCase()
     if (!name || phone.length < 7 || !newClientForm.price_list_id) return
+    if (email && !EMAIL_RE.test(email)) {
+      setNewClientError(t('invalidEmail'))
+      return
+    }
     // El unique constraint de la base compara el string completo: no
     // pesca un duplicado si el existente está guardado con código de
     // país y este nuevo no (o viceversa). Se chequea acá antes de
@@ -447,6 +483,7 @@ export default function ClientsAdmin() {
     const { error } = await supabase.from('clients').insert({
       name,
       phone,
+      email: email || null,
       token: generateToken(),
       price_list_id: newClientForm.price_list_id,
       vendedora_id: vendedoraId ?? null,
@@ -556,7 +593,12 @@ export default function ClientsAdmin() {
 
   const startEdit = (client) => {
     setActionError('')
-    setEditForm({ clientId: client.id, name: client.name, phone: client.phone })
+    setEditForm({
+      clientId: client.id,
+      name: client.name,
+      phone: client.phone,
+      scid: client.sellercloud_id == null ? '' : String(client.sellercloud_id),
+    })
   }
 
   // Enter guarda, Escape cancela — mismo gesto que el teléfono editable
@@ -568,10 +610,10 @@ export default function ClientsAdmin() {
 
   // El botón Guardar ya se deshabilita con datos inválidos; las
   // validaciones de acá abajo las repite la RPC server-side (con los
-  // mensajes en español que muestra el banner). El duplicado se chequea
-  // antes por los últimos 10 dígitos — misma regla que el índice único de
-  // la base y que el alta (phoneKey) — para dar el mensaje amigable en el
-  // idioma del panel en vez del error crudo.
+  // mensajes en español que muestra el banner). Los duplicados se chequean
+  // antes — teléfono por los últimos 10 dígitos (misma regla que el índice
+  // único de la base y que el alta, phoneKey) y SellerCloud ID exacto — para
+  // dar el mensaje amigable en el idioma del panel en vez del error crudo.
   const saveEdit = async () => {
     setActionError('')
     const client = clients.find((c) => c.id === editForm.clientId)
@@ -585,20 +627,60 @@ export default function ClientsAdmin() {
       setActionError(t('phoneInUse'))
       return
     }
+    // Vínculo SellerCloud: solo admin (la vendedora ni ve el input, así que
+    // para ella `scidChanged` es siempre false y no se llama a la RPC).
+    const scid = editForm.scid.trim() === '' ? null : Number(editForm.scid)
+    const scidChanged = isAdmin && scid !== (client.sellercloud_id ?? null)
+    if (scidChanged && scid != null && clients.some((c) => c.id !== client.id && c.sellercloud_id === scid)) {
+      setActionError(t('sellercloudIdInUse'))
+      return
+    }
     setEditBusy(true)
     const { error } = await supabase.rpc('update_client_info', {
       p_client_id: client.id,
       p_name: name,
       p_phone: phone,
+      // Sin input de email en la tabla: se reenvía el guardado tal cual —
+      // omitirlo (o mandar null teniendo correo) se lo borraría al cliente.
+      p_email: client.email ?? null,
     })
-    setEditBusy(false)
     if (error) {
+      setEditBusy(false)
       setActionError(error.message)
       return
     }
+    if (scidChanged) {
+      const { error: scidError } = await supabase.rpc('set_client_sellercloud_id', {
+        p_client_id: client.id,
+        p_sellercloud_id: scid,
+      })
+      if (scidError) {
+        // Nombre/teléfono YA quedaron guardados: se reflejan igual, y la
+        // edición queda abierta con el error del vínculo en el banner.
+        setEditBusy(false)
+        setClients((prev) =>
+          prev.map((c) => (c.id === client.id ? { ...c, name, phone } : c))
+        )
+        setActionError(scidError.message)
+        return
+      }
+    }
+    setEditBusy(false)
     // Reflejar el cambio sin recargar todo (mismo criterio que updateList):
-    // la RPC guarda exactamente esto (nombre trimmeado, teléfono en dígitos).
-    setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, name, phone } : c)))
+    // las RPC guardan exactamente esto (nombre trimmeado, teléfono en
+    // dígitos).
+    setClients((prev) =>
+      prev.map((c) =>
+        c.id === client.id
+          ? {
+              ...c,
+              name,
+              phone,
+              ...(scidChanged ? { sellercloud_id: scid } : {}),
+            }
+          : c
+      )
+    )
     setEditForm(null)
   }
 
@@ -682,6 +764,13 @@ export default function ClientsAdmin() {
             placeholder={t('phone')}
             value={newClientForm.phone}
             onChange={(e) => setNewClientForm({ ...newClientForm, phone: e.target.value })}
+            className={inputCls}
+          />
+          <input
+            type="email"
+            placeholder={t('emailOptional')}
+            value={newClientForm.email}
+            onChange={(e) => setNewClientForm({ ...newClientForm, email: e.target.value })}
             className={inputCls}
           />
           <select
@@ -842,6 +931,7 @@ export default function ClientsAdmin() {
             <tr className="border-b border-line text-left text-[11px] uppercase tracking-wider text-primary/45">
               <th className="p-3">{t('name')}</th>
               <th className="p-3">Tel</th>
+              <th className="p-3">SellerCloud</th>
               <th className="p-3">Lista</th>
               <th className="p-3">Vendedora</th>
               <th className="p-3" />
@@ -874,6 +964,27 @@ export default function ClientsAdmin() {
                     />
                   ) : (
                     c.phone
+                  )}
+                </td>
+                {/* Vínculo SellerCloud con columna propia (2026-09-01,
+                    reemplazó a la de Email, que nunca tuvo datos): un cliente
+                    sin ID no puede mandar pedidos allá. Editable solo por
+                    admin — set_client_sellercloud_id igual lo exige
+                    server-side. Vacío = quitar el vínculo. */}
+                <td className="p-3 font-mono text-xs text-primary/60">
+                  {editForm?.clientId === c.id && isAdmin ? (
+                    <input
+                      inputMode="numeric"
+                      placeholder="SellerCloud ID"
+                      value={editForm.scid}
+                      onChange={(e) =>
+                        setEditForm({ ...editForm, scid: e.target.value.replace(/\D/g, '') })
+                      }
+                      onKeyDown={editKeys}
+                      className="w-32 rounded-lg border border-secondary/60 bg-surface px-2 py-1 font-mono text-xs outline-none transition-colors focus:border-secondary"
+                    />
+                  ) : (
+                    c.sellercloud_id ?? <span className="text-primary/30">—</span>
                   )}
                 </td>
                 <td className="p-3">
@@ -956,7 +1067,9 @@ export default function ClientsAdmin() {
                         <button
                           onClick={saveEdit}
                           disabled={
-                            editBusy || !editForm.name.trim() || cleanPhone(editForm.phone).length < 7
+                            editBusy ||
+                            !editForm.name.trim() ||
+                            cleanPhone(editForm.phone).length < 7
                           }
                           className="rounded-full bg-secondary px-3.5 py-1.5 text-xs font-bold text-ink transition-colors hover:bg-secondary-dark disabled:opacity-50"
                         >

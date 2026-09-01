@@ -90,6 +90,18 @@ create table if not exists public.clients (
 alter table public.clients
   add column if not exists vendedora_id uuid references public.vendedores (id);
 
+-- Email del cliente (2026-08-31,
+-- migration-2026-08-31-client-email-sellercloud-id.sql): copia para VERLO
+-- desde la lista de Clientes. Para el push a SellerCloud NO se usa — la Edge
+-- Function sigue leyendo el email de allá al momento de enviar. Se llena por
+-- el sync de n8n (si el workflow manda `email`), la edición manual
+-- (update_client_info) o el alta manual del panel. Nullable y sin unique.
+-- Ojo: otras dos columnas de `clients` viven solo en migraciones y no acá:
+-- `sellercloud_id` (migration-2026-07-10-sellercloud-sync-v2.sql) y
+-- `allow_shared_phone` (migration-2026-07-15-fix-duplicate-client-phones.sql).
+alter table public.clients
+  add column if not exists email text;
+
 create index if not exists clients_token_idx on public.clients (token);
 
 -- Migración: 'vendedora'/'vendedora_phone' eran texto libre repetido en
@@ -852,25 +864,38 @@ revoke execute on function public.get_my_role() from public, anon;
 grant execute on function public.get_my_role() to authenticated;
 
 -- ---------- RPC: update_client_info ----------
--- Editar nombre y teléfono de un cliente (2026-08-25,
--- migration-2026-08-25-update-client-info.sql). Mismo criterio que
+-- Editar nombre, teléfono y email de un cliente (2026-08-25 nombre/teléfono,
+-- migration-2026-08-25-update-client-info.sql; 2026-08-31 email,
+-- migration-2026-08-31-client-email-sellercloud-id.sql). Mismo criterio que
 -- update_client_price_list: admin edita cualquiera, una vendedora solo
 -- sus propios clientes, y el cambio queda auditado sí o sí en
 -- admin_audit_log. El teléfono se guarda normalizado (solo dígitos) y el
 -- duplicado se chequea por últimos 10 dígitos — la misma regla que el
 -- índice único parcial clients_phone_normalized_key, replicada acá solo
 -- para dar un mensaje claro (el índice sigue siendo la garantía real).
-create or replace function public.update_client_info(p_client_id uuid, p_name text, p_phone text)
+-- El drop de la firma vieja de 3 parámetros importa: dos overloads de la
+-- misma RPC rompen PostgREST (PGRST203).
+drop function if exists public.update_client_info(uuid, text, text);
+
+create or replace function public.update_client_info(
+  p_client_id uuid,
+  p_name text,
+  p_phone text,
+  p_email text default null
+)
 returns jsonb
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
-  v_client public.clients%rowtype;
-  v_name   text := btrim(coalesce(p_name, ''));
-  v_phone  text := regexp_replace(coalesce(p_phone, ''), '\D', '', 'g');
-  v_email  text;
+  v_client    public.clients%rowtype;
+  v_name      text := btrim(coalesce(p_name, ''));
+  v_phone     text := regexp_replace(coalesce(p_phone, ''), '\D', '', 'g');
+  -- Email en minúsculas (es case-insensitive en la práctica y así los
+  -- duplicados visuales no dependen de cómo se tipeó). Vacío → null.
+  v_new_email text := nullif(lower(btrim(coalesce(p_email, ''))), '');
+  v_email     text;
 begin
   select * into v_client from public.clients where id = p_client_id;
   if not found then
@@ -889,10 +914,16 @@ begin
   if length(v_phone) < 7 then
     raise exception 'el teléfono tiene que tener al menos 7 dígitos';
   end if;
+  -- Laxa a propósito (algo@algo.algo): atajar el typo obvio sin rechazar
+  -- correos raros pero reales. La misma regla que el form del panel.
+  if v_new_email is not null and v_new_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then
+    raise exception 'el email no tiene un formato válido';
+  end if;
 
   -- Sin cambios reales: no ensuciar la auditoría con una fila que no
   -- cambió nada (el guardado repetido del mismo valor es un no-op).
-  if v_name = v_client.name and v_phone = v_client.phone then
+  if v_name = v_client.name and v_phone = v_client.phone
+     and v_new_email is not distinct from v_client.email then
     return jsonb_build_object('ok', true, 'changed', false);
   end if;
 
@@ -914,7 +945,9 @@ begin
   select email into v_email from auth.users where id = auth.uid();
 
   begin
-    update public.clients set name = v_name, phone = v_phone where id = p_client_id;
+    update public.clients
+      set name = v_name, phone = v_phone, email = v_new_email
+      where id = p_client_id;
   exception when unique_violation then
     raise exception 'ya existe otro cliente con ese teléfono';
   end;
@@ -927,15 +960,93 @@ begin
        'from_name',  v_client.name,
        'to_name',    v_name,
        'from_phone', v_client.phone,
-       'to_phone',   v_phone
+       'to_phone',   v_phone,
+       'from_email', v_client.email,
+       'to_email',   v_new_email
      ));
 
   return jsonb_build_object('ok', true, 'changed', true);
 end;
 $$;
 
-revoke execute on function public.update_client_info(uuid, text, text) from public;
-grant execute on function public.update_client_info(uuid, text, text) to authenticated;
+revoke execute on function public.update_client_info(uuid, text, text, text) from public;
+grant execute on function public.update_client_info(uuid, text, text, text) to authenticated;
+
+-- ---------- RPC: set_client_sellercloud_id ----------
+-- Asignar/cambiar/quitar el vínculo del cliente con SellerCloud (2026-08-31,
+-- migration-2026-08-31-client-email-sellercloud-id.sql). SOLO ADMIN, a
+-- diferencia de update_client_info: un ID equivocado manda los pedidos AL
+-- CLIENTE EQUIVOCADO en SellerCloud — es del nivel de reassign/delete, no de
+-- corregir un teléfono. La columna `clients.sellercloud_id` (y su índice
+-- único) viene de migration-2026-07-10-sellercloud-sync-v2.sql y hasta el
+-- 2026-08-31 solo la escribía el sync de n8n; sin este vínculo, el botón
+-- "Enviar a SellerCloud" rechaza los pedidos del cliente. p_sellercloud_id
+-- null = quitar el vínculo. El chequeo de duplicado se replica solo para dar
+-- un mensaje que diga QUIÉN lo tiene; la garantía real es el índice único, y
+-- el handler de unique_violation atrapa la carrera.
+create or replace function public.set_client_sellercloud_id(
+  p_client_id uuid,
+  p_sellercloud_id integer
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_client public.clients%rowtype;
+  v_owner  text;
+  v_email  text;
+begin
+  if not public.is_admin() then
+    raise exception 'solo un admin puede cambiar el vínculo con SellerCloud';
+  end if;
+
+  select * into v_client from public.clients where id = p_client_id;
+  if not found then
+    raise exception 'cliente no encontrado';
+  end if;
+
+  if p_sellercloud_id is not null and p_sellercloud_id <= 0 then
+    raise exception 'el ID de SellerCloud tiene que ser un entero positivo';
+  end if;
+
+  if p_sellercloud_id is not distinct from v_client.sellercloud_id then
+    return jsonb_build_object('ok', true, 'changed', false);
+  end if;
+
+  if p_sellercloud_id is not null then
+    select name into v_owner
+    from public.clients
+    where sellercloud_id = p_sellercloud_id and id <> p_client_id;
+    if v_owner is not null then
+      raise exception 'ese ID de SellerCloud ya pertenece a otro cliente: %', v_owner;
+    end if;
+  end if;
+
+  select email into v_email from auth.users where id = auth.uid();
+
+  begin
+    update public.clients set sellercloud_id = p_sellercloud_id where id = p_client_id;
+  exception when unique_violation then
+    raise exception 'ese ID de SellerCloud ya pertenece a otro cliente';
+  end;
+
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, client_id, client_name, detail)
+  values
+    ('set_client_sellercloud_id', auth.uid(), v_email, p_client_id, v_client.name,
+     jsonb_build_object(
+       'from_sellercloud_id', v_client.sellercloud_id,
+       'to_sellercloud_id',   p_sellercloud_id
+     ));
+
+  return jsonb_build_object('ok', true, 'changed', true);
+end;
+$$;
+
+revoke execute on function public.set_client_sellercloud_id(uuid, integer) from public;
+grant execute on function public.set_client_sellercloud_id(uuid, integer) to authenticated;
 
 -- ---------- RPC: apply_price_list ----------
 -- Carga de listas de precio, una lista por archivo (2026-07-17,
@@ -1151,9 +1262,9 @@ alter table public.admin_audit_log   enable row level security;
 -- admin_audit_log: solo lectura para admin. Sin policy de insert/update/
 -- delete para nadie — es inmutable para cualquier usuario autenticado, solo
 -- la escriben las funciones SECURITY DEFINER (reassign_client/delete_client/
--- update_client_price_list/update_client_info/update_order_items/
--- update_order_status/convert_quote_to_order). Va acá y no junto a la tabla porque la policy
--- necesita que `is_admin()` ya exista.
+-- update_client_price_list/update_client_info/set_client_sellercloud_id/
+-- update_order_items/update_order_status/convert_quote_to_order). Va acá y
+-- no junto a la tabla porque la policy necesita que `is_admin()` ya exista.
 drop policy if exists admin_read_audit on public.admin_audit_log;
 create policy admin_read_audit on public.admin_audit_log
   for select to authenticated

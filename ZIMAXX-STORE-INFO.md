@@ -31,7 +31,10 @@
 > el select viejo si `units` no existe — 42703). La Edge Function
 > `sellercloud-push-order` ganó logs de push: **redesplegada el 2026-08-28**
 > junto con el fix del punto 70 ("Allow shipping without payment" en true en
-> el create) — ese redeploy activó también estos logs de push.
+> el create) — ese redeploy activó también estos logs de push. **OJO
+> 2026-08-31: volvió a cambiar** (partido del nombre con `LastName` vacío,
+> punto 71) **y ese cambio está SIN desplegar** hasta el próximo
+> `supabase functions deploy sellercloud-push-order` (desde `zimaxx-store/`).
 > Ver puntos 62 y 63 y las secciones "Logs del sistema" y "Escalabilidad" del
 > README.
 >
@@ -79,7 +82,45 @@
 > estado real (2026-08-12)" — la lista de pendientes de este doc ya se equivocó
 > en las dos direcciones antes.
 >
-> Creado: 2026-07-02. Última actualización: 2026-08-28 (**las órdenes
+> Creado: 2026-07-02. Última actualización: 2026-09-01 (**la migración de la
+> 08-31 ya corrió en producción** — verificado sondeando: `update_client_info`
+> vive con la firma de 4 parámetros y `set_client_sellercloud_id` está en
+> `pg_proc`. La columna Email del panel se ve toda en "—" porque **0 de 2755
+> clientes tienen correo cargado** — no es un bug: la columna arranca vacía y
+> nada la llena sola, ver punto 71. El redeploy de `sellercloud-push-order`
+> SIGUE pendiente: la versión viva es la v12 del 2026-08-28, anterior al
+> cambio de `customerDetails`. Y a pedido del usuario, la **columna Email se
+> quitó de la tabla de Clientes** — sin correos cargados no mostraba nada — y
+> el vínculo SellerCloud pasó a columna propia; `clients.email` sigue en la
+> base, la edición por fila reenvía el email guardado tal cual y el buscador
+> sigue matcheando por correo. Verificado: build de Vite + 13 aserciones
+> Playwright con Supabase interceptado.)
+>
+> Del 2026-08-31 (**email del cliente
+> visible en el panel + vínculo SellerCloud asignable a mano + el push ya no
+> depende de que el nombre esté perfecto allá**, punto 71, a pedido del
+> usuario. Tres piezas: (1) columna `clients.email` — copia para VERLA en
+> Clientes, el push sigue leyendo el de SellerCloud — que llenan la edición
+> manual, el alta, el Excel (columna email/correo, solo si viene) y el sync
+> **si el workflow de n8n empieza a mandar `email`** (sin ese cambio en n8n
+> nada se llena ni se borra); (2) `update_client_info` gana `p_email` y RPC
+> nueva `set_client_sellercloud_id` SOLO ADMIN (input "SellerCloud ID" al
+> editar la fila; sin vínculo, "Enviar a SellerCloud" rechaza los pedidos del
+> cliente y hasta hoy solo el sync podía vincular), todo en
+> `migration-2026-08-31-client-email-sellercloud-id.sql` **ya corrida
+> (verificado 2026-09-01)** — ojo: dropea la firma de 3 parámetros de
+> `update_client_info`
+> (dos overloads = PGRST203) y trae preflight; (3) `customerDetails` en
+> `sellercloud.ts` parte el nombre si `LastName` viene vacío allá (última
+> palabra → LastName, resto → FirstName, solo para el payload, nada se
+> escribe de vuelta) — **la Edge Function quedó con cambios sin desplegar:
+> redesplegar `sellercloud-push-order`** (desde `zimaxx-store/`). Verificado:
+> suite del push en **35 comprobaciones** en verde, build de Vite, 9 bloques
+> de assert SQL en cluster PG 18 desechable (partiendo de schema.sql + 07-10v2
+> + 07-15 + 08-25 reales; el test negativo del preflight pescó un bug real —
+> `text[] || literal` parseaba el texto como array literal) y 18 aserciones
+> Playwright de UI en los dos roles).
+> Antes: 2026-08-28 (**las órdenes
 > entraban a SellerCloud sin "Allow shipping without payment"**, punto 70:
 > el create no mandaba el campo y SellerCloud hereda el default del cliente
 > (false en casi todos); ahora viaja
@@ -2189,6 +2230,68 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   orden única y los tres modos de fallo). Las órdenes YA creadas con el flag
   en false se corrigen a mano en SellerCloud (no hay endpoint para editarlo).
 
+- [ ] **Email del cliente en el panel + vínculo SellerCloud a mano + push
+  tolerante a `LastName` vacío** (2026-08-31, punto 71, a pedido del usuario):
+  `migration-2026-08-31-client-email-sellercloud-id.sql` **ya corrida en
+  producción** (verificado 2026-09-01 sondeando: firma de 4 parámetros de
+  `update_client_info` viva, `set_client_sellercloud_id` en `pg_proc`; en ese
+  momento **0 de 2755 clientes con email** — esperado: la columna arranca
+  vacía y solo la llenan la edición manual, un Excel con columna email o el
+  workflow de n8n si algún día manda `email`) + **redeploy TODAVÍA pendiente
+  de la Edge Function** (la versión viva de `sellercloud-push-order` es la
+  v12 del 2026-08-28, anterior a este cambio). Tres piezas:
+  (1) Columna `clients.email` (nullable, sin unique): copia local para VER el
+  correo en la lista de Clientes — el push NO la usa, la Edge Function sigue
+  leyendo el email de SellerCloud al enviar. La llenan: la edición manual, el
+  alta manual (campo opcional), el Excel de clientes (columna
+  email/correo/e-mail — solo se toca si el archivo la trae con valor válido;
+  re-subir uno viejo no borra nada) y el sync de n8n **solo si el workflow
+  empieza a mandar `email` por fila** (`sync_upsert_clients` reescrita —
+  cuerpo de la 07-15 — con `email` opcional: ausente o inválido = no tocar;
+  presente = pisa, SellerCloud manda para los del sync). El buscador matchea
+  por email y por SellerCloud ID.
+  (2) `update_client_info` gana `p_email` (email en minúsculas, vacío = null,
+  validación laxa algo@algo.algo, from/to_email en el detail) — **la
+  migración dropea la firma vieja de 3 parámetros**: dos overloads rompen
+  PostgREST con PGRST203, así que hay que correrla junto con este deploy del
+  frontend (el form siempre manda `p_email`). RPC nueva
+  `set_client_sellercloud_id(p_client_id, p_sellercloud_id)` **SOLO ADMIN**
+  (nivel reassign/delete: un ID equivocado manda la orden al cliente
+  equivocado allá): asigna/corrige/quita (null) el vínculo, mensaje de
+  duplicado con el nombre del dueño, auditada como
+  `'set_client_sellercloud_id'` ("Vínculo SellerCloud" en el Registro). UI:
+  el botón Editar suma inputs de Email (ambos roles) y SellerCloud ID (solo
+  admin, dos RPC en secuencia — si la del vínculo falla, lo demás ya quedó
+  guardado y el error queda en el banner con la edición abierta); la tabla
+  muestra "SC {id}" bajo el teléfono. **[UI superseded el 2026-09-01: la
+  columna Email y su input se quitaron de la tabla (0 clientes con correo) y
+  el vínculo SellerCloud pasó a columna propia, con el input de admin ahí;
+  la edición reenvía el email guardado tal cual. El resto sigue vigente.]**
+  Motivo: el vínculo solo lo escribía la
+  adopción por teléfono del sync, y un cliente cargado a mano con teléfono
+  distinto al de SellerCloud quedaba sin vínculo — y "Enviar a SellerCloud"
+  rechaza pedidos de clientes sin `sellercloud_id`.
+  (3) `customerDetails` (`sellercloud.ts`): si el cliente allá tiene
+  `LastName` vacío (cuentas con todo el nombre en `FirstName`), parte el
+  nombre SOLO para el payload — última palabra → LastName, resto →
+  FirstName, una palabra queda entera en LastName, el fallback de dirección
+  lo hereda — sin escribir nada de vuelta allá. **Requiere redeploy de
+  `sellercloud-push-order`** (desde `zimaxx-store/`, no desde la raíz).
+  **Verificado**: suite del push 29 → **35 comprobaciones** en verde; build
+  de Vite; 9 bloques de assert SQL en cluster PG 18 desechable partiendo del
+  estado real (schema.sql + 07-10v2 + 07-15 + 08-25: roles por RPC, email
+  normalizado/borrado/inválido, no-op sin auditoría, duplicado de teléfono,
+  duplicado de SC ID con nombre del dueño, quitar vínculo, sync con/sin/mal
+  email, adopción por teléfono con email), re-corrida idempotente y
+  `schema.sql` completo antes y después en limpio; el test negativo del
+  preflight contra una base incompleta **pescó un bug real del preflight**
+  (`text[] || 'literal'` se resuelve como array||array y parsea el texto como
+  array literal — corregido con `array_append`); 18 aserciones Playwright
+  (admin: columna Email, SC visible, RPC con payloads normalizados, duplicado
+  atajado client-side sin llamar la RPC, email inválido deshabilita Guardar,
+  búsqueda por email y por SC id; vendedora: sin input de SellerCloud ID,
+  guarda solo por `update_client_info`).
+
 ---
 
 
@@ -2972,10 +3075,16 @@ por qué no entró sin ir a los logs de la función.
   skipped, skipped_skus}` (primeros 50).
 - `sync_upsert_clients` **(v2, 2026-07-10,
   `migration-2026-07-10-sellercloud-sync-v2.sql` — reemplaza la versión
-  v1 que matcheaba por teléfono)**: filas `{sellercloud_id, name, phone,
-  salesman_name}`, upsert por `sellercloud_id` (General.ID de
+  v1 que matcheaba por teléfono; adopción por últimos 10 dígitos desde la
+  07-15; email opcional desde la 08-31)**: filas `{sellercloud_id, name,
+  phone, salesman_name, email?}`, upsert por `sellercloud_id` (General.ID de
   SellerCloud) — nunca por teléfono en este flujo (el teléfono sigue
   siendo el criterio de la carga manual por Excel, que no cambió).
+  **`email` es opcional** (2026-08-31): ausente o con pinta de no-email →
+  el guardado no se toca (el payload actual de n8n sigue andando igual);
+  presente y válido → pisa (para los del sync, SellerCloud es la fuente de
+  verdad, igual que name/phone). Para que se llene solo, hay que agregar
+  `email` al workflow de n8n.
   Detalles: (a) `salesman_name` se matchea contra `vendedores.name`
   normalizando ambos lados con `sync_normalize_name()` (minúsculas + sin
   acentos; usa `unaccent()` si la extensión está, si no `translate()`
@@ -3029,12 +3138,19 @@ por qué no entró sin ir a los logs de la función.
 - `delete_client`: borra el cliente. **Rechaza si tiene pedidos** (`orders.client_id`, FK RESTRICT sin cascade — borrarlo perdería el historial, y `orders` no guarda copia del nombre). Inserta la fila de auditoría ANTES del delete (snapshot). Devuelve `{ok}`.
 - Las lanza `ClientsAdmin.jsx` (select de vendedora por fila + botón Eliminar con confirmación inline); el mensaje de `raise exception` (en español) llega como `error.message` y se muestra en un banner. El **Registro de movimientos** (sección colapsable, solo admin) lee `admin_audit_log` directo (RLS `admin_read_audit`).
 
-### `update_client_info(p_client_id uuid, p_name text, p_phone text) → jsonb` (2026-08-25)
-- Edita nombre y teléfono de un cliente (`migration-2026-08-25-update-client-info.sql`). Mismo criterio que `update_client_price_list`: SECURITY DEFINER, admin edita cualquiera, **una vendedora solo sus propios clientes** (`vendedora_id = current_vendedora_id()`), y el cambio queda auditado sí o sí en `admin_audit_log` (acción `'update_client_info'`, detail `{from_name, to_name, from_phone, to_phone}`).
-- El teléfono se guarda **normalizado a solo dígitos** (igual que `cleanPhone` del frontend) y el nombre trimmeado. Valida: nombre no vacío, teléfono ≥ 7 dígitos.
+### `update_client_info(p_client_id uuid, p_name text, p_phone text, p_email text default null) → jsonb` (2026-08-25; email 2026-08-31)
+- Edita nombre, teléfono y email de un cliente (`migration-2026-08-25-update-client-info.sql`, ampliada por `migration-2026-08-31-client-email-sellercloud-id.sql`). Mismo criterio que `update_client_price_list`: SECURITY DEFINER, admin edita cualquiera, **una vendedora solo sus propios clientes** (`vendedora_id = current_vendedora_id()`), y el cambio queda auditado sí o sí en `admin_audit_log` (acción `'update_client_info'`, detail `{from_name, to_name, from_phone, to_phone, from_email, to_email}`).
+- El teléfono se guarda **normalizado a solo dígitos** (igual que `cleanPhone` del frontend) y el nombre trimmeado. Valida: nombre no vacío, teléfono ≥ 7 dígitos. El **email** se guarda en minúsculas; vacío/null = borrar el correo (el form siempre manda el campo); formato validado laxo (`algo@algo.algo`) — la misma regla que el frontend.
+- **La 08-31 dropea la firma vieja de 3 parámetros**: si convivieran las dos, PostgREST no puede elegir (PGRST203) y el botón Editar muere para todos los casos. Por eso esa migración va junto con el deploy del frontend que manda `p_email`.
 - **Duplicados por últimos 10 dígitos** (la clave del índice único parcial `clients_phone_normalized_key`): un cliente marcado `allow_shared_phone` se salta el chequeo (compartir con su par es lo legítimo); para el resto se compara contra **todos** los clientes, incluidos los marcados — a propósito más estricto que el índice (que ignora las filas marcadas en ambas puntas), porque un tercer cliente con el número del par rompería la deduplicación por teléfono del Excel; es la misma regla que ya aplica el alta manual. El handler de `unique_violation` atrapa la carrera y devuelve el mismo mensaje amigable.
-- **Guardar sin cambios es un no-op**: devuelve `{ok: true, changed: false}` sin escribir fila de auditoría.
-- Probada en cluster PG 18 desechable (10 casos: roles, normalización, no-op, duplicados en los 3 sabores de allow_shared_phone, trigger de clients intacto, grants). La lanza `ClientsAdmin.jsx` (botón Editar por fila).
+- **Guardar sin cambios es un no-op**: devuelve `{ok: true, changed: false}` sin escribir fila de auditoría (el email compara con `is not distinct from`: null = sin correo).
+- Probada en cluster PG 18 desechable (10 casos el 2026-08-25 y 9 bloques el 2026-08-31: roles, normalización, email borrado/inválido, no-op, duplicados, grants). La lanza `ClientsAdmin.jsx` (botón Editar por fila).
+
+### `set_client_sellercloud_id(p_client_id uuid, p_sellercloud_id integer) → jsonb` (2026-08-31)
+- Asigna, corrige o **quita** (`p_sellercloud_id = null`) el vínculo `clients.sellercloud_id` de un cliente (`migration-2026-08-31-client-email-sellercloud-id.sql`). **SOLO ADMIN** — a diferencia de `update_client_info`: un ID equivocado manda los pedidos AL CLIENTE EQUIVOCADO en SellerCloud, es del nivel de `reassign_client`/`delete_client`. Una vendedora ni ve el input en la UI y la RPC la rechaza igual server-side.
+- Motivo: hasta el 2026-08-31 el vínculo solo lo escribía el sync de n8n (adopción one-shot por teléfono, 07-10/07-15). Un cliente cargado a mano cuyo teléfono no coincide con el de SellerCloud quedaba sin vínculo para siempre, y sin vínculo el botón "Enviar a SellerCloud" rechaza sus pedidos ("este cliente todavía no está sincronizado").
+- Valida: entero positivo (o null); duplicado contra otro cliente con **mensaje que dice quién lo tiene** (la garantía real sigue siendo el índice único `clients_sellercloud_id_key`; `unique_violation` atrapa la carrera). No-op → `{changed: false}` sin auditar. Auditada como `'set_client_sellercloud_id'` (detail `{from_sellercloud_id, to_sellercloud_id}`, "Vínculo SellerCloud" en el Registro de movimientos).
+- Quitar el vínculo es reversible: el próximo sync puede re-adoptar por teléfono si corresponde.
 
 ---
 
@@ -3249,7 +3365,8 @@ por qué no entró sin ir a los logs de la función.
 ### Alta individual de clientes (2026-07-07)
 - Botón "+ Nuevo cliente" en la pestaña Clientes, alternativa a la carga
   por Excel para un cliente puntual. Campos: nombre, teléfono, lista de
-  precio (obligatorios) y, solo para admin, un selector de vendedora
+  precio (obligatorios), email (opcional desde 2026-08-31, validación laxa,
+  se guarda en minúsculas) y, solo para admin, un selector de vendedora
   (`"Sin asignar"` por defecto) — inserta directo contra `clients` con
   `supabase.from('clients').insert(...)`, sin RPC dedicada.
 - Si el usuario logueado es vendedora, el selector no se muestra: el
@@ -3260,23 +3377,40 @@ por qué no entró sin ir a los logs de la función.
 - Teléfono duplicado (constraint `clients.phone` único) muestra un error
   amigable (`phoneInUse` en `i18n.jsx`) en vez del mensaje crudo de Postgres.
 
-### Edición de nombre/teléfono del cliente (2026-08-25)
+### Edición de nombre/teléfono del cliente (2026-08-25; vínculo SellerCloud 2026-08-31; columna Email quitada 2026-09-01)
 - Botón **Editar** por fila (visible para admin y vendedora — la vendedora
   solo ve sus propios clientes, y la RPC igual lo valida server-side):
-  convierte las celdas Nombre y Tel en inputs, con Guardar/Cancelar en la
-  columna de acciones (Enter guarda, Escape cancela, mismo gesto que el
+  convierte las celdas Nombre y Tel en inputs, con Guardar/Cancelar en
+  la columna de acciones (Enter guarda, Escape cancela, mismo gesto que el
   teléfono editable de Vendedoras). Un solo cliente en edición a la vez.
+  **Solo para admin**, la celda de la columna SellerCloud se convierte en el
+  input **SellerCloud ID** (ver `set_client_sellercloud_id` en la sección
+  RPC); la vendedora la ve como texto fijo.
 - Guarda vía RPC `update_client_info` (ver sección RPC): queda auditado en
   `admin_audit_log` y aparece en el Registro de movimientos como
-  "Edición de cliente" (el detalle muestra solo lo que cambió).
+  "Edición de cliente" (el detalle muestra solo lo que cambió). La RPC exige
+  `p_email` y para ella vacío = borrar, así que el form **reenvía el email
+  guardado tal cual** — la tabla dejó de mostrarlo y editarlo el 2026-09-01.
+  Si el admin además cambió el SellerCloud ID, va una segunda RPC
+  (`set_client_sellercloud_id`, "Vínculo SellerCloud" en el Registro); si esa
+  segunda falla, nombre/teléfono ya quedaron guardados, se reflejan en
+  la fila y la edición queda abierta con el error en el banner.
 - Guardar se deshabilita con nombre vacío o teléfono de menos de 7 dígitos;
-  el duplicado por últimos 10 dígitos se chequea client-side primero
-  (mensaje `phoneInUse` en el idioma del panel) y la RPC lo repite
+  el duplicado de teléfono por últimos 10 dígitos y el de
+  SellerCloud ID se chequean client-side primero (mensajes `phoneInUse` /
+  `sellercloudIdInUse` en el idioma del panel) y las RPC los repiten
   server-side.
+- La tabla **ya no muestra la columna Email** (quitada el 2026-09-01 a pedido
+  del usuario: 0 de 2755 clientes con correo, no había nada que mostrar). En
+  su lugar el vínculo SellerCloud tiene **columna propia** (— si no hay;
+  antes iba como "SC {id}" bajo el teléfono). `clients.email` sigue en la
+  base y lo llenan el alta, el Excel y el sync; el buscador sigue matcheando
+  por email (aunque no se vea) y por SellerCloud ID (dígitos).
 - El motivo: hasta ahora un dato mal cargado solo se corregía re-subiendo
   un Excel (que matchea por teléfono — un **teléfono** mal cargado ni
   siquiera se podía corregir por ahí: creaba un duplicado) o entrando a la
-  base a mano.
+  base a mano. Y el correo directamente no se veía desde el panel: vivía
+  solo en SellerCloud.
 
 ### Vendedoras (pestaña Vendedoras, `/admin/vendedoras`)
 - Alta manual: nombre (obligatorio) + teléfono (opcional, se puede

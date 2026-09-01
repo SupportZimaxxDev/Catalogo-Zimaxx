@@ -49,6 +49,25 @@ const server = createServer((req, res) => {
       return json(200, { access_token: 'tok-1' })
     }
     if (req.method === 'GET' && path.startsWith('/rest/api/Customers/')) {
+      // Cliente cargado allá con LastName VACÍO y todo el nombre en FirstName
+      // (2026-08-31, cuentas de empresa): las direcciones tampoco traen
+      // ContactName, así que el fallback de dirección también depende del
+      // nombre del cliente.
+      const sinApellido = (nombre) => ({
+        Email: 'cliente@x.com',
+        FirstName: nombre,
+        LastName: '',
+        Addresses: [
+          {
+            ID: 1, ContactName: '', CompanyName: 'Empresa X',
+            IsShippingAddress: true, IsBillingAddress: true, RowStatus: 0,
+            Country: 'US', City: 'Miami', State: 'FL', Region: '', ZipCode: '33166',
+            Address: '8301 NW 66th st', Address2: '', Phone: '', Fax: '',
+          },
+        ],
+      })
+      if (path.endsWith('/789')) return json(200, sinApellido('PLANET TV MAYORISTAS C.A.'))
+      if (path.endsWith('/790')) return json(200, sinApellido('Madonna'))
       // Shape REAL del cliente (2026-08-19): las direcciones vienen en una
       // lista Addresses de UserAddressDto — el nombre es ContactName y la
       // empresa CompanyName, NO FirstName/Business como espera el create.
@@ -198,15 +217,64 @@ reset()
   )
 }
 
-// 1c) Dirección sin ContactName: el nombre cae al del cliente.
+// 1c) Dirección sin ContactName: el nombre cae al del cliente. De paso:
+//     con First/Last completos allá, el split del 2026-08-31 NO se mete.
 reset()
 {
   await pushOrder(cfg, 456, ITEMS, {})
+  const det = state.lastCreatePayload?.CustomerDetails
   const ship = state.lastCreatePayload?.ShippingAddress
   check(
     'addr: sin ContactName usa el nombre del cliente',
     ship?.FirstName === 'Cli' && ship?.LastName === 'Ente',
     JSON.stringify(ship),
+  )
+  check(
+    'nombre-completo: con LastName cargado allá no se parte nada',
+    det?.FirstName === 'Cli' && det?.LastName === 'Ente',
+    JSON.stringify(det),
+  )
+}
+
+// 1d) Cliente con LastName VACÍO allá (2026-08-31): el nombre completo se
+//     parte SOLO para el payload — última palabra → LastName, resto →
+//     FirstName — y el fallback de dirección hereda el nombre ya partido.
+//     Nada viaja de vuelta a Customers (el dato allá queda tal cual).
+reset()
+{
+  const r = await pushOrder(cfg, 789, ITEMS, {})
+  const det = state.lastCreatePayload?.CustomerDetails
+  const ship = state.lastCreatePayload?.ShippingAddress
+  check(
+    'sin-apellido: última palabra → LastName, resto → FirstName',
+    det?.FirstName === 'PLANET TV MAYORISTAS' && det?.LastName === 'C.A.',
+    JSON.stringify(det),
+  )
+  check(
+    'sin-apellido: el fallback de dirección usa el nombre ya partido',
+    ship?.FirstName === 'PLANET TV MAYORISTAS' && ship?.LastName === 'C.A.',
+    JSON.stringify(ship),
+  )
+  check(
+    'sin-apellido: a Customers solo se le hace GET (nada se corrige allá)',
+    state.requests
+      .filter((x) => x.path.startsWith('/rest/api/Customers/'))
+      .every((x) => x.method === 'GET'),
+    JSON.stringify(state.requests.map((x) => `${x.method} ${x.path}`)),
+  )
+  check('sin-apellido: la orden entra sin warnings', r.warnings.length === 0, JSON.stringify(r.warnings))
+}
+
+// 1e) Nombre de UNA sola palabra y sin apellido: queda entera en LastName
+//     (FirstName vacío) — lo que pide el create es el apellido.
+reset()
+{
+  await pushOrder(cfg, 790, ITEMS, {})
+  const det = state.lastCreatePayload?.CustomerDetails
+  check(
+    'sin-apellido: una sola palabra queda en LastName',
+    det?.FirstName === '' && det?.LastName === 'Madonna',
+    JSON.stringify(det),
   )
 }
 

@@ -34,6 +34,12 @@
 // Como el create de esta API puede ignorar campos en silencio, pushOrder lo
 // verifica releyendo la orden (donde el campo se llama distinto:
 // ShippingDetails.AllowShippingWithoutPaymentValue).
+//
+// 2026-08-31: si el cliente allá tiene LastName vacío (cuentas con el nombre
+// completo metido entero en FirstName), customerDetails parte el nombre para
+// el payload — última palabra → LastName, resto → FirstName — en vez de que
+// el envío dependa de que el dato esté perfecto en SellerCloud. Solo para el
+// payload: nunca se escribe nada de vuelta en el cliente de allá.
 
 export const CHANNEL_WHOLESALE = 21
 
@@ -366,11 +372,26 @@ export function customerDetails(customer: Record<string, unknown>) {
     )
   }
 
+  // LastName vacío allá (2026-08-31): pasa seguido — cuentas cargadas con el
+  // nombre completo (o el de la empresa) metido entero en FirstName. En vez
+  // de depender de que el dato esté perfecto en SellerCloud, se parte el
+  // nombre completo SOLO para el payload de la orden: última palabra →
+  // LastName, el resto → FirstName (con una sola palabra, queda toda en
+  // LastName). Mismo criterio que ya usa toOrderAddress con el ContactName.
+  // Nada se escribe de vuelta en SellerCloud — el cliente allá queda tal cual.
+  let firstName = String(first ?? '').trim()
+  let lastName = String(last ?? '').trim()
+  if (!lastName && firstName) {
+    const parts = firstName.split(/\s+/)
+    lastName = parts[parts.length - 1]
+    firstName = parts.slice(0, -1).join(' ')
+  }
+
   return {
     ID: typeof id === 'number' ? id : Number(id) || undefined,
     Email: String(email),
-    FirstName: String(first ?? ''),
-    LastName: String(last ?? ''),
+    FirstName: firstName,
+    LastName: lastName,
   }
 }
 

@@ -453,7 +453,7 @@ estar en el navegador ni en la base, así que el HTTP lo hace una Edge Function:
   igual en Node, y por eso se puede probar entero contra un servidor falso sin
   desplegar nada.
 - `.../index.ts` — el envoltorio de Edge Function: valida, arma y anota.
-- `tests/sc-push-tests.mjs` — la suite del cliente (29 comprobaciones, Node
+- `tests/sc-push-tests.mjs` — la suite del cliente (35 comprobaciones, Node
   puro contra un servidor falso; ver "Cómo está verificado" más abajo).
 - `migration-2026-08-17-sellercloud-push.sql` — `orders.sellercloud_order_id` /
   `sellercloud_pushed_at` / `sellercloud_error`, y la RPC
@@ -519,6 +519,17 @@ el cambio de modalidad — el candado de Atendido lo reemplaza.)
 > listado no trae `ShippingDetails`) y avisa con warning si no quedó — y acá
 > no hay PUT que lo corrija (el `UpdateOrderRequest` no trae el campo), así
 > que el remedio del warning es prenderlo a mano allá.
+
+> **El envío ya no depende de que el nombre esté perfecto en SellerCloud**
+> (2026-08-31): hay clientes cargados allá con **`LastName` vacío** y el
+> nombre completo (o el de la empresa) metido entero en `FirstName` — el
+> create espera los dos campos. `customerDetails` ahora parte ese nombre
+> **solo para el payload de la orden**: última palabra → `LastName`, el resto
+> → `FirstName` (una sola palabra queda entera en `LastName`); el fallback de
+> dirección (`toOrderAddress` sin `ContactName`) hereda el nombre ya partido.
+> **Nunca se escribe nada de vuelta en el cliente de SellerCloud** — el dato
+> allá queda tal cual estaba. Con `FirstName` y `LastName` cargados, no se
+> toca nada. Requiere **redeploy de la Edge Function** para estar vivo.
 
 **Sales Rep y Marketing Source (2026-08-18).** La orden queda además con el
 Sales Rep de **la vendedora del pedido** y el Marketing Source **"catalogo
@@ -618,7 +629,7 @@ supabase secrets set SELLERCLOUD_MARKETING_SOURCE_ID=...     # opcional: ID de "
 > marca usa la primera; `Addresses` vacía da el error "cargásela allá".
 
 **Cómo está verificado.** La suite del cliente de la API vive en el repo
-desde el 2026-08-19 — **`tests/sc-push-tests.mjs`, 29 comprobaciones, se
+desde el 2026-08-19 — **`tests/sc-push-tests.mjs`, 35 comprobaciones, se
 corre con `node tests/sc-push-tests.mjs`** (Node 23+; `sellercloud.ts` no
 importa nada de Deno a propósito). Corre contra un servidor falso que
 reproduce los vicios REALES de esta API: el create que ignora el Sales Rep,
@@ -628,10 +639,14 @@ con `ContactName`/`CompanyName`). Cubre el camino feliz completo
 (create → PUT solo con `SalesRep1` → relectura), el mapeo de direcciones
 (nombre partido, fallback al nombre del cliente, sin claves basura), la
 degradación a warning de todo fallo posterior al create, que extras basura
-(NaN, 0, negativos) no viajan, y el flag de despacho sin pago (2026-08-28:
+(NaN, 0, negativos) no viajan, el flag de despacho sin pago (2026-08-28:
 viaja en el create, se verifica en la orden única, y sus tres fallos —
 create que lo ignora, respuesta sin `ShippingDetails`, GET con 500 — degradan
-a warning). Las suites anteriores (86 y 100
+a warning), y el partido del nombre con `LastName` vacío allá (2026-08-31:
+última palabra → LastName y resto → FirstName solo en el payload, el fallback
+de dirección lo hereda, una sola palabra queda en LastName, con LastName
+cargado no se toca nada, y a `Customers/{id}` solo se le hace GET). Las
+suites anteriores (86 y 100
 comprobaciones, 2026-08-17/18: token renovado al vencer, credenciales malas,
 cliente sin email/dirección cortando antes de crear, el 200 con HTML en cada
 paso, el resolvedor correo→ID) quedaban en el scratchpad de cada sesión y se
@@ -1489,17 +1504,47 @@ catálogo sin precios de la sección 1 — se puede cambiar de/hacia esa
 lista en cualquier momento desde el mismo selector, igual que cualquier
 otro nivel.
 
-**Editar nombre/teléfono** (botón "Editar" por fila, 2026-08-25): convierte
-las celdas Nombre y Tel en inputs, con Guardar/Cancelar (Enter guarda,
-Escape cancela). Guarda vía la RPC `update_client_info`
-(`migration-2026-08-25-update-client-info.sql`): admin edita cualquier
-cliente, una vendedora solo los suyos, y el cambio queda auditado en el
-Registro de movimientos como "Edición de cliente". El teléfono se guarda
-normalizado a solo dígitos y un duplicado (mismos últimos 10 dígitos que
-otro cliente, con o sin código de país) se rechaza con el mismo mensaje
-amigable del alta. Antes, un dato mal cargado solo se corregía re-subiendo
-Excel — que matchea por teléfono, así que un **teléfono** mal cargado
-creaba un duplicado en vez de corregirse.
+**Editar nombre/teléfono** (botón "Editar" por fila, 2026-08-25; vínculo
+SellerCloud desde 2026-08-31): convierte las celdas Nombre y Tel en inputs,
+con Guardar/Cancelar (Enter guarda, Escape cancela). Guarda
+vía la RPC `update_client_info`
+(`migration-2026-08-25-update-client-info.sql`, ampliada con `p_email` por
+`migration-2026-08-31-client-email-sellercloud-id.sql` — para la RPC, email
+vacío = borrar, así que el form reenvía el email guardado tal cual desde que
+la tabla dejó de editarlo el 2026-09-01): admin edita
+cualquier cliente, una vendedora solo los suyos, y el cambio queda auditado
+en el Registro de movimientos como "Edición de cliente". El teléfono se
+guarda normalizado a solo dígitos y un duplicado (mismos últimos 10 dígitos
+que otro cliente, con o sin código de país) se rechaza con el mismo mensaje
+amigable del alta. Antes, un dato mal cargado solo se
+corregía re-subiendo Excel — que matchea por teléfono, así que un
+**teléfono** mal cargado creaba un duplicado en vez de corregirse.
+
+**Email del cliente** (`clients.email` desde 2026-08-31; la columna se quitó
+de la tabla el 2026-09-01 — ningún cliente tenía correo cargado, 0 de 2755, y
+su lugar lo tomó la columna SellerCloud): copia local que el push de órdenes
+NO usa (la Edge
+Function sigue leyendo el email de allá al enviar). Se llena por el sync de
+n8n (**si el workflow manda `email`** en cada fila — hay que agregarlo allá;
+mientras no lo mande, nada cambia y nada se borra), por el alta manual
+(campo opcional) o por el Excel de clientes (columna
+email/correo/e-mail; solo se toca si el archivo la trae con un valor válido);
+la edición por fila ya no lo toca. El buscador de la pestaña sigue matcheando
+por email aunque no se muestre.
+
+**Vínculo SellerCloud** (2026-08-31, solo admin): al editar una fila aparece
+el input **SellerCloud ID** — asigna, corrige o quita (vacío) el
+`clients.sellercloud_id`, vía la RPC `set_client_sellercloud_id` (auditada
+como "Vínculo SellerCloud"). Hasta ahora ese vínculo solo lo escribía el
+sync de n8n (adopción por teléfono), así que un cliente cargado a mano cuyo
+teléfono no coincidiera con el de SellerCloud quedaba sin vínculo — y sin
+vínculo, "Enviar a SellerCloud" rechaza sus pedidos. El vínculo tiene
+**columna propia** en la tabla desde el 2026-09-01 (— si no hay; antes se
+veía como "SC {id}" bajo el teléfono), al editar el input aparece en esa
+columna, el buscador matchea por ese número, y
+un ID que ya es de otro cliente se rechaza diciendo de quién es. Es
+admin-only a propósito: un ID equivocado manda la orden al cliente
+equivocado allá.
 
 ---
 
@@ -1914,6 +1959,28 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 ---
 
 ## 7. Roadmap / pendientes
+
+> **⚠️ MIGRACIÓN NUEVA DEL 2026-08-31 — UNA (+ redeploy de la Edge
+> Function):** `migration-2026-08-31-client-email-sellercloud-id.sql` —
+> columna `clients.email`, `update_client_info` gana `p_email` (dropea la
+> firma vieja de 3 parámetros: dos overloads romperían PostgREST con
+> PGRST203), RPC nueva `set_client_sellercloud_id` (solo admin, auditada) y
+> `sync_upsert_clients` acepta `email` opcional por fila (sin email o con
+> email inválido no toca el guardado — el payload actual de n8n sigue
+> corriendo igual; para que el correo se llene solo hay que agregar `email`
+> al workflow de n8n). Correr DESPUÉS de la 08-25 (no es obligatorio — trae
+> preflight y dropea esa firma si existe — pero mantiene el orden histórico).
+> **El frontend de este deploy la necesita**: sin ella, Guardar en el botón
+> Editar falla con "function ... does not exist". Aparte, `sellercloud.ts`
+> ganó el partido de nombre con `LastName` vacío (ver sección 3):
+> **redesplegar `sellercloud-push-order`** para activarlo (desde
+> `zimaxx-store/`, no desde la raíz). Probada en PG 18 local: 9 bloques de
+> assert (permisos por rol, email normalizado/borrado/inválido, no-op sin
+> auditoría, duplicados de teléfono y de SellerCloud ID con el nombre del
+> dueño, sync con/sin/mal email, adopción por teléfono con email), re-corrida
+> idempotente, preflight contra base incompleta (que además pescó un bug real
+> del propio preflight), y `schema.sql` completo antes y después en limpio.
+> UI verificada con Playwright (18 aserciones, admin y vendedora).
 
 > **🚨 MIGRACIÓN NUEVA DEL 2026-08-26 — URGENTE, arregla un error activo en
 > producción:** `migration-2026-08-26-fix-apply-order-stock-missing.sql`.
@@ -2349,5 +2416,5 @@ supabase/migration-*.sql  Deltas idempotentes para producción (no re-correr el 
 supabase/functions/admin-create-vendedora-user/  Edge Function (Deno) — crea el usuario de Auth de una vendedora, requiere deploy manual
 supabase/functions/superadmin-users/  Edge Function (Deno) — cambia contraseñas y crea admins (Admin API de Auth), requiere deploy manual (⚠️ 2026-08-19: NO está desplegada en producción — redesplegarla)
 supabase/functions/sellercloud-push-order/  Edge Function (Deno) — crea la orden en SellerCloud + Sales Rep y direcciones vía PUT (v11 en producción, 2026-08-19)
-tests/sc-push-tests.mjs  Suite del cliente de SellerCloud (29 comprobaciones, Node contra un servidor falso)
+tests/sc-push-tests.mjs  Suite del cliente de SellerCloud (35 comprobaciones, Node contra un servidor falso)
 ```
