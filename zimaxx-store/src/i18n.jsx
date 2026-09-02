@@ -81,6 +81,27 @@ const dict = {
     scFilterAll: 'SellerCloud: todas',
     scFilterSent: 'Enviadas a SellerCloud',
     scFilterNotSent: 'Sin enviar a SellerCloud',
+    // Drift de precios en pedidos (2026-09-02): la lista cambió después de
+    // crear el pedido y el precio congelado quedó viejo.
+    priceDriftBadge: 'Precios cambiaron',
+    priceDriftTitle: 'La lista de precios cambió después de este pedido',
+    priceDriftFrozen: 'Precio del pedido',
+    priceDriftCurrent: 'Precio vigente',
+    priceDriftDelta: 'Diferencia',
+    priceDriftFrozenTotal: 'Total del pedido',
+    priceDriftCurrentTotal: 'Total a precios de hoy',
+    priceDriftNet: 'Diferencia neta',
+    priceDriftNoPrice: 'sin precio vigente — revisar',
+    priceDriftUpdate: 'Actualizar a precios vigentes',
+    priceDriftUpdating: 'Actualizando…',
+    priceDriftConfirmTitle: 'Actualizar precios del pedido',
+    priceDriftConfirmBody: 'El total pasa de {from} a {to}. ¿Actualizar?',
+    priceDriftNoTotal:
+      'Hay líneas sin precio vigente: cargá el precio (o editá el pedido) antes de actualizar.',
+    priceDriftScNotice:
+      'Este pedido ya está en SellerCloud (orden N°{id}, On Hold) — recordá ajustar los precios allá antes del pago.',
+    priceDriftLoadFailed:
+      'No se pudo comprobar si hay cambios de precio. Los pedidos se muestran igual.',
     metricsSellerCloud: 'Enviados a SellerCloud',
     metricsSellerCloudTotal: '{n} en total (histórico)',
     // Sales Rep por vendedora (2026-08-18): el ID de empleado en SellerCloud,
@@ -578,6 +599,25 @@ const dict = {
     scFilterAll: 'SellerCloud: all',
     scFilterSent: 'Sent to SellerCloud',
     scFilterNotSent: 'Not sent to SellerCloud',
+    priceDriftBadge: 'Prices changed',
+    priceDriftTitle: 'The price list changed after this order was placed',
+    priceDriftFrozen: 'Order price',
+    priceDriftCurrent: 'Current price',
+    priceDriftDelta: 'Difference',
+    priceDriftFrozenTotal: 'Order total',
+    priceDriftCurrentTotal: "Total at today's prices",
+    priceDriftNet: 'Net difference',
+    priceDriftNoPrice: 'no current price — review',
+    priceDriftUpdate: 'Update to current prices',
+    priceDriftUpdating: 'Updating…',
+    priceDriftConfirmTitle: 'Update order prices',
+    priceDriftConfirmBody: 'The total goes from {from} to {to}. Update?',
+    priceDriftNoTotal:
+      'Some lines have no current price: load the price (or edit the order) before updating.',
+    priceDriftScNotice:
+      'This order is already in SellerCloud (order #{id}, On Hold) — remember to adjust the prices there before payment.',
+    priceDriftLoadFailed:
+      'Could not check for price changes. Orders are shown as usual.',
     metricsSellerCloud: 'Sent to SellerCloud',
     metricsSellerCloudTotal: '{n} all-time',
     scRepId: 'SellerCloud',

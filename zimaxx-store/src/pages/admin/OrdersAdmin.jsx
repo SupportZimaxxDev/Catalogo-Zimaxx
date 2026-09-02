@@ -90,6 +90,23 @@ export default function OrdersAdmin() {
   // lo que se muestra para esos pedidos; ver displayOf().
   const [livePricing, setLivePricing] = useState({})
 
+  // Drift de precios (2026-09-02): pedidos reales (kind='order', sin atender)
+  // cuyo precio congelado difiere del vigente de la lista del cliente.
+  // {orderId: {items, frozen_total, current_total}} — lo llena
+  // get_orders_price_drift en tandas, igual que el live pricing. Solo
+  // DETECCIÓN: nada se ajusta sin apretar "Actualizar a precios vigentes",
+  // que pasa por refresh_order_prices (auditada server-side).
+  const [priceDrift, setPriceDrift] = useState({})
+  // Un fallo al comprobar el drift no puede romper la bandeja: aviso no
+  // bloqueante y los pedidos se muestran igual.
+  const [driftWarn, setDriftWarn] = useState(false)
+  const [refreshing, setRefreshing] = useState(null) // id del pedido actualizándose
+  const [refreshError, setRefreshError] = useState(null) // { id, message }
+  const [confirmRefresh, setConfirmRefresh] = useState(null) // id del pedido
+  // Pedidos actualizados acá que YA viven en SellerCloud: el precio de allá
+  // no se toca solo — aviso persistente en la fila. {orderId: scOrderId}
+  const [scPriceNotice, setScPriceNotice] = useState({})
+
   // Edición de ítems de un pedido (2026-07-17): cantidades, quitar y
   // agregar productos, auditado server-side vía update_order_items.
   const [editing, setEditing] = useState(null)
@@ -136,6 +153,73 @@ export default function OrdersAdmin() {
     }
   }
 
+  // Igual que loadLivePricing pero para pedidos reales elegibles (kind='order'
+  // y sin atender; los done/cancelados no se ajustan y la RPC los omite
+  // igual): tandas de LIVE_PRICING_CHUNK por la misma razón — statement
+  // timeout y URL larga. La respuesta solo trae los pedidos CON drift, así
+  // que se arranca de cero en cada recarga para no arrastrar badges viejos.
+  const loadPriceDrift = async (list) => {
+    setDriftWarn(false)
+    setPriceDrift({})
+    const ids = list
+      .filter((o) => o.kind === 'order' && (o.status ?? 'new') === 'new')
+      .map((o) => o.id)
+    for (let i = 0; i < ids.length; i += LIVE_PRICING_CHUNK) {
+      const chunk = ids.slice(i, i + LIVE_PRICING_CHUNK)
+      try {
+        const { data, error } = await supabase.rpc('get_orders_price_drift', { p_order_ids: chunk })
+        if (error) throw error
+        if (data) setPriceDrift((prev) => ({ ...prev, ...data }))
+      } catch {
+        // La bandeja sigue andando sin esto; solo no se sabe si hay drift.
+        setDriftWarn(true)
+      }
+    }
+  }
+
+  // Re-consulta el drift de UN pedido (después de actualizarlo): si ya no
+  // difiere, la RPC lo omite de la respuesta y acá se borra el badge — mismo
+  // patrón que el live pricing puntual después de editar una cotización.
+  const refreshDrift = async (orderId) => {
+    try {
+      const { data, error } = await supabase.rpc('get_orders_price_drift', { p_order_ids: [orderId] })
+      if (error) throw error
+      setPriceDrift((prev) => {
+        const next = { ...prev }
+        if (data && data[orderId]) next[orderId] = data[orderId]
+        else delete next[orderId]
+        return next
+      })
+    } catch {
+      /* queda el estado anterior; no bloquea nada */
+    }
+  }
+
+  // "Actualizar a precios vigentes" (2026-09-02): recalcula los ítems del
+  // pedido a los precios de hoy SIN tocar productos ni cantidades —
+  // refresh_order_prices audita en admin_audit_log (total anterior y nuevo).
+  // La UI pide confirmación antes (ver confirmRefresh, con el total nuevo).
+  const applyRefresh = async (o) => {
+    setRefreshError(null)
+    setRefreshing(o.id)
+    const { data, error } = await supabase.rpc('refresh_order_prices', { p_order_id: o.id })
+    setRefreshing(null)
+    if (error) {
+      setRefreshError({ id: o.id, message: error.message })
+      return
+    }
+    setOrders((prev) =>
+      prev.map((x) => (x.id === o.id ? { ...x, items: data.items, total: data.total } : x)),
+    )
+    // El pedido ya vive en SellerCloud: los precios de allá NO se actualizan
+    // solos (fuera de alcance) — aviso persistente para que se ajusten a mano
+    // antes del pago.
+    if (o.sellercloud_order_id) {
+      setScPriceNotice((prev) => ({ ...prev, [o.id]: o.sellercloud_order_id }))
+    }
+    refreshDrift(o.id)
+  }
+
   // Los pedidos de la ventana elegida (2026-08-20; hasta hoy era "todos, sin
   // tope" — 2026-08-07 — que con ~250 pedidos nuevos por semana crecía sin
   // techo: eran ~3 MB con los items adentro y serían ~55 MB al año). La
@@ -163,6 +247,7 @@ export default function OrdersAdmin() {
     const list = all.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
     setOrders(list)
     loadLivePricing(list)
+    loadPriceDrift(list)
     return list
   }
 
@@ -304,6 +389,18 @@ export default function OrdersAdmin() {
       prev.map((o) => (o.id === id ? { ...o, status, stock_applied: !!data?.stock_applied } : o)),
     )
     if (data?.stock) setStockInfo({ id, ...data.stock })
+    // Drift (2026-09-02): atendido/cancelado deja de ser ajustable — fuera el
+    // badge sin otra RPC; al reabrir se re-consulta ese pedido puntual.
+    if (status === 'new') {
+      refreshDrift(id)
+    } else {
+      setPriceDrift((prev) => {
+        if (!prev[id]) return prev
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+    }
   }
 
   const statusLabel = (status) =>
@@ -622,6 +719,15 @@ export default function OrdersAdmin() {
         </p>
       )}
 
+      {/* El chequeo de drift de precios es un extra sobre la bandeja: si su
+          RPC falla (timeout, migración sin correr), la bandeja sigue igual y
+          esto solo avisa que no se pudo comprobar. */}
+      {driftWarn && (
+        <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+          {t('priceDriftLoadFailed')}
+        </p>
+      )}
+
       {failuresNotice}
 
       <div>{manualBlock}</div>
@@ -771,6 +877,15 @@ export default function OrdersAdmin() {
                         📦 {t('stockDeducted')}
                       </span>
                     )}
+                    {/* Drift de precios (2026-09-02): solo aparece si la RPC
+                        devolvió diferencias para este pedido — sin drift, cero
+                        ruido. El detalle (desplegar la fila) muestra la
+                        comparación y el botón de actualizar. */}
+                    {priceDrift[o.id] && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
+                        ⚠️ {t('priceDriftBadge')}
+                      </span>
+                    )}
                     {(o.status ?? 'new') === 'new' ? (
                       <span className="inline-flex gap-1.5">
                         <button
@@ -912,6 +1027,15 @@ export default function OrdersAdmin() {
                         {convertError.message}
                       </p>
                     )}
+                    {/* Se actualizaron los precios acá pero la orden ya vive
+                        en SellerCloud: allá NO se ajusta solo (fuera de
+                        alcance) — el aviso queda fijo en la fila para que se
+                        corrija a mano antes del pago. */}
+                    {scPriceNotice[o.id] && (
+                      <p className="max-w-[16rem] whitespace-normal text-left text-[11px] font-semibold leading-snug text-amber-700 dark:text-amber-400">
+                        ⚠️ {t('priceDriftScNotice', { id: scPriceNotice[o.id] })}
+                      </p>
+                    )}
                     {/* El motivo por el que no entró queda guardado en el
                         pedido (`sellercloud_error`), así se sigue viendo al
                         recargar y no solo en el momento de apretar. Los
@@ -934,6 +1058,110 @@ export default function OrdersAdmin() {
               {expanded === o.id && (
                 <tr className="border-b border-primary/10 bg-primary/[0.02]">
                   <td colSpan={7} className="p-4">
+                    {/* Panel de drift (2026-09-02): comparación congelado vs
+                        vigente SOLO de las líneas que difieren, con los
+                        totales y el botón de actualizar. Va arriba de la
+                        tabla de ítems y no depende de ensureItems — los
+                        datos ya vinieron con get_orders_price_drift. */}
+                    {priceDrift[o.id] && (
+                      <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50/60 p-3 dark:border-amber-800 dark:bg-amber-950/30">
+                        <p className="text-xs font-bold uppercase tracking-wide text-amber-800 dark:text-amber-300">
+                          ⚠️ {t('priceDriftTitle')}
+                        </p>
+                        <div className="mt-2 overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="text-left uppercase tracking-wide text-primary/45">
+                                <th className="pb-2 pr-4 font-semibold">{t('product')}</th>
+                                <th className="pb-2 pr-4 text-right font-semibold">{t('quantity')}</th>
+                                <th className="pb-2 pr-4 text-right font-semibold">{t('priceDriftFrozen')}</th>
+                                <th className="pb-2 pr-4 text-right font-semibold">{t('priceDriftCurrent')}</th>
+                                <th className="pb-2 text-right font-semibold">{t('priceDriftDelta')}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(priceDrift[o.id].items ?? []).map((d, n) => (
+                                <tr key={n} className="border-t border-amber-200/70 dark:border-amber-900/40">
+                                  <td className="py-1.5 pr-4">
+                                    <span className="font-mono text-primary/40">[{d.sku}]</span> {d.name}
+                                  </td>
+                                  <td className="py-1.5 pr-4 text-right">{d.qty}</td>
+                                  <td className="py-1.5 pr-4 text-right">
+                                    {d.frozen_price != null ? money(d.frozen_price) : '—'}
+                                  </td>
+                                  <td className="py-1.5 pr-4 text-right font-semibold">
+                                    {d.current_price != null ? (
+                                      money(d.current_price)
+                                    ) : (
+                                      // Sin precio resoluble hoy (fuera de la
+                                      // lista, desactivado, precio en 0): se
+                                      // muestra el aviso, no un número — y esta
+                                      // línea queda fuera de current_total.
+                                      <span className="font-medium normal-case text-red-600 dark:text-red-400">
+                                        {t('priceDriftNoPrice')}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td
+                                    className={`py-1.5 text-right font-semibold ${
+                                      d.delta > 0
+                                        ? 'text-red-600 dark:text-red-400'
+                                        : d.delta < 0
+                                          ? 'text-green-700 dark:text-green-400'
+                                          : 'text-primary/50'
+                                    }`}
+                                  >
+                                    {d.delta != null ? `${d.delta > 0 ? '+' : ''}${money(d.delta)}` : '—'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-amber-200/70 pt-3 dark:border-amber-900/40">
+                          <p className="text-xs text-primary/70">
+                            {t('priceDriftFrozenTotal')}:{' '}
+                            <span className="font-semibold">
+                              {priceDrift[o.id].frozen_total != null ? money(priceDrift[o.id].frozen_total) : '—'}
+                            </span>
+                            {' · '}
+                            {t('priceDriftCurrentTotal')}:{' '}
+                            <span className="font-semibold">
+                              {priceDrift[o.id].current_total != null ? money(priceDrift[o.id].current_total) : '—'}
+                            </span>
+                            {priceDrift[o.id].frozen_total != null && priceDrift[o.id].current_total != null && (
+                              <span
+                                className={`ml-2 rounded-full px-2 py-0.5 font-bold ${
+                                  priceDrift[o.id].current_total - priceDrift[o.id].frozen_total > 0
+                                    ? 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'
+                                    : 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300'
+                                }`}
+                              >
+                                {t('priceDriftNet')}:{' '}
+                                {priceDrift[o.id].current_total - priceDrift[o.id].frozen_total > 0 ? '+' : ''}
+                                {money(priceDrift[o.id].current_total - priceDrift[o.id].frozen_total)}
+                              </span>
+                            )}
+                          </p>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setConfirmRefresh(o.id)
+                            }}
+                            disabled={refreshing === o.id || priceDrift[o.id].current_total == null}
+                            title={priceDrift[o.id].current_total == null ? t('priceDriftNoTotal') : undefined}
+                            className="rounded-lg bg-ink px-3 py-1.5 text-xs font-bold text-secondary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {refreshing === o.id ? t('priceDriftUpdating') : t('priceDriftUpdate')}
+                          </button>
+                        </div>
+                        {refreshError?.id === o.id && (
+                          <p className="mt-2 text-xs font-medium text-red-600 dark:text-red-400">
+                            {refreshError.message}
+                          </p>
+                        )}
+                      </div>
+                    )}
                     {/* Mientras los ítems vienen (o si no vinieron), el
                         detalle lo dice — una tabla vacía se leería como
                         "pedido sin ítems", que es mentira. */}
@@ -1116,6 +1344,55 @@ export default function OrdersAdmin() {
                   const { id, status } = confirmStatus
                   setConfirmStatus(null)
                   applyStatus(id, status)
+                }}
+                className="flex-1 rounded-xl bg-ink py-2.5 text-sm font-bold text-secondary transition-opacity hover:opacity-90"
+              >
+                {t('confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmación de "Actualizar a precios vigentes" (2026-09-02): misma
+          receta que la de cambio de estado, mostrando de cuánto a cuánto pasa
+          el total antes de escribir nada. El guard de priceDrift evita un
+          modal sin datos si el drift se refrescó entre click y render. */}
+      {confirmRefresh && priceDrift[confirmRefresh] && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[2px] md:items-center"
+          onClick={() => setConfirmRefresh(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm animate-fade-up rounded-t-3xl border-t-4 border-secondary bg-surface p-6 shadow-2xl md:rounded-3xl"
+          >
+            <h3 className="font-brand text-lg font-semibold">{t('priceDriftConfirmTitle')}</h3>
+            <p className="mt-1.5 text-sm leading-relaxed text-primary/60">
+              {t('priceDriftConfirmBody', {
+                from:
+                  priceDrift[confirmRefresh].frozen_total != null
+                    ? money(priceDrift[confirmRefresh].frozen_total)
+                    : '—',
+                to:
+                  priceDrift[confirmRefresh].current_total != null
+                    ? money(priceDrift[confirmRefresh].current_total)
+                    : '—',
+              })}
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button
+                onClick={() => setConfirmRefresh(null)}
+                className="flex-1 rounded-xl border border-line py-2.5 text-sm font-semibold transition-colors hover:border-primary/40"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={() => {
+                  const id = confirmRefresh
+                  setConfirmRefresh(null)
+                  const order = orders.find((x) => x.id === id)
+                  if (order) applyRefresh(order)
                 }}
                 className="flex-1 rounded-xl bg-ink py-2.5 text-sm font-bold text-secondary transition-opacity hover:opacity-90"
               >
