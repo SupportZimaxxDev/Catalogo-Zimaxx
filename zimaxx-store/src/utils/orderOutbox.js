@@ -26,10 +26,30 @@ import { logEvent } from './systemLog'
 
 const PENDING_KEY = 'zimaxx_pending_order'
 
-// Después de un día un pedido pendiente ya no se manda solo: los precios y el
-// stock se movieron, y lo más probable es que la asesora ya lo haya cargado a
-// mano desde el WhatsApp. Se descarta en silencio.
-const MAX_AGE_MS = 24 * 60 * 60 * 1000
+// Marca de sesión "el pendiente expiró y quedó reportado al equipo de ventas"
+// (2026-09-02): el banner del catálogo la usa para cambiar el mensaje. Vive en
+// sessionStorage a propósito — dura lo que dura esta visita y se limpia sola
+// en la próxima sesión, que es exactamente lo que tiene que durar el aviso.
+const REPORTED_KEY = 'zimaxx_outbox_reported'
+
+// Cuánto se sigue reintentando SOLO antes de entregar el pendiente al equipo
+// de ventas (order_failures), por tipo (2026-09-02 — antes eran 24 h parejas
+// y expirar significaba DESCARTAR: así se perdió una cotización real de
+// $286.30 con tries: 0, sin que nadie pudiera actuar):
+//
+//   * Un PEDIDO congela precio al registrarse, los precios cambian dos veces
+//     al día y el stock se mueve: registrarlo tarde sin revisión arrastraría
+//     precios viejos. A las 24 h deja de intentarse solo y pasa a revisión
+//     humana.
+//   * Una COTIZACIÓN nunca congela precio — la bandeja la recalcula al vuelo
+//     con get_quotes_live_pricing — así que registrarla tarde no arrastra
+//     nada: se le da 72 h de margen antes de pasarla a revisión.
+const ORDER_MAX_AGE_MS = 24 * 60 * 60 * 1000
+const QUOTE_MAX_AGE_MS = 72 * 60 * 60 * 1000
+
+export function maxAgeFor(kind) {
+  return kind === 'quote' ? QUOTE_MAX_AGE_MS : ORDER_MAX_AGE_MS
+}
 
 // Tope de reintentos automáticos acumulados entre visitas. Si a esta altura
 // no entró, no es un problema de señal. El pendiente NO se borra: el aviso
@@ -55,6 +75,81 @@ const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 // keepalive.
 export function slimItems(items) {
   return items.map((i) => ({ id: i.id, qty: i.qty, flash: !!i.flash }))
+}
+
+// Lo que se GUARDA en el teléfono (2026-09-02): slim + sku/nombre/precio.
+// localStorage no tiene el problema de bytes del keepalive, y si el pendiente
+// termina expirado esta copia es lo único que dice QUÉ pedía el cliente y a
+// qué precio lo vio — va al log forense y a order_failures. Los POST a
+// create_order siguen viajando slim (postOrder re-slimea).
+function storedItems(items) {
+  return items.map((i) => ({
+    id: i.id,
+    sku: i.sku,
+    name: i.name,
+    qty: i.qty,
+    price: i.price,
+    flash: !!i.flash,
+  }))
+}
+
+// ---------- Suscripción para el banner del catálogo (2026-09-02) ----------
+// El estado del outbox vive en localStorage/sessionStorage; esto avisa a la UI
+// cuando cambia, sin polling. Un listener que tira no puede romper al outbox.
+const listeners = new Set()
+function notify() {
+  for (const fn of listeners) {
+    try {
+      fn()
+    } catch {
+      /* nunca */
+    }
+  }
+}
+export function subscribeOutbox(fn) {
+  listeners.add(fn)
+  return () => listeners.delete(fn)
+}
+
+// Estado que dibuja el banner:
+//   'pending'  → hay un pendiente que YA falló al menos una vez (el banner no
+//                aparece durante el envío normal, que también pasa por
+//                savePending un instante).
+//   'reported' → el pendiente expiró y quedó entregado a order_failures en
+//                esta sesión (el equipo de ventas ya lo tiene).
+//   null       → nada que avisar.
+export function outboxStatus() {
+  const p = loadPending()
+  if (p && p.failed) return { state: 'pending', kind: p.kind }
+  try {
+    const reported = sessionStorage.getItem(REPORTED_KEY)
+    if (reported) return { state: 'reported', kind: reported }
+  } catch {
+    /* sin sessionStorage no hay aviso de reportado, nada más */
+  }
+  return null
+}
+
+// El pendiente falló al menos una vez: desde acá el banner es visible. La
+// marca sobrevive a recargas (vive dentro del pendiente en localStorage).
+export function markFailed() {
+  const p = loadPending()
+  if (!p || p.failed) return
+  try {
+    localStorage.setItem(PENDING_KEY, JSON.stringify({ ...p, failed: true }))
+  } catch {
+    /* nada que hacer */
+  }
+  notify()
+}
+
+function markReported(kind) {
+  try {
+    sessionStorage.setItem(REPORTED_KEY, kind ?? 'order')
+  } catch {
+    /* modo privado: el banner de "reportado" no se muestra, nada más */
+  }
+  notify()
 }
 
 // Mismo criterio que `order_failures.token_hint` del lado SQL: alcanza para
@@ -84,7 +179,7 @@ export function savePending({ requestId, token, items, total, kind }) {
       JSON.stringify({
         requestId,
         tokenHint: tokenHint(token),
-        items: slimItems(items),
+        items: storedItems(items),
         total,
         kind,
         ts: Date.now(),
@@ -95,6 +190,7 @@ export function savePending({ requestId, token, items, total, kind }) {
     // Modo privado o storage lleno: se sigue igual, solo se pierde el
     // reintento entre visitas.
   }
+  notify()
 }
 
 export function clearPending() {
@@ -103,6 +199,7 @@ export function clearPending() {
   } catch {
     /* nada que hacer */
   }
+  notify()
 }
 
 function bumpTries() {
@@ -205,6 +302,49 @@ function rpc(body) {
   }).finally(() => clearTimeout(timer))
 }
 
+// Entrega un pendiente EXPIRADO a order_failures (report_outbox_expired,
+// 2026-09-02) para que la vendedora lo vea en el aviso rojo de su bandeja y
+// lo recupere con el botón de siempre. Mismos tres estados que postOrder:
+//   'ok'       → quedó registrado allá (o ya estaba: la RPC es idempotente
+//                por request_id, y si el pedido en realidad SÍ había entrado
+//                contesta already_registered — también es un final feliz).
+//   'rejected' → rechazo determinista (token inválido, payload malformado):
+//                reintentar da lo mismo.
+//   'error'    → sin red / timeout / migración sin correr (PGRST202): se
+//                reintenta la entrega en la próxima visita.
+async function reportExpired(token, p) {
+  const body = JSON.stringify({
+    p_token: token,
+    p_request_id: p.requestId,
+    // El shape guardado completo (sku/nombre/precio en los pendientes nuevos;
+    // los de antes de este cambio solo traen id/qty/flash). El servidor solo
+    // exige id/qty — lo demás queda en la fila como contexto para la
+    // vendedora.
+    p_items: p.items,
+    p_kind: p.kind === 'quote' ? 'quote' : 'order',
+  })
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+    const res = await fetch(`${url}/rest/v1/rpc/report_outbox_expired`, {
+      method: 'POST',
+      headers: {
+        apikey: anonKey,
+        Authorization: `Bearer ${anonKey}`,
+        'Content-Type': 'application/json',
+      },
+      body,
+      keepalive: body.length <= KEEPALIVE_MAX_BYTES,
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer))
+    if (!res.ok) return 'error'
+    const out = await res.json().catch(() => null)
+    return out?.ok ? 'ok' : 'rejected'
+  } catch {
+    return 'error'
+  }
+}
+
 // Varios intentos seguidos con espera corta entre uno y otro. La espera es
 // corta a propósito: esto puede estar corriendo con la pestaña ya en segundo
 // plano (el cliente saltó a WhatsApp), donde los timers largos se congelan.
@@ -220,7 +360,10 @@ export async function postWithRetry(args, tries = 2) {
 
 // Reintenta el pendiente guardado, si corresponde. Devuelve el estado del
 // intento, o null si no había nada que mandar (que es lo normal).
-export async function flushPending(token) {
+// `manual: true` (2026-09-02) = el cliente tocó "Reintentar ahora" en el
+// banner: se salta el tope de reintentos automáticos (un intento pedido a
+// mano no es insistencia del sistema).
+export async function flushPending(token, { manual = false } = {}) {
   const p = loadPending()
   if (!p) return null
 
@@ -230,23 +373,40 @@ export async function flushPending(token) {
     clearPending()
     return null
   }
-  if (Date.now() - (p.ts ?? 0) > MAX_AGE_MS) {
-    // El peor final del outbox: el pedido nunca entró y ya no se va a mandar
-    // solo. Queda en system_logs (2026-08-20) con lo que hace falta para que
-    // la asesora lo busque en el chat — antes esto se descartaba sin dejar
-    // rastro en ninguna parte.
+  if (Date.now() - (p.ts ?? 0) > maxAgeFor(p.kind)) {
+    // Expirado ya NO significa borrable (2026-09-02 — antes acá se descartaba
+    // y así se perdió una cotización real de $286.30): significa "pendiente
+    // de ENTREGAR" a order_failures, donde la vendedora dueña lo ve en el
+    // aviso rojo de su bandeja y lo recupera con el botón de siempre (que lo
+    // remonta con precios vigentes). Solo un reporte exitoso saca el ítem del
+    // teléfono; sin red se queda tal cual y la entrega se reintenta en la
+    // próxima visita.
+    const delivered = await reportExpired(token, p)
+    if (delivered === 'error') {
+      markFailed()
+      return null
+    }
+    // El critical de siempre, ahora con el payload completo de ítems como
+    // respaldo forense (los pendientes guardados desde 2026-09-02 traen
+    // sku/nombre/precio; los anteriores solo id/qty/flash) y el total.
     logEvent(
       'critical',
       'order_outbox',
       'outbox_exhausted',
-      'Pedido pendiente descartado por antigüedad (más de 24 h sin poder registrarse)',
-      { ...pendingContext(p), reason: 'expired' },
+      delivered === 'ok'
+        ? 'Pedido pendiente expirado: entregado a order_failures para revisión de la vendedora'
+        : 'Pedido pendiente expirado: el servidor rechazó el reporte (token o payload inválidos)',
+      { ...pendingContext(p), reason: 'expired', delivered: delivered === 'ok', items: p.items },
     )
+    // El banner pasa a "reportado al equipo de ventas" solo si de verdad
+    // quedó allá; un rechazo determinista no puede prometer eso (el respaldo
+    // es el critical de arriba).
+    if (delivered === 'ok') markReported(p.kind)
     clearPending()
     return null
   }
   // Se sigue mostrando el aviso, pero ya no se insiste solo.
-  if ((p.tries ?? 0) >= MAX_AUTO_TRIES) {
+  if (!manual && (p.tries ?? 0) >= MAX_AUTO_TRIES) {
     if (!p.exhaustedLogged) {
       markExhaustedLogged()
       logEvent(
@@ -279,6 +439,8 @@ export async function flushPending(token) {
       'Reintento automático del pedido pendiente sin respuesta de la base',
       { ...pendingContext(p), attempt: (p.tries ?? 0) + 1 },
     )
+    // Desde el primer fallo el banner del catálogo tiene que verse.
+    markFailed()
   }
   if (res !== 'error') clearPending()
   return res

@@ -63,6 +63,15 @@ const dict = {
       'Lo dejamos en tu carrito para que no tengas que armarlo de nuevo. Tocá "Reintentar" o avisale a tu asesora.',
     retrySave: 'Reintentar registro',
     retrying: 'Registrando…',
+    // Banner del outbox en el catálogo (2026-09-02): el cliente es un
+    // mayorista externo — tono neutro, sin jerga técnica.
+    outboxPendingOrder: 'Tienes un pedido que no se pudo registrar.',
+    outboxPendingQuote: 'Tienes una cotización que no se pudo registrar.',
+    outboxPendingBody: 'Lo volveremos a intentar automáticamente.',
+    outboxRetryNow: 'Reintentar ahora',
+    outboxRetrying: 'Reintentando…',
+    outboxReportedOrder: 'Tu pedido fue reportado al equipo de ventas — te contactarán pronto.',
+    outboxReportedQuote: 'Tu cotización fue reportada al equipo de ventas — te contactarán pronto.',
     // 2026-08-17: un rechazo del servidor no es lo mismo que un fallo de red.
     // El pedido llegó y quedó guardado como fallo con todos sus ítems, así que
     // la asesora lo ve en su panel y lo completa — no hay nada que el cliente
@@ -592,6 +601,13 @@ const dict = {
       'We kept it in your cart so you do not have to build it again. Tap "Retry" or let your sales rep know.',
     retrySave: 'Retry saving',
     retrying: 'Saving…',
+    outboxPendingOrder: 'You have an order that could not be registered.',
+    outboxPendingQuote: 'You have a quote that could not be registered.',
+    outboxPendingBody: 'We will keep retrying automatically.',
+    outboxRetryNow: 'Retry now',
+    outboxRetrying: 'Retrying…',
+    outboxReportedOrder: 'Your order was reported to the sales team — they will contact you soon.',
+    outboxReportedQuote: 'Your quote was reported to the sales team — they will contact you soon.',
     scPush: '📦 Send to SellerCloud',
     scPushing: 'Sending…',
     scPushed: 'SellerCloud #{id}',

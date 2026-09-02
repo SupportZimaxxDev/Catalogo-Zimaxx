@@ -4,7 +4,7 @@ import { useCart } from '../context/CartContext'
 import { money } from '../utils/format'
 import { buildOrderMessage, whatsappUrl } from '../utils/whatsapp'
 import { downloadOrderPdf } from '../utils/pdf'
-import { clearPending, flushPending, loadPending, postWithRetry, savePending } from '../utils/orderOutbox'
+import { clearPending, flushPending, loadPending, markFailed, postWithRetry, savePending } from '../utils/orderOutbox'
 import { logEvent } from '../utils/systemLog'
 
 // Pedido mínimo del negocio: no se puede enviar una orden por debajo de
@@ -134,7 +134,9 @@ export default function CartDrawer({ token, client }) {
       )
     } else {
       // Queda pendiente en el almacenamiento del teléfono: lo reintenta el
-      // efecto de arriba en esta misma visita o en la siguiente.
+      // efecto de arriba en esta misma visita o en la siguiente. La marca
+      // enciende el banner del catálogo desde este PRIMER fallo (2026-09-02).
+      markFailed()
       setSent(null)
       setFailed({ kind, reason: 'error' })
       logEvent(
