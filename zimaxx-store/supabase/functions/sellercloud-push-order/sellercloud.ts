@@ -357,6 +357,242 @@ function pick(obj: unknown, ...paths: string[]): unknown {
   return undefined
 }
 
+// ============================================================
+// Customers: búsqueda, listado paginado y alta (2026-09-02, para el backfill
+// de sellercloud_id y el alta/vinculación de clientes desde el panel).
+//
+// Contrato confirmado contra el Swagger del servidor (/rest/swagger/docs/v1):
+//   * GET /rest/api/Customers — filtros `model.email`, `model.phoneNumber`,
+//     `model.firstName`, `model.lastName`, `model.keyword`,
+//     `model.companyIds`, `model.pageNumber`, `model.pageSize`. Respuesta:
+//     GetAllResponse<CustomerDto> = { Items: [...], TotalResults: n }.
+//     El CustomerDto del LISTADO trae UserID/Email/FirstName/LastName/
+//     CorporateName — SIN teléfono: el teléfono vive en el DETALLE
+//     (GET /Customers/{id} → Personal.Phone1...) o como filtro server-side.
+//   * POST /rest/api/Customers — CreateCustomerRequest: FirstName es EL ÚNICO
+//     campo requerido por la API; LastName/Email/BusinessName/CompanyID/
+//     CustomerType (0 = WholeSale, 1 = Retail) opcionales. Devuelve el ID
+//     nuevo como entero pelado. OJO: el create NO acepta teléfono — se setea
+//     en un segundo paso con PUT /Customers/{id} { Phone1 } (UpdateCustomerRequest).
+//   * Aunque la API solo exige FirstName, ACÁ el apellido es obligatorio:
+//     SellerCloud valida Last Name al crear ÓRDENES ("Customer's last name is
+//     not valid", aprendido a golpes el 2026-08-31) — un customer creado sin
+//     apellido no serviría para lo único que lo creamos.
+// ============================================================
+
+export type CustomerSummary = {
+  id: number
+  firstName: string
+  lastName: string
+  email: string | null
+  business: string | null
+  // Solo cuando se conoce (viene del detalle o de una búsqueda por teléfono);
+  // el DTO del listado no lo trae.
+  phone: string | null
+}
+
+// Normaliza una fila del LISTADO (CustomerDto). Las claves con variantes por
+// la misma razón que customerDetails: una respuesta real puede venir con otra
+// capitalización y un match que se pierde por eso es carísimo de diagnosticar.
+export function customerSummary(raw: unknown): CustomerSummary | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const id = Number(pick(r, 'UserID', 'UserId', 'ID', 'Id', 'id', 'CustomerID'))
+  if (!Number.isFinite(id) || id <= 0) return null
+  const s = (v: unknown) => (v == null ? '' : String(v).trim())
+  const email = s(pick(r, 'Email', 'email'))
+  const phone = s(pick(r, 'Phone', 'Phone1', 'phone', 'Personal.Phone1'))
+  return {
+    id,
+    firstName: s(pick(r, 'FirstName', 'firstName', 'General.FirstName')),
+    lastName: s(pick(r, 'LastName', 'lastName', 'General.LastName')),
+    email: email ? email.toLowerCase() : null,
+    business: s(pick(r, 'CorporateName', 'BusinessName', 'General.CorporateName')) || null,
+    phone: phone || null,
+  }
+}
+
+export type CustomerFilters = {
+  email?: string | null
+  phone?: string | null // viaja como model.phoneNumber
+  firstName?: string | null
+  lastName?: string | null
+  keyword?: string | null
+  pageNumber?: number
+  pageSize?: number
+}
+
+export async function searchCustomers(
+  cfg: Config,
+  token: string,
+  filters: CustomerFilters,
+  f: Fetcher = fetch,
+): Promise<{ items: CustomerSummary[]; total: number }> {
+  const params = new URLSearchParams()
+  if (filters.email) params.set('model.email', String(filters.email).trim())
+  if (filters.phone) params.set('model.phoneNumber', String(filters.phone).trim())
+  if (filters.firstName) params.set('model.firstName', String(filters.firstName).trim())
+  if (filters.lastName) params.set('model.lastName', String(filters.lastName).trim())
+  if (filters.keyword) params.set('model.keyword', String(filters.keyword).trim())
+  // Acotado a la compañía del negocio, igual que las órdenes (el parámetro es
+  // plural/array en el Swagger; un solo valor viaja como un elemento).
+  params.set('model.companyIds', String(cfg.companyId))
+  params.set('model.pageNumber', String(filters.pageNumber ?? 1))
+  params.set('model.pageSize', String(filters.pageSize ?? 50))
+
+  const url = `${cfg.baseUrl}/rest/api/Customers?${params.toString()}`
+  const res = await f(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+  })
+  const data = (await readJson(res, 'No se pudo buscar clientes en SellerCloud', url)) as {
+    Items?: unknown[]
+    TotalResults?: number
+  } | null
+  const items = (data?.Items ?? [])
+    .map(customerSummary)
+    .filter((c): c is CustomerSummary => c != null)
+  return { items, total: Number(data?.TotalResults) || items.length }
+}
+
+// Todos los customers de la compañía, paginando hasta agotar. `onPage` es un
+// hook de progreso (el backfill imprime "página X de ~Y"). El tope de páginas
+// es un cortafuegos contra un TotalResults mentiroso o una API que repite la
+// última página para siempre — no un límite de negocio.
+//
+// Dos lecciones de la corrida real (2026-09-03):
+//   * El servidor CLAMPEA el pageSize: se piden 500 y sirve 50. Cortar por
+//     "vinieron menos de los pedidos" paraba en la página 1 con 50 de 1037.
+//     Se corta por total alcanzado o por falta de progreso, nunca por tamaño.
+//   * El token dura 60 min y una descarga completa + el loop de teléfonos del
+//     backfill pueden pasarse: el token se pide POR PÁGINA vía getToken, que
+//     cachea y se renueva solo a los 55 min — por eso esta función ya no
+//     recibe el token como parámetro.
+const LIST_PAGE_SIZE = 500
+const LIST_MAX_PAGES = 400
+
+export async function listAllCustomers(
+  cfg: Config,
+  f: Fetcher = fetch,
+  onPage?: (page: number, got: number, total: number) => void,
+  now = Date.now,
+): Promise<CustomerSummary[]> {
+  const all: CustomerSummary[] = []
+  const seen = new Set<number>()
+  for (let page = 1; page <= LIST_MAX_PAGES; page++) {
+    const token = await getToken(cfg, now, f)
+    const { items, total } = await searchCustomers(
+      cfg,
+      token,
+      { pageNumber: page, pageSize: LIST_PAGE_SIZE },
+      f,
+    )
+    if (items.length === 0) break
+    const before = all.length
+    for (const c of items) {
+      if (!seen.has(c.id)) {
+        seen.add(c.id)
+        all.push(c)
+      }
+    }
+    onPage?.(page, all.length, total)
+    if (all.length >= total) break
+    // Página sin ningún ID nuevo = el servidor repite la última página: cortar
+    // acá evita el loop infinito sin depender del TotalResults.
+    if (all.length === before) break
+  }
+  return all
+}
+
+export type NewCustomer = {
+  firstName: string
+  lastName: string
+  email?: string | null
+  business?: string | null
+}
+
+// CustomerType 1 = Wholesale (2026-09-03, confirmado por el usuario contra su
+// instancia). OJO: el Swagger se contradice a sí mismo — el x-enumNames del
+// CreateCustomerRequest dice 0 = WholeSale / 1 = Retail, pero el del FILTRO
+// del GET dice 0 = Retail / 1 = Wholesale. Manda lo observado en los datos
+// reales, no el Swagger. Todos los clientes de este negocio son mayoristas.
+const CUSTOMER_TYPE_WHOLESALE = 1
+
+export async function createCustomer(
+  cfg: Config,
+  token: string,
+  c: NewCustomer,
+  f: Fetcher = fetch,
+): Promise<number> {
+  const firstName = String(c.firstName ?? '').trim()
+  const lastName = String(c.lastName ?? '').trim()
+  // La API solo exige FirstName, pero sin LastName el customer nace inválido
+  // para crear órdenes (ver cabecera de esta sección): acá se exigen los dos.
+  if (!firstName || !lastName) {
+    throw new Error('para crear el cliente en SellerCloud hacen falta nombre Y apellido')
+  }
+  const email = String(c.email ?? '').trim()
+  const url = `${cfg.baseUrl}/rest/api/Customers/`
+  const res = await f(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      CompanyID: cfg.companyId,
+      FirstName: firstName,
+      LastName: lastName,
+      ...(email ? { Email: email } : {}),
+      ...(c.business ? { BusinessName: String(c.business).trim() } : {}),
+      CustomerType: CUSTOMER_TYPE_WHOLESALE,
+    }),
+  })
+  const data = await readJson(res, 'SellerCloud rechazó el alta del cliente', url)
+  const id = typeof data === 'number' ? data : pick(data, 'ID', 'Id', 'id', 'UserID', 'CustomerID')
+  const num = Number(id)
+  if (!Number.isFinite(num) || num <= 0) {
+    // Igual que createOrder: el customer PUEDE existir allá aunque no sepamos
+    // su ID — reintentar a ciegas lo duplicaría.
+    throw new Error(
+      `SellerCloud no devolvió el ID del cliente (respondió: ${JSON.stringify(data)?.slice(0, 200)}).` +
+        ' Buscalo en SellerCloud antes de reintentar.',
+    )
+  }
+  return num
+}
+
+// El teléfono no viaja en el create (CreateCustomerRequest no lo tiene): se
+// setea después con el PUT del UpdateCustomerRequest, donde sí existe como
+// Phone1. Mejor-esfuerzo a propósito: si esto falla, el customer YA existe y
+// el llamador avisa en vez de fallar — mismo criterio que setSalesRep.
+export async function setCustomerPhone(
+  cfg: Config,
+  token: string,
+  customerId: number,
+  phone: string,
+  f: Fetcher = fetch,
+): Promise<void> {
+  const url = `${cfg.baseUrl}/rest/api/Customers/${customerId}`
+  const res = await f(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ Phone1: phone }),
+  })
+  const text = await readBody(res)
+  if (!res.ok) {
+    throw failure(`No se pudo cargar el teléfono del cliente ${customerId}`, url, res, text)
+  }
+}
+
 export function customerDetails(customer: Record<string, unknown>) {
   const email = pick(customer, 'Email', 'email', 'UserName', 'Username', 'General.Email')
   const first = pick(customer, 'FirstName', 'firstName', 'General.FirstName', 'BillingAddress.FirstName')

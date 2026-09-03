@@ -26,16 +26,25 @@ const STATUS_STYLES = {
 // `units` (migration-2026-08-20-orders-units.sql). Los ítems completos se
 // piden POR PEDIDO al desplegar la fila o al actuar sobre él (ensureItems).
 // Con ~250 pedidos/semana, bajar todo con items eran ~14 MB a los 3 meses.
+// `price_lists(code, label)` (2026-09-02, a pedido del usuario): la lista de
+// precios de la que viene cada pedido, visible por fila. Ojo con lo que ES:
+// la lista ACTUAL del cliente (un pedido no congela con qué lista se creó —
+// congela los precios en items). Si al cliente le cambiaron la lista después
+// del pedido, acá se ve la nueva — mismo criterio que la detección de drift,
+// que también compara contra la lista vigente. Para una vendedora, RLS de
+// price_lists ya le deja leer las listas de SUS clientes (una lista con
+// dueñas fuerza al cliente a quedar con una de ellas).
 const ORDER_SELECT =
   'id, client_id, created_at, kind, status, total, stock_applied, request_id, ' +
   'sellercloud_order_id, sellercloud_pushed_at, sellercloud_error, units, ' +
-  'clients(name, phone, vendedora_id, vendedores(name))'
+  'clients(name, phone, vendedora_id, vendedores(name), price_lists(code, label))'
 
 // Si la migración de `units` todavía no corrió, el select de arriba da 42703
 // (columna inexistente): se degrada al select viejo con items incluidos — más
 // pesado, pero la bandeja funciona igual. Así ni la migración bloquea el
 // deploy ni el deploy espera a la migración.
-const ORDER_SELECT_LEGACY = '*, clients(name, phone, vendedora_id, vendedores(name))'
+const ORDER_SELECT_LEGACY =
+  '*, clients(name, phone, vendedora_id, vendedores(name), price_lists(code, label))'
 
 // Ventana de tiempo por defecto de la bandeja (2026-08-20): los pedidos
 // crecen ~250 por semana y "traer todo" crece sin techo — la operación diaria
@@ -831,6 +840,18 @@ export default function OrdersAdmin() {
                   <span className="block text-xs font-normal text-primary/50">
                     {o.clients?.phone}
                   </span>
+                  {/* La lista de precios del cliente (2026-09-02): de dónde
+                      salen los precios de sus pedidos. Es la lista ACTUAL —
+                      ver el comentario de ORDER_SELECT. Sin dato (cliente
+                      borrado, RLS), no se muestra nada. */}
+                  {o.clients?.price_lists?.label && (
+                    <span
+                      title={t('orderPriceList')}
+                      className="mt-1 inline-block max-w-[11rem] truncate rounded-full bg-primary/10 px-2 py-0.5 align-bottom text-[10px] font-semibold uppercase tracking-wide text-primary/60"
+                    >
+                      🏷️ {o.clients.price_lists.label}
+                    </span>
+                  )}
                 </td>
                 <td className="p-3">
                   <span
