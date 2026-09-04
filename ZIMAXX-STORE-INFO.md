@@ -82,7 +82,30 @@
 > estado real (2026-08-12)" — la lista de pendientes de este doc ya se equivocó
 > en las dos direcciones antes.
 >
-> Creado: 2026-07-02. Última actualización: 2026-09-03 (**ejecución y ajustes
+> Creado: 2026-07-02. Última actualización: 2026-09-03, cierre de la tanda
+> SellerCloud (**backfill aplicado + hallazgo de duplicados**, punto 77: el
+> `--apply` vinculó **5 clientes** (Genesis Mercado, Luis Linares, Manuel
+> García, Mohaya Askoul, Roxana Ortega) y **22 rebotaron por el índice único**
+> — ya existe OTRO cliente local con ese sellercloud_id: son pares de
+> **duplicados locales** (mismo nombre, teléfono con dígitos de más/de menos
+> que escapa a la dedup por sufijo) u **homónimos que NO hay que fusionar**
+> (las dos Diana Torres tienen teléfonos totalmente distintos). Varios pares
+> tienen pedidos EN AMBAS filas → la fusión es decisión humana, caso por caso;
+> no existe herramienta de merge todavía y `delete_client` rechaza filas con
+> pedidos. Reporte con conteos en
+> `Documents/catalogo/backfill-sellercloud-2026-09-03/duplicados.csv` (+ los
+> CSVs matches/ambiguous/unmatched finales en la misma carpeta). El dry-run
+> real dio: 1039 customers allá vs 1939 clientes sin vincular acá, 27
+> automáticos por nombre único, 0 por email (casi nadie tiene correo cargado),
+> y los 4 hits de teléfono degradados a revisión — **model.phoneNumber
+> matchea por SUBSTRING** y la primera corrida vinculaba 2 de 4 al customer
+> equivocado; el fix verifica contra el teléfono REAL del detalle del
+> customer. **PENDIENTE: deploy del frontend** (panel inline + drift +
+> outbox + lista de precios por pedido, todo sin deployar); resolver los 22
+> duplicados y los 4 ambiguos a mano; los 1908 sin candidato se crean bajo
+> demanda desde el panel.)
+>
+> Antes, misma fecha (**ejecución y ajustes
 > de la tanda SellerCloud**, punto 76: las 3 migraciones del 09-02 YA CORRIERON
 > en producción (usuario), `sellercloud-customers` y `sellercloud-push-order`
 > (v13 — saldado el redeploy pendiente del 08-31) DESPLEGADAS vía
@@ -99,9 +122,7 @@
 > observado). Nota: el proyecto usa las API keys NUEVAS (`sb_secret_...`) —
 > las legacy service_role están deshabilitadas desde julio; el backfill usa la
 > nueva. Verificado: sc-customers 26/26 (con clamp y página repetida),
-> Playwright 26/26 (panel inline + correo), push 35 OK, build limpio. El
-> dry-run del backfill corrió contra la API real. Pendiente: deploy del
-> frontend + --apply del backfill tras revisar los CSVs.)
+> Playwright 26/26 (panel inline + correo), push 35 OK, build limpio.)
 >
 > Antes: 2026-09-02, cuarta tanda del día
 > (**clientes ↔ SellerCloud: backfill de IDs, alta y vinculación**, punto 75,
