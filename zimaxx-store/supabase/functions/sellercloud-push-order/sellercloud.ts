@@ -507,6 +507,83 @@ export async function listAllCustomers(
   return all
 }
 
+// ============================================================
+// Inventario (2026-09-04, para la Edge Function sellercloud-refresh-stock).
+//
+// Endpoint verificado contra la doc oficial (developer.sellercloud.com,
+// "Get Inventory Info for Multiple Products"):
+//   GET {base}/rest/api/Inventory?pageNumber=N&pageSize=50&companyID=<id>
+//   → { Items: [ { ID, InventoryAvailableQty, ... } ], TotalResults: n }
+//
+// Tres cosas que importan y NO son como en Orders/Customers:
+//   * Los parámetros van SIN el prefijo `model.` — así los muestra la doc de
+//     este endpoint (Orders/Customers sí lo llevan, verificado contra la API
+//     real en su momento).
+//   * pageSize máximo 50 POR CONTRATO ("The maximum number of products that
+//     can be pulled with a single call is 50") — acá el clampeo que Customers
+//     hacía en silencio está documentado, así que se pide 50 directo.
+//   * El `ID` del item ES el SKU (mismo dato que la columna del export de
+//     Excel que hoy sube el encargado); el disponible es
+//     InventoryAvailableQty (el Excel lo llama InventoryAvailableQTY).
+// El filtro companyID acota a la compañía del negocio, igual que hace el
+// resto del código con model.companyID/companyIds.
+// ============================================================
+
+export type InventoryRow = { sku: string; qty: number }
+
+export const INVENTORY_PAGE_SIZE = 50
+
+// Normaliza un item del listado. Claves con variantes por el mismo motivo que
+// customerSummary: una respuesta real puede venir con otra capitalización y
+// un SKU que se pierde por eso es carísimo de diagnosticar. Devuelve null si
+// no hay SKU o el disponible no es numérico — el llamador lo cuenta como
+// omitido, nunca inventa un 0 (0 significa "sin stock" y despublica).
+export function inventoryRow(raw: unknown): InventoryRow | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const sku = String(pick(r, 'ID', 'Id', 'id', 'SKU', 'Sku', 'sku', 'ProductID') ?? '').trim()
+  if (!sku) return null
+  const qty = Number(
+    pick(r, 'InventoryAvailableQty', 'InventoryAvailableQTY', 'inventoryAvailableQty', 'AvailableQty'),
+  )
+  if (!Number.isFinite(qty)) return null
+  return { sku, qty: Math.trunc(qty) }
+}
+
+export async function fetchInventoryPage(
+  cfg: Config,
+  token: string,
+  page: number,
+  f: Fetcher = fetch,
+): Promise<{ rows: InventoryRow[]; skipped: number; total: number }> {
+  const params = new URLSearchParams()
+  params.set('pageNumber', String(page))
+  params.set('pageSize', String(INVENTORY_PAGE_SIZE))
+  params.set('companyID', String(cfg.companyId))
+
+  const url = `${cfg.baseUrl}/rest/api/Inventory?${params.toString()}`
+  const res = await f(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+  })
+  const data = (await readJson(res, 'No se pudo leer el inventario de SellerCloud', url)) as {
+    Items?: unknown[]
+    TotalResults?: number
+  } | null
+  const items = data?.Items ?? []
+  const rows: InventoryRow[] = []
+  let skipped = 0
+  for (const it of items) {
+    const row = inventoryRow(it)
+    if (row) rows.push(row)
+    else skipped++
+  }
+  return { rows, skipped, total: Number(data?.TotalResults) || 0 }
+}
+
 export type NewCustomer = {
   firstName: string
   lastName: string

@@ -3,6 +3,8 @@ import { Navigate, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
 import ThemeToggle from '../../components/ThemeToggle'
+import InventoryFreshness from './InventoryFreshness'
+import { useInventoryFreshness } from '../../hooks/useInventoryFreshness'
 
 function Login() {
   const { t } = useI18n()
@@ -77,6 +79,12 @@ export default function AdminLayout() {
   // antes de que responda el RPC).
   const [isSuper, setIsSuper] = useState(undefined)
   const [newOrders, setNewOrders] = useState(0)
+
+  // Frescura de inventario (2026-09-04): un solo dueño del estado — el
+  // indicador del header lo pinta y las páginas lo reciben por Outlet context
+  // (Pedidos lo usa para el candado de Atendido/push). Solo consulta con rol
+  // resuelto: sin sesión no hay nada que preguntar.
+  const inventory = useInventoryFreshness(!!role)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null))
@@ -186,7 +194,10 @@ export default function AdminLayout() {
               </span>
             </h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            {/* Indicador de frescura + 🔄 Refrescar stock (2026-09-04):
+                visible en todas las pestañas para todos los roles. */}
+            <InventoryFreshness inventory={inventory} />
             <ThemeToggle />
             <button
               onClick={() => supabase.auth.signOut()}
@@ -221,7 +232,7 @@ export default function AdminLayout() {
         </nav>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6">
-        <Outlet context={{ role, isSuper }} />
+        <Outlet context={{ role, isSuper, inventory }} />
       </main>
     </div>
   )

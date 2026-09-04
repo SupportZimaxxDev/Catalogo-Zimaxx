@@ -8,6 +8,7 @@ import { downloadOrderExcel } from '../../utils/excel'
 import { downloadOrderPdf } from '../../utils/pdf'
 import { SearchIcon, inputCls, useInfiniteRows } from './ui'
 import ManualOrderModal from './ManualOrderModal'
+import { formatAgo } from '../../hooks/useInventoryFreshness'
 
 // Estilos de badge por estado (2026-07-15 agrega 'cancelled': un pedido
 // se arma y confirma, pero a veces el cliente lo cancela después).
@@ -68,8 +69,17 @@ const LIVE_PRICING_CHUNK = 100
 // memoria del chat de WhatsApp.
 export default function OrdersAdmin() {
   const { t } = useI18n()
-  const { role } = useOutletContext()
+  const { role, isSuper, inventory } = useOutletContext()
   const isAdmin = role === 'admin'
+
+  // Candado de frescura (2026-09-04): la VERDAD vive en el servidor
+  // (update_order_status rechaza con ZS001, la Edge Function del push con
+  // code 'stale_inventory'); acá solo se refleja — botones deshabilitados con
+  // tooltip y acceso directo al refresco. Si el dato no está (migración sin
+  // correr), invStale es false y todo se ve como antes.
+  const invStale = inventory?.freshness?.is_stale === true
+  const invAge = formatAgo(inventory?.freshness?.minutes_ago)
+  const invStaleTip = invStale ? t('invStaleTooltip', { time: invAge ?? '' }) : undefined
   const [orders, setOrders] = useState([])
   const [expanded, setExpanded] = useState(null)
   // Sin el tope de 200 la primera carga puede tardar: hasta que termine, la
@@ -285,13 +295,16 @@ export default function OrdersAdmin() {
   // real lo hace la Edge Function `sellercloud-push-order`: el usuario y la
   // contraseña de la API no pueden vivir en el navegador. Acá solo se dispara
   // y se muestra el resultado.
-  const pushToSellerCloud = async (order) => {
+  // p_override / override (2026-09-04): jamás default — solo lo manda el
+  // botón "forzar" que ve el superadmin después de un rechazo por inventario
+  // vencido (code 'stale_inventory'). El servidor re-verifica el rol y audita.
+  const pushToSellerCloud = async (order, override = false) => {
     if (pushing) return
     setPushError(null)
     setPushing(order.id)
     try {
       const { data, error } = await supabase.functions.invoke('sellercloud-push-order', {
-        body: { order_id: order.id },
+        body: { order_id: order.id, ...(override ? { override: true } : {}) },
       })
       if (error) {
         // supabase-js devuelve un mensaje genérico ante un no-2xx ("Edge
@@ -299,13 +312,15 @@ export default function OrdersAdmin() {
         // la función viene en el cuerpo, hay que leerlo de error.context.
         // Mismo caso que admin-create-vendedora-user.
         let message = error.message
+        let code = null
         try {
           const detail = await error.context?.json?.()
           if (detail?.error) message = detail.error
+          if (detail?.code) code = detail.code
         } catch {
           /* se queda el genérico */
         }
-        setPushError({ id: order.id, message })
+        setPushError({ id: order.id, message, code })
       } else if (data?.warning) {
         // La orden entró pero le faltó un dato (Sales Rep o Marketing
         // Source): se corrige para la próxima, y eso no se puede tragar en
@@ -383,15 +398,23 @@ export default function OrdersAdmin() {
   // 2026-08-04: la misma RPC mueve el stock de los productos (descuenta al
   // marcar atendido un pedido real, devuelve al reabrir/cancelar) y devuelve
   // qué ajustó, para mostrarlo acá.
-  const applyStatus = async (id, status) => {
+  // override (2026-09-04): ver pushToSellerCloud — solo el botón "forzar" del
+  // superadmin lo manda, después de un rechazo ZS001. p_override viaja SOLO
+  // cuando es true: así el frontend nuevo sigue funcionando contra una base
+  // sin la migración (la firma vieja de dos argumentos resuelve igual).
+  const applyStatus = async (id, status, override = false) => {
     setStatusError(null)
     setStockInfo(null)
     const { data, error } = await supabase.rpc('update_order_status', {
       p_order_id: id,
       p_status: status,
+      ...(override ? { p_override: true } : {}),
     })
     if (error) {
-      setStatusError({ id, message: error.message })
+      // error.code trae el SQLSTATE del RAISE: ZS001 = candado de frescura
+      // (carrera: estaba fresco al cargar la página, venció al apretar). El
+      // render muestra el CTA de refresco — y el forzar, si es superadmin.
+      setStatusError({ id, message: error.message, code: error.code, status })
       return
     }
     setOrders((prev) =>
@@ -909,15 +932,35 @@ export default function OrdersAdmin() {
                     )}
                     {(o.status ?? 'new') === 'new' ? (
                       <span className="inline-flex gap-1.5">
+                        {/* Candado de frescura (2026-09-04): con inventario
+                            vencido, marcar Atendido un pedido real queda
+                            deshabilitado (la RPC lo rechazaría igual — esto
+                            solo lo refleja) con el refresco a un click. Las
+                            cotizaciones no tocan stock y pasan siempre. */}
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
                             setConfirmStatus({ id: o.id, status: 'done' })
                           }}
-                          className="rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary"
+                          disabled={invStale && o.kind === 'order'}
+                          title={invStale && o.kind === 'order' ? invStaleTip : undefined}
+                          className="rounded-lg border border-line px-2.5 py-1 text-xs text-primary/60 transition-colors hover:border-secondary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {t('markDone')}
                         </button>
+                        {invStale && o.kind === 'order' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              inventory?.refresh()
+                            }}
+                            disabled={inventory?.refreshing}
+                            title={t('invRefreshBtn')}
+                            className="rounded-lg border border-amber-400 px-2 py-1 text-xs text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-amber-400 dark:hover:bg-amber-950/40"
+                          >
+                            🔄
+                          </button>
+                        )}
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
@@ -948,9 +991,41 @@ export default function OrdersAdmin() {
                       </p>
                     )}
                     {statusError?.id === o.id && (
-                      <p className="max-w-[13rem] whitespace-normal text-[11px] font-medium leading-snug text-red-600 dark:text-red-400">
-                        {statusError.message}
-                      </p>
+                      <div className="max-w-[13rem]">
+                        <p className="whitespace-normal text-[11px] font-medium leading-snug text-red-600 dark:text-red-400">
+                          {statusError.message}
+                        </p>
+                        {/* Carrera del candado (ZS001): estaba fresco al
+                            cargar y venció al apretar — el error del servidor
+                            se muestra con el mismo CTA de refresco. El forzar
+                            solo lo ve el superadmin, tras el primer rechazo. */}
+                        {statusError.code === 'ZS001' && (
+                          <span className="mt-1 inline-flex flex-wrap gap-1.5">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                inventory?.refresh()
+                              }}
+                              disabled={inventory?.refreshing}
+                              className="rounded-lg border border-amber-400 px-2 py-1 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-amber-400 dark:hover:bg-amber-950/40"
+                            >
+                              {inventory?.refreshing ? t('invRefreshing') : t('invRefreshCta')}
+                            </button>
+                            {isSuper && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  applyStatus(o.id, statusError.status ?? 'done', true)
+                                }}
+                                title={t('invOverrideHint')}
+                                className="rounded-lg border border-red-400 px-2 py-1 text-[11px] font-semibold text-red-700 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
+                              >
+                                {t('invOverrideBtn')}
+                              </button>
+                            )}
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
                 </td>
@@ -1006,13 +1081,34 @@ export default function OrdersAdmin() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
-                              if (o.status === 'done') pushToSellerCloud(o)
+                              if (o.status === 'done' && !invStale) pushToSellerCloud(o)
                             }}
-                            disabled={pushing === o.id || o.status !== 'done'}
-                            title={o.status !== 'done' ? t('scPushNeedsDone') : undefined}
+                            disabled={pushing === o.id || o.status !== 'done' || invStale}
+                            title={
+                              o.status !== 'done'
+                                ? t('scPushNeedsDone')
+                                : invStale
+                                  ? invStaleTip
+                                  : undefined
+                            }
                             className="whitespace-nowrap rounded-full border border-indigo-400 px-2.5 py-1 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
                           >
                             {pushing === o.id ? t('scPushing') : t('scPush')}
+                          </button>
+                        )}
+                        {/* Candado de frescura sobre el push (2026-09-04):
+                            mismo acceso directo al refresco que en Atendido. */}
+                        {!o.sellercloud_order_id && o.status === 'done' && invStale && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              inventory?.refresh()
+                            }}
+                            disabled={inventory?.refreshing}
+                            title={t('invRefreshBtn')}
+                            className="rounded-full border border-amber-400 px-2 py-1 text-xs text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-amber-400 dark:hover:bg-amber-950/40"
+                          >
+                            🔄
                           </button>
                         )}
                       </span>
@@ -1072,6 +1168,36 @@ export default function OrdersAdmin() {
                       >
                         {pushError?.id === o.id ? pushError.message : o.sellercloud_error}
                       </p>
+                    )}
+                    {/* Carrera del candado en el push (2026-09-04): el 409
+                        'stale_inventory' del servidor se muestra amigable con
+                        el mismo CTA de refresco; el forzar solo lo ve el
+                        superadmin tras el primer rechazo (queda auditado). */}
+                    {pushError?.id === o.id && pushError.code === 'stale_inventory' && (
+                      <span className="ml-auto inline-flex flex-wrap justify-end gap-1.5">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            inventory?.refresh()
+                          }}
+                          disabled={inventory?.refreshing}
+                          className="rounded-lg border border-amber-400 px-2 py-1 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-amber-400 dark:hover:bg-amber-950/40"
+                        >
+                          {inventory?.refreshing ? t('invRefreshing') : t('invRefreshCta')}
+                        </button>
+                        {isSuper && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              pushToSellerCloud(o, true)
+                            }}
+                            title={t('invOverrideHint')}
+                            className="rounded-lg border border-red-400 px-2 py-1 text-[11px] font-semibold text-red-700 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
+                          >
+                            {t('invOverrideBtn')}
+                          </button>
+                        )}
+                      </span>
                     )}
                   </div>
                 </td>

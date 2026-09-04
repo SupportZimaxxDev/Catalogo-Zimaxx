@@ -2039,6 +2039,433 @@ $$;
 
 revoke execute on function public.apply_order_stock(uuid, int) from public;
 
+-- ---------- Frescura de inventario (2026-09-04) ----------
+-- Registro unificado de actualizaciones de inventario + umbral configurable +
+-- candado en Atendido/push. Ver migration-2026-09-04-inventory-freshness.sql
+-- para el contexto completo (por qué una tabla nueva y no sync_runs, la regla
+-- de activación del candado y el orden de deploy).
+
+-- Configuración editable del proyecto (primera consumidora:
+-- stock_freshness_minutes). RLS sin policies: lectura vía funciones SECURITY
+-- DEFINER, escritura solo vía sa_set_stock_freshness.
+create table if not exists public.app_settings (
+  key        text primary key,
+  value      jsonb not null,
+  updated_at timestamptz not null default now(),
+  updated_by uuid
+);
+
+alter table public.app_settings enable row level security;
+revoke all on table public.app_settings from anon, authenticated;
+
+insert into public.app_settings (key, value)
+values ('stock_freshness_minutes', to_jsonb(45))
+on conflict (key) do nothing;
+
+-- Umbral con default duro (45): si la fila falta o guardaron basura, el
+-- sistema sigue funcionando. Sin grant: solo la llaman funciones de acá.
+create or replace function public.stock_freshness_minutes()
+returns int
+language plpgsql
+security definer
+set search_path = public
+stable
+as $$
+declare
+  v int;
+begin
+  begin
+    select (value #>> '{}')::int into v
+    from public.app_settings
+    where key = 'stock_freshness_minutes';
+  exception when others then
+    v := null;
+  end;
+  return coalesce(v, 45);
+end;
+$$;
+
+revoke execute on function public.stock_freshness_minutes() from public, anon, authenticated;
+
+-- Editar el umbral: solo superadmin, auditado. 5..1440 minutos.
+create or replace function public.sa_set_stock_freshness(p_minutes int)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_from int;
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede cambiar el umbral de frescura de inventario';
+  end if;
+  if p_minutes is null or p_minutes < 5 or p_minutes > 1440 then
+    raise exception 'el umbral tiene que estar entre 5 y 1440 minutos';
+  end if;
+
+  v_from := public.stock_freshness_minutes();
+
+  insert into public.app_settings (key, value, updated_at, updated_by)
+  values ('stock_freshness_minutes', to_jsonb(p_minutes), now(), auth.uid())
+  on conflict (key) do update
+    set value = excluded.value, updated_at = now(), updated_by = auth.uid();
+
+  perform public.sa_log(
+    'set_stock_freshness', 'stock_freshness_minutes',
+    jsonb_build_object('from_minutes', v_from, 'to_minutes', p_minutes)
+  );
+
+  return jsonb_build_object('ok', true, 'minutes', p_minutes);
+end;
+$$;
+
+revoke execute on function public.sa_set_stock_freshness(int) from public, anon;
+grant execute on function public.sa_set_stock_freshness(int) to authenticated;
+
+-- Una fila por corrida de actualización de inventario: 'excel_upload' (la
+-- carga de Excel de productos con columna de stock) o 'manual_refresh' (la
+-- Edge Function sellercloud-refresh-stock). Ciclo running → ok/error; una
+-- running colgada la marca error el próximo inventory_sync_begin.
+create table if not exists public.inventory_syncs (
+  id                uuid primary key default gen_random_uuid(),
+  started_at        timestamptz not null default now(),
+  finished_at       timestamptz,
+  source            text not null check (source in ('excel_upload', 'manual_refresh')),
+  status            text not null default 'running' check (status in ('running', 'ok', 'error')),
+  products_updated  int,
+  deactivated_count int,
+  reactivated_count int,
+  error_message     text,
+  started_by        uuid,
+  started_by_email  text
+);
+
+create index if not exists inventory_syncs_status_started_idx
+  on public.inventory_syncs (status, started_at desc);
+
+alter table public.inventory_syncs enable row level security;
+revoke all on table public.inventory_syncs from anon, authenticated;
+
+drop policy if exists admin_read_inventory_syncs on public.inventory_syncs;
+create policy admin_read_inventory_syncs on public.inventory_syncs
+  for select to authenticated
+  using (public.is_admin());
+
+-- Abre una corrida. Lock anti-concurrencia: una 'running' de menos de 10 min
+-- rechaza con ZS002; una de más de 10 min está colgada y se marca error acá.
+-- El advisory lock serializa dos begin simultáneos.
+create or replace function public.inventory_sync_begin(p_source text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_lock_minutes constant int := 10;
+  v_running      public.inventory_syncs%rowtype;
+  v_recovered    int := 0;
+  v_id           uuid;
+  v_email        text;
+begin
+  if not (public.is_admin() or public.is_vendedora()) then
+    raise exception 'no autorizado';
+  end if;
+  if p_source not in ('excel_upload', 'manual_refresh') then
+    raise exception 'source inválido: % (excel_upload | manual_refresh)', p_source;
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext('inventory_sync_begin'));
+
+  update public.inventory_syncs
+  set status        = 'error',
+      finished_at   = now(),
+      error_message = 'corrida colgada: seguía en running después de ' || v_lock_minutes
+                      || ' minutos; marcada como error por un intento nuevo'
+  where status = 'running'
+    and started_at < now() - make_interval(mins => v_lock_minutes);
+  get diagnostics v_recovered = row_count;
+
+  select * into v_running
+  from public.inventory_syncs
+  where status = 'running'
+  order by started_at desc
+  limit 1;
+
+  if found then
+    raise exception using
+      errcode = 'ZS002',
+      message = format(
+        'Ya hay una actualización de inventario en curso (empezó hace %s min): esperá a que termine.',
+        greatest(0, floor(extract(epoch from (now() - v_running.started_at)) / 60))::int
+      );
+  end if;
+
+  select email into v_email from auth.users where id = auth.uid();
+
+  insert into public.inventory_syncs (source, started_by, started_by_email)
+  values (p_source, auth.uid(), v_email)
+  returning id into v_id;
+
+  return jsonb_build_object('ok', true, 'id', v_id, 'recovered_stale', v_recovered);
+end;
+$$;
+
+revoke execute on function public.inventory_sync_begin(text) from public, anon;
+grant execute on function public.inventory_sync_begin(text) to authenticated;
+
+-- Cierra una corrida; solo si sigue 'running' (un resultado cerrado no se
+-- reescribe — si otra corrida ya la marcó colgada, devuelve ok:false).
+create or replace function public.inventory_sync_finish(
+  p_id                uuid,
+  p_status            text,
+  p_products_updated  int  default null,
+  p_deactivated_count int  default null,
+  p_reactivated_count int  default null,
+  p_error             text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_updated int;
+begin
+  if not (public.is_admin() or public.is_vendedora()) then
+    raise exception 'no autorizado';
+  end if;
+  if p_status not in ('ok', 'error') then
+    raise exception 'status inválido: % (ok | error)', p_status;
+  end if;
+
+  update public.inventory_syncs
+  set status            = p_status,
+      finished_at       = now(),
+      products_updated  = p_products_updated,
+      deactivated_count = p_deactivated_count,
+      reactivated_count = p_reactivated_count,
+      error_message     = left(p_error, 2000)
+  where id = p_id and status = 'running';
+  get diagnostics v_updated = row_count;
+
+  if v_updated = 0 then
+    return jsonb_build_object(
+      'ok', false,
+      'reason', 'la corrida no estaba en running (ya cerrada, o marcada colgada por otro intento)'
+    );
+  end if;
+
+  return jsonb_build_object('ok', true, 'id', p_id, 'status', p_status);
+end;
+$$;
+
+revoke execute on function public.inventory_sync_finish(uuid, text, int, int, int, text) from public, anon;
+grant execute on function public.inventory_sync_finish(uuid, text, int, int, int, text) to authenticated;
+
+-- Un chunk de inventario de SellerCloud ({sku, qty}): toca SOLO
+-- products.stock y los triggers de la tabla derivan disponibilidad y
+-- publicación — misma invariante que la carga de Excel. SKUs desconocidos se
+-- ignoran; -SPECIAL/-BOX se saltean (Excel tampoco los jala); qty inválido no
+-- tumba el chunk. Ver migration-2026-09-04-inventory-freshness.sql.
+create or replace function public.refresh_stock_upsert(p_rows jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_updated     int := 0;
+  v_deactivated int := 0;
+  v_reactivated int := 0;
+  v_matched     int := 0;
+  v_unknown     int := 0;
+  v_invalid     int := 0;
+  v_noncatalog  int := 0;
+begin
+  if not (public.is_admin() or public.is_vendedora()) then
+    raise exception 'no autorizado';
+  end if;
+  if p_rows is null or jsonb_typeof(p_rows) <> 'array' then
+    raise exception 'p_rows debe ser un array jsonb de {sku, qty}';
+  end if;
+
+  drop table if exists pg_temp.tmp_refresh_rows;
+  drop table if exists pg_temp.tmp_refresh_pre;
+
+  create temporary table tmp_refresh_rows on commit drop as
+  with raw as (
+    select
+      row_number() over ()            as rn,
+      nullif(trim(x ->> 'sku'), '')   as sku,
+      nullif(trim(x ->> 'qty'), '')   as qty_raw
+    from jsonb_array_elements(p_rows) as x
+  ),
+  dedup as (
+    select distinct on (lower(sku)) sku, qty_raw
+    from raw
+    where sku is not null
+    order by lower(sku), rn desc
+  )
+  select
+    d.sku,
+    case
+      when d.qty_raw ~ '^-?[0-9]+(\.[0-9]+)?$' then floor(d.qty_raw::numeric)::int
+      else null
+    end      as qty,
+    p.id     as product_id,
+    p.sku    as product_sku
+  from dedup d
+  left join public.products p on lower(trim(p.sku)) = lower(d.sku);
+
+  select count(*) into v_invalid    from tmp_refresh_rows where qty is null;
+  select count(*) into v_unknown    from tmp_refresh_rows where qty is not null and product_id is null;
+  select count(*) into v_noncatalog from tmp_refresh_rows
+    where qty is not null and product_id is not null and public.is_noncatalog_sku(product_sku);
+  select count(*) into v_matched    from tmp_refresh_rows
+    where qty is not null and product_id is not null and not public.is_noncatalog_sku(product_sku);
+
+  create temporary table tmp_refresh_pre on commit drop as
+  select p.id, p.active, p.deactivated_by_stock
+  from public.products p
+  join tmp_refresh_rows t on t.product_id = p.id
+  where t.qty is not null
+    and not public.is_noncatalog_sku(t.product_sku)
+    and p.stock is distinct from t.qty;
+
+  update public.products p
+  set stock = t.qty
+  from tmp_refresh_rows t
+  where p.id = t.product_id
+    and t.qty is not null
+    and not public.is_noncatalog_sku(t.product_sku)
+    and p.stock is distinct from t.qty;
+  get diagnostics v_updated = row_count;
+
+  select
+    count(*) filter (where pre.active and not p.active),
+    count(*) filter (where pre.deactivated_by_stock and p.active)
+  into v_deactivated, v_reactivated
+  from tmp_refresh_pre pre
+  join public.products p on p.id = pre.id;
+
+  return jsonb_build_object(
+    'updated',            v_updated,
+    'unchanged',          v_matched - v_updated,
+    'deactivated',        v_deactivated,
+    'reactivated',        v_reactivated,
+    'unknown_skus',       v_unknown,
+    'invalid_rows',       v_invalid,
+    'skipped_noncatalog', v_noncatalog
+  );
+end;
+$$;
+
+revoke execute on function public.refresh_stock_upsert(jsonb) from public, anon;
+grant execute on function public.refresh_stock_upsert(jsonb) to authenticated;
+
+-- La última corrida EXITOSA + umbral + si venció + si hay una en curso. Sin
+-- ninguna corrida exitosa, is_stale = false (regla de activación del candado:
+-- con la tabla vacía el candado está dormido).
+create or replace function public.get_inventory_freshness()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+stable
+as $$
+declare
+  v_last      public.inventory_syncs%rowtype;
+  v_running   public.inventory_syncs%rowtype;
+  v_threshold int := public.stock_freshness_minutes();
+  v_minutes   int := null;
+  v_stale     boolean := false;
+begin
+  select * into v_last
+  from public.inventory_syncs
+  where status = 'ok'
+  order by finished_at desc
+  limit 1;
+
+  if found then
+    v_minutes := greatest(0, floor(extract(epoch from (now() - v_last.finished_at)) / 60))::int;
+    v_stale   := v_minutes > v_threshold;
+  end if;
+
+  select * into v_running
+  from public.inventory_syncs
+  where status = 'running'
+  order by started_at desc
+  limit 1;
+
+  return jsonb_build_object(
+    'last_sync', case when v_last.id is null then null else jsonb_build_object(
+      'id',                v_last.id,
+      'source',            v_last.source,
+      'finished_at',       v_last.finished_at,
+      'products_updated',  v_last.products_updated,
+      'deactivated_count', v_last.deactivated_count,
+      'reactivated_count', v_last.reactivated_count
+    ) end,
+    'minutes_ago',       v_minutes,
+    'threshold_minutes', v_threshold,
+    'is_stale',          v_stale,
+    'running', case when v_running.id is null then null else jsonb_build_object(
+      'id',         v_running.id,
+      'source',     v_running.source,
+      'started_at', v_running.started_at
+    ) end
+  );
+end;
+$$;
+
+revoke execute on function public.get_inventory_freshness() from public, anon;
+grant execute on function public.get_inventory_freshness() to authenticated;
+
+-- Auditoría del escape de emergencia desde la Edge Function del push (la edad
+-- se calcula acá, no la manda el caller). update_order_status audita su
+-- propio override adentro, con la misma acción 'freshness_override'.
+create or replace function public.audit_freshness_override(
+  p_via      text,
+  p_order_id uuid default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_fresh jsonb;
+  v_email text;
+begin
+  if not public.is_superadmin() then
+    raise exception 'solo el superadmin puede saltear el candado de inventario';
+  end if;
+
+  v_fresh := public.get_inventory_freshness();
+
+  select email into v_email from auth.users where id = auth.uid();
+
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, order_id, client_name, detail)
+  values
+    ('freshness_override', auth.uid(), v_email, p_order_id,
+     coalesce(nullif(trim(p_via), ''), 'sin_via'),
+     jsonb_build_object(
+       'via',                   coalesce(nullif(trim(p_via), ''), 'sin_via'),
+       'inventory_age_minutes', v_fresh -> 'minutes_ago',
+       'threshold_minutes',     v_fresh -> 'threshold_minutes',
+       'last_source',           v_fresh #> '{last_sync,source}',
+       'order_id',              p_order_id
+     ));
+
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+revoke execute on function public.audit_freshness_override(text, uuid) from public, anon;
+grant execute on function public.audit_freshness_override(text, uuid) to authenticated;
+
 -- ---------- RPC: update_order_status ----------
 -- Antes "Marcar atendido"/"Cancelar"/"Reabrir" hacían un update directo
 -- (`vendedora_update_own_orders` ya lo permitía) sin dejar rastro. A
@@ -2050,9 +2477,17 @@ revoke execute on function public.apply_order_stock(uuid, int) from public;
 -- pasarla a pedido con convert_quote_to_order. Marcar Atendido descuenta;
 -- salir de Atendido (reabrir/cancelar) devuelve. La bandera
 -- orders.stock_applied — no el estado — evita descontar dos veces.
+--
+-- 2026-09-04: candado de frescura en la transición que descuenta stock, con
+-- override explícito solo-superadmin auditado. La firma vieja (uuid, text) se
+-- elimina — con las dos conviviendo PostgREST no sabría cuál elegir; la nueva
+-- tiene default en p_override, así que el frontend viejo sigue funcionando.
+drop function if exists public.update_order_status(uuid, text);
+
 create or replace function public.update_order_status(
   p_order_id uuid,
-  p_status   text
+  p_status   text,
+  p_override boolean default false
 )
 returns jsonb
 language plpgsql
@@ -2065,6 +2500,7 @@ declare
   v_email   text;
   v_stock   jsonb   := null;
   v_applied boolean;
+  v_fresh   jsonb;
 begin
   if not (public.is_admin() or public.is_vendedora()) then
     raise exception 'no autorizado';
@@ -2092,6 +2528,39 @@ begin
   end if;
 
   v_applied := coalesce(v_order.stock_applied, false);
+
+  -- Candado de frescura (2026-09-04): solo la transición que va a DESCONTAR
+  -- stock. Reabrir/cancelar (devuelven) y cotizaciones (no tocan) pasan
+  -- siempre. errcode ZS001 = identificable por el frontend.
+  if v_order.kind = 'order' and p_status = 'done' and not v_applied then
+    v_fresh := public.get_inventory_freshness();
+    if (v_fresh ->> 'is_stale')::boolean then
+      if not p_override then
+        raise exception using
+          errcode = 'ZS001',
+          message = format(
+            'Inventario desactualizado (hace %s min, umbral %s min): refrescá el stock para continuar.',
+            v_fresh ->> 'minutes_ago', v_fresh ->> 'threshold_minutes'
+          );
+      end if;
+      if not public.is_superadmin() then
+        raise exception 'solo el superadmin puede saltear el candado de inventario';
+      end if;
+      select email into v_email from auth.users where id = auth.uid();
+      insert into public.admin_audit_log
+        (action, performed_by, performed_by_email, client_id, client_name, order_id, detail)
+      values
+        ('freshness_override', auth.uid(), v_email, v_client.id, v_client.name, p_order_id,
+         jsonb_build_object(
+           'via',                   'update_order_status',
+           'to_status',             p_status,
+           'inventory_age_minutes', v_fresh -> 'minutes_ago',
+           'threshold_minutes',     v_fresh -> 'threshold_minutes',
+           'last_source',           v_fresh #> '{last_sync,source}'
+         ));
+    end if;
+  end if;
+
   if v_order.kind = 'order' then
     if p_status = 'done' and not v_applied then
       v_stock   := public.apply_order_stock(p_order_id, -1);
@@ -2125,8 +2594,8 @@ begin
 end;
 $$;
 
-revoke execute on function public.update_order_status(uuid, text) from public;
-grant execute on function public.update_order_status(uuid, text) to authenticated;
+revoke execute on function public.update_order_status(uuid, text, boolean) from public;
+grant execute on function public.update_order_status(uuid, text, boolean) to authenticated;
 
 -- ---------- RPC: convert_quote_to_order ----------
 -- A pedido del usuario (2026-07-17): una cotización se puede "convertir"

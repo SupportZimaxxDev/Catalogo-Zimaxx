@@ -86,6 +86,29 @@ const dict = {
     scPushing: 'Enviando…',
     scPushed: 'SellerCloud #{id}',
     scPushNeedsDone: 'Marcá el pedido como Atendido antes de enviarlo a SellerCloud',
+    // Frescura de inventario (2026-09-04): indicador del header, botón de
+    // refresco on-demand y candado de Atendido/push.
+    invLabel: 'Inventario',
+    invNever: 'sin actualizaciones registradas',
+    invSourceExcel: 'Excel',
+    invSourceRefresh: 'Refresco',
+    invRefreshBtn: '🔄 Refrescar stock',
+    invRefreshing: 'Refrescando…',
+    invRunning: 'Hay una actualización de inventario en curso',
+    invRefreshDone: 'Stock actualizado — {n} productos, {d} desactivados, {r} reactivados',
+    invRefreshFailed: 'No se pudo refrescar el stock',
+    invStaleTooltip: 'Inventario desactualizado ({time}) — refrescá el stock para continuar',
+    invRefreshCta: '🔄 Refrescar stock',
+    invOverrideBtn: 'Forzar sin refrescar',
+    invOverrideHint:
+      'Solo superadmin, queda auditado. Para cuando SellerCloud está caído y no se puede refrescar.',
+    invThresholdTitle: 'Frescura de inventario',
+    invThresholdBody:
+      'Si la última actualización de stock (Excel o refresco) es más vieja que este umbral, marcar pedidos Atendidos y enviarlos a SellerCloud queda bloqueado hasta refrescar. Cada cambio queda auditado.',
+    invThresholdLabel: 'Umbral de frescura',
+    invThresholdSave: 'Guardar umbral',
+    invThresholdSaved: 'Umbral actualizado',
+    invThresholdFailed: 'No se pudo actualizar el umbral',
     // Filtro de la bandeja por enviadas/sin enviar a SellerCloud (2026-08-19).
     // Clientes ↔ SellerCloud (2026-09-02): alta con toggle y vinculación
     // guiada desde la ficha.
@@ -639,6 +662,27 @@ const dict = {
     scPushing: 'Sending…',
     scPushed: 'SellerCloud #{id}',
     scPushNeedsDone: 'Mark the order as Attended before sending it to SellerCloud',
+    invLabel: 'Inventory',
+    invNever: 'no updates recorded yet',
+    invSourceExcel: 'Excel',
+    invSourceRefresh: 'Refresh',
+    invRefreshBtn: '🔄 Refresh stock',
+    invRefreshing: 'Refreshing…',
+    invRunning: 'An inventory update is already running',
+    invRefreshDone: 'Stock updated — {n} products, {d} deactivated, {r} reactivated',
+    invRefreshFailed: 'Stock could not be refreshed',
+    invStaleTooltip: 'Inventory out of date ({time}) — refresh the stock to continue',
+    invRefreshCta: '🔄 Refresh stock',
+    invOverrideBtn: 'Force without refreshing',
+    invOverrideHint:
+      'Superadmin only, always audited. For when SellerCloud is down and stock cannot be refreshed.',
+    invThresholdTitle: 'Inventory freshness',
+    invThresholdBody:
+      'If the last stock update (Excel or refresh) is older than this threshold, marking orders as done and sending them to SellerCloud is blocked until a refresh. Every change is audited.',
+    invThresholdLabel: 'Freshness threshold',
+    invThresholdSave: 'Save threshold',
+    invThresholdSaved: 'Threshold updated',
+    invThresholdFailed: 'The threshold could not be updated',
     scCreateToggle: 'Also create in SellerCloud',
     scCreateToggleHint: 'without this, orders cannot be sent',
     firstNameLabel: 'First name',
