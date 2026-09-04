@@ -23,6 +23,35 @@ import { inputCls, SearchIcon } from './ui'
 // eso en el estado local sería duplicar las reglas del SQL.
 export default function SuperAdminPanel() {
   const { t } = useI18n()
+
+  // Umbral de frescura de inventario (2026-09-04): stock_freshness_minutes,
+  // editable solo acá vía sa_set_stock_freshness (RPC auditada — un admin
+  // común recibe "solo el superadmin puede..."). El valor vigente sale de
+  // get_inventory_freshness, la misma RPC que alimenta el indicador.
+  const [threshold, setThreshold] = useState(null) // vigente en la base
+  const [thresholdInput, setThresholdInput] = useState('')
+  const [thresholdMsg, setThresholdMsg] = useState(null) // { ok, text }
+
+  useEffect(() => {
+    supabase.rpc('get_inventory_freshness').then(({ data, error }) => {
+      if (!error && data?.threshold_minutes != null) {
+        setThreshold(data.threshold_minutes)
+        setThresholdInput(String(data.threshold_minutes))
+      }
+    })
+  }, [])
+
+  const saveThreshold = async () => {
+    setThresholdMsg(null)
+    const minutes = Number(thresholdInput)
+    const { data, error } = await supabase.rpc('sa_set_stock_freshness', { p_minutes: minutes })
+    if (error || !data?.ok) {
+      setThresholdMsg({ ok: false, text: error?.message ?? t('invThresholdFailed') })
+      return
+    }
+    setThreshold(data.minutes)
+    setThresholdMsg({ ok: true, text: t('invThresholdSaved') })
+  }
   const [users, setUsers] = useState([])
   const [lists, setLists] = useState([])
   const [vendedoras, setVendedoras] = useState([])
@@ -621,6 +650,44 @@ export default function SuperAdminPanel() {
               </div>
             )
           })}
+        </div>
+      </section>
+
+      {/* ---------- Frescura de inventario (2026-09-04) ---------- */}
+      <section className="space-y-3">
+        <h3 className="font-brand text-lg font-semibold">📦 {t('invThresholdTitle')}</h3>
+        <p className="max-w-2xl text-sm leading-relaxed text-primary/60">{t('invThresholdBody')}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="number"
+            min="5"
+            max="1440"
+            value={thresholdInput}
+            onChange={(e) => setThresholdInput(e.target.value)}
+            className={`${inputCls} w-28`}
+          />
+          <span className="text-sm text-primary/50">min</span>
+          <button
+            onClick={saveThreshold}
+            disabled={
+              !thresholdInput ||
+              Number(thresholdInput) === threshold ||
+              Number(thresholdInput) < 5 ||
+              Number(thresholdInput) > 1440
+            }
+            className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-secondary transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t('invThresholdSave')}
+          </button>
+          {thresholdMsg && (
+            <span
+              className={`text-sm font-medium ${
+                thresholdMsg.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+              }`}
+            >
+              {thresholdMsg.text}
+            </span>
+          )}
         </div>
       </section>
     </div>

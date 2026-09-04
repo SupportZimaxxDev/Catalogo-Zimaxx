@@ -78,6 +78,23 @@ function shouldLog(message) {
   return true
 }
 
+// Ruido de extensiones del navegador (2026-09-02): un `js_error` de MetaMask
+// (inpage.js inyectado por la extensión) llegó a system_logs sin ser código
+// nuestro. El criterio principal es el ORIGEN en el stack o el archivo
+// (chrome-extension:// / moz-extension:// / safari-extension:// y variantes
+// safari-web-extension); el mensaje ("Failed to connect to MetaMask") es solo
+// refuerzo para promesas rechazadas que llegan sin stack útil.
+const EXTENSION_ORIGIN = /\b(?:chrome|moz|safari|safari-web)-extension:\/\//i
+const EXTENSION_MESSAGE = /metamask/i
+
+function isExtensionNoise(message, stack, file) {
+  return (
+    EXTENSION_ORIGIN.test(stack ?? '') ||
+    EXTENSION_ORIGIN.test(file ?? '') ||
+    EXTENSION_MESSAGE.test(message ?? '')
+  )
+}
+
 // La URL va SIN query string: el link del catálogo lleva el token del cliente
 // en `?c=...` y esa credencial no tiene que quedar escrita en ningún log
 // (mismo criterio que order_failures.token_hint).
@@ -96,10 +113,16 @@ export function installGlobalErrorLogging() {
   window.addEventListener('error', (e) => {
     try {
       const msg = String(e?.message || e?.error?.message || 'error desconocido').slice(0, 500)
+      const stack = String(e?.error?.stack ?? '').slice(0, 1500)
+      const file = e?.filename ? `${e.filename}:${e.lineno ?? '?'}` : undefined
+      // Errores de extensiones del navegador: no son código nuestro y no se
+      // loguean (va ANTES de shouldLog para no gastarle la ventana ni el
+      // dedupe a los errores reales).
+      if (isExtensionNoise(msg, stack, file)) return
       if (!shouldLog(msg)) return
       logEvent('error', 'frontend', 'js_error', msg, {
-        stack: String(e?.error?.stack ?? '').slice(0, 1500) || undefined,
-        file: e?.filename ? `${e.filename}:${e.lineno ?? '?'}` : undefined,
+        stack: stack || undefined,
+        file,
         url: pageUrl(),
       })
     } catch {
@@ -111,10 +134,12 @@ export function installGlobalErrorLogging() {
     try {
       const reason = e?.reason
       const msg = String(reason?.message ?? reason ?? 'promesa rechazada sin motivo').slice(0, 500)
+      const stack = String(reason?.stack ?? '').slice(0, 1500)
+      if (isExtensionNoise(msg, stack, undefined)) return
       if (!shouldLog(msg)) return
       logEvent('error', 'frontend', 'js_error', msg, {
         kind: 'unhandledrejection',
-        stack: String(reason?.stack ?? '').slice(0, 1500) || undefined,
+        stack: stack || undefined,
         url: pageUrl(),
       })
     } catch {

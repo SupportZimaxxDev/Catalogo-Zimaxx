@@ -7,6 +7,7 @@ import FilterBar from '../components/FilterBar'
 import ProductCard from '../components/ProductCard'
 import CartBar from '../components/CartBar'
 import CartDrawer from '../components/CartDrawer'
+import OutboxBanner from '../components/OutboxBanner'
 import { useInfiniteRows } from '../hooks/useInfiniteRows'
 import { loadFavorites, pushFavorite, saveFavorites } from '../utils/favorites'
 
@@ -287,6 +288,10 @@ export default function Catalog() {
       </div>
 
       <main className="mx-auto max-w-6xl px-4 py-6">
+        {/* Pedido/cotización que no se pudo registrar (2026-09-02): visible
+            arriba del catálogo, no solo dentro del drawer del carrito. El
+            componente decide solo si hay algo que mostrar. */}
+        <OutboxBanner token={token} />
         {loading ? (
           <div className="flex flex-col items-center gap-3 py-20">
             <img src="/zimaxx.png" alt="" className="h-12 w-12 animate-pulse" />

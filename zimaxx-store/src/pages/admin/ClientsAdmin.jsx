@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
@@ -12,6 +12,7 @@ import { SearchIcon, UploadZone, inputCls, useInfiniteRows } from './ui'
 const COLS = {
   name: ['nombre', 'name', 'cliente', 'client'],
   phone: ['telefono', 'phone', 'tel', 'celular', 'whatsapp'],
+  email: ['email', 'correo', 'e-mail', 'mail', 'correo electronico'],
   list: ['lista de precio', 'lista de precios', 'lista', 'price list', 'pricelist'],
   vendedora: ['vendedora', 'vendedor', 'sales rep', 'rep', 'asesora'],
   vendedoraPhone: [
@@ -53,6 +54,14 @@ function resolvePhone(row) {
 
 function resolveVendedora(row) {
   return pick(row, COLS.vendedora) || row.salesman || undefined
+}
+
+// Email opcional del archivo (2026-08-31). Devuelve undefined si la columna
+// no viene o el valor no parece un email — undefined significa "no tocar lo
+// guardado": re-subir un Excel viejo sin columna de correo no borra nada.
+function resolveEmail(row) {
+  const raw = String(pick(row, COLS.email) ?? '').trim().toLowerCase()
+  return raw && EMAIL_RE.test(raw) ? raw : undefined
 }
 
 // Cuentas de prueba de QA/integraciones coladas en el export real
@@ -121,7 +130,26 @@ const LIST_CODE_ALIASES = {
   special: 'special',
 }
 
-const EMPTY_CLIENT = { name: '', phone: '', price_list_id: '', vendedora_id: '' }
+// scCreate (2026-09-02): "Crear también en SellerCloud" — prendido por
+// defecto; al elegir la lista 'quote' (cliente de cotización) se apaga solo.
+// Con el toggle ON el nombre se pide PARTIDO (nombre + apellido): SellerCloud
+// valida Last Name al crear órdenes ("Customer's last name is not valid") y
+// un customer creado sin apellido nace inválido para lo único que lo creamos.
+const EMPTY_CLIENT = {
+  name: '',
+  firstName: '',
+  lastName: '',
+  phone: '',
+  email: '',
+  price_list_id: '',
+  vendedora_id: '',
+  scCreate: true,
+}
+
+// Chequeo laxo de email (algo@algo.algo): atajar el typo obvio sin rechazar
+// correos raros pero reales. La RPC update_client_info aplica la misma regla
+// server-side. El email es opcional en todos los forms — vacío = sin correo.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 // Clave de match para deduplicar por teléfono (2026-07-15, bug real
 // detectado por el usuario: el mismo cliente quedó duplicado porque un
@@ -206,11 +234,17 @@ export default function ClientsAdmin() {
   // cambio pendiente a la vez, { clientId, listId } | null.
   const [pendingList, setPendingList] = useState(null)
 
-  // Edición de nombre/teléfono (2026-08-25): un solo cliente en edición a
-  // la vez, { clientId, name, phone } | null. Vía RPC update_client_info,
-  // mismo criterio que update_client_price_list: admin edita cualquiera,
-  // una vendedora solo los suyos (que es todo lo que ve), y el cambio
-  // queda auditado en admin_audit_log sí o sí.
+  // Edición de nombre/teléfono (2026-08-25) y SellerCloud ID (2026-08-31):
+  // un solo cliente en edición a la vez, { clientId, name, phone, scid } |
+  // null. Nombre/teléfono van por la RPC update_client_info (admin edita
+  // cualquiera, una vendedora solo los suyos) — la RPC exige p_email y para
+  // ella vacío = borrar, así que se le reenvía el email guardado tal cual:
+  // la columna Email se quitó de la tabla el 2026-09-01 (0 de 2755 clientes
+  // con correo, no había nada que mostrar) pero clients.email sigue en la
+  // base y lo llenan el alta, el Excel y el sync. El vínculo con SellerCloud
+  // va aparte por set_client_sellercloud_id (SOLO ADMIN: un ID equivocado
+  // manda los pedidos al cliente equivocado allá — el input ni se muestra a
+  // la vendedora). Todo queda auditado en admin_audit_log sí o sí.
   const [editForm, setEditForm] = useState(null)
   const [editBusy, setEditBusy] = useState(false)
 
@@ -221,6 +255,127 @@ export default function ClientsAdmin() {
   const [newClientError, setNewClientError] = useState('')
   const [newClientBusy, setNewClientBusy] = useState(false)
   const myVendedoraId = !isAdmin ? vendedoresList[0]?.id : undefined
+
+  // Panel SellerCloud (2026-09-02): buscar/vincular/crear el customer de un
+  // cliente, vía la Edge Function sellercloud-customers (las credenciales de
+  // la API nunca tocan el navegador; el permiso real vive en la RPC
+  // link_sellercloud_customer — admin cualquiera, vendedora sus clientes).
+  // Un solo panel a la vez:
+  // { client: {id, name, phone, email}, status: 'searching' | 'candidates' |
+  //   'creating' | 'linking' | 'createForm' | 'done' | 'failed',
+  //   candidates, message, afterCreate, first, last }
+  const [scPanel, setScPanel] = useState(null)
+
+  // supabase.functions.invoke devuelve un mensaje genérico ante un no-2xx: el
+  // motivo real que arma la función viene en el cuerpo (mismo caso que
+  // sellercloud-push-order en OrdersAdmin).
+  const invokeSc = async (body) => {
+    const { data, error } = await supabase.functions.invoke('sellercloud-customers', { body })
+    if (error) {
+      let message = error.message
+      try {
+        const detail = await error.context?.json?.()
+        if (detail?.error) message = detail.error
+      } catch {
+        /* se queda el genérico */
+      }
+      throw new Error(message)
+    }
+    if (data?.error) throw new Error(data.error)
+    return data
+  }
+
+  // Pieza 3: desde la fila de un cliente sin vínculo — busca candidatos por
+  // email/teléfono (y nombre si no hay nada) y deja elegir o crear.
+  const openScPanel = async (client) => {
+    setScPanel({ client, status: 'searching', candidates: [], afterCreate: false })
+    try {
+      const data = await invokeSc({
+        action: 'search',
+        email: client.email,
+        phone: client.phone,
+        name: client.name,
+      })
+      setScPanel((p) =>
+        p?.client.id === client.id
+          ? { ...p, status: 'candidates', candidates: data.candidates ?? [] }
+          : p,
+      )
+    } catch (e) {
+      setScPanel((p) => (p?.client.id === client.id ? { ...p, status: 'failed', message: e.message } : p))
+    }
+  }
+
+  // Vincular al candidato elegido: la Edge Function verifica que el ID exista
+  // allá y la RPC audita ('link_sellercloud_customer'). El cliente viaja por
+  // parámetro (no desde scPanel) para poder llamarse recién seteado el panel,
+  // antes de que React aplique el estado.
+  const linkSc = async (client, candidate) => {
+    setScPanel((p) => ({ ...p, status: 'linking' }))
+    try {
+      const data = await invokeSc({
+        action: 'link',
+        client_id: client.id,
+        sellercloud_id: candidate.id,
+      })
+      setClients((prev) =>
+        prev.map((c) => (c.id === client.id ? { ...c, sellercloud_id: data.sellercloud_id } : c)),
+      )
+      setScPanel((p) => ({
+        ...p,
+        status: 'done',
+        message: t('scLinkedMsg', { id: data.sellercloud_id }),
+      }))
+    } catch (e) {
+      setScPanel((p) => ({ ...p, status: 'candidates', message: e.message }))
+    }
+  }
+
+  // Crear el customer allá (con nombre/apellido) y vincular. `force` = el
+  // humano ya vio los candidatos (o la búsqueda no encontró nada) y decidió
+  // crear igual — la Edge Function sin force busca antes de crear. `email`
+  // (2026-09-03): el form del panel tiene su propio campo de correo — si no
+  // viene, se usa el guardado del cliente.
+  const createSc = async (client, { first, last, email, force }) => {
+    setScPanel((p) => ({ ...p, status: 'creating', message: null }))
+    try {
+      const data = await invokeSc({
+        action: 'create',
+        client_id: client.id,
+        first_name: first,
+        last_name: last,
+        email: email ?? client.email,
+        phone: client.phone,
+        force,
+      })
+      if (data.exists) {
+        // Solo pasa sin force: hay candidatos — decisión humana explícita.
+        setScPanel((p) => ({
+          ...p,
+          status: 'candidates',
+          candidates: data.candidates ?? [],
+          first,
+          last,
+        }))
+        return
+      }
+      const scId = data.sellercloud_id
+      setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, sellercloud_id: scId } : c)))
+      setScPanel((p) => ({
+        ...p,
+        status: 'done',
+        message: `${t('scCreatedMsg', { id: scId })}${data.warning ? ` ${data.warning}` : ''}`,
+      }))
+    } catch (e) {
+      // El cliente LOCAL ya existe y no se toca: SellerCloud nunca bloquea lo
+      // local. El fallo además quedó en system_logs (sellercloud_customers).
+      setScPanel((p) => ({
+        ...p,
+        status: 'failed',
+        message: `${p.afterCreate ? `${t('scCreateFailed')} ` : ''}${e.message}`,
+      }))
+    }
+  }
 
   // Búsqueda y filtros
   const [query, setQuery] = useState('')
@@ -263,9 +418,14 @@ export default function ClientsAdmin() {
       if (listFilter && c.price_list_id !== listFilter) return false
       if (repFilter && c.vendedora_id !== repFilter) return false
       if (terms.length === 0) return true
+      // El email entra en la búsqueda por términos (2026-08-31) y el ID de
+      // SellerCloud en la búsqueda por dígitos — así "¿de quién es la orden
+      // del cliente 51234 en SellerCloud?" se responde desde acá.
       return (
-        matchesTerms(terms, c.name, c.vendedores?.name) ||
-        (qDigits && cleanPhone(c.phone).includes(qDigits))
+        matchesTerms(terms, c.name, c.vendedores?.name, c.email) ||
+        (qDigits &&
+          (cleanPhone(c.phone).includes(qDigits) ||
+            String(c.sellercloud_id ?? '').includes(qDigits)))
       )
     })
   }, [clients, query, listFilter, repFilter])
@@ -377,6 +537,10 @@ export default function ClientsAdmin() {
         const forcedOwner = ownerFor(listId, vendedoraId)
         if (forcedOwner !== undefined) vendedoraId = forcedOwner
 
+        // Igual que vendedora_id: solo se toca si el archivo trae el dato —
+        // re-subir un export sin columna de correo no borra el guardado.
+        const email = resolveEmail(row)
+
         const existing = byPhone.get(phoneKey(phone))
         if (existing) {
           const { error } = await supabase
@@ -385,6 +549,7 @@ export default function ClientsAdmin() {
               name,
               price_list_id: listId,
               ...(vendedoraId !== undefined ? { vendedora_id: vendedoraId } : {}),
+              ...(email !== undefined ? { email } : {}),
             })
             .eq('id', existing.id)
           if (error) throw error
@@ -395,6 +560,7 @@ export default function ClientsAdmin() {
             .insert({
               name,
               phone,
+              email: email ?? null,
               token: generateToken(),
               price_list_id: listId,
               vendedora_id: vendedoraId ?? null,
@@ -427,9 +593,20 @@ export default function ClientsAdmin() {
   const createClient = async (e) => {
     e.preventDefault()
     setNewClientError('')
-    const name = newClientForm.name.trim()
+    // Con "Crear también en SellerCloud" el nombre viene PARTIDO (SellerCloud
+    // exige apellido para las órdenes) y el name local se compone de ambos.
+    const scOn = !!newClientForm.scCreate
+    const first = newClientForm.firstName.trim()
+    const last = newClientForm.lastName.trim()
+    const name = scOn ? `${first} ${last}`.trim() : newClientForm.name.trim()
     const phone = cleanPhone(newClientForm.phone)
+    const email = newClientForm.email.trim().toLowerCase()
+    if (scOn && (!first || !last)) return
     if (!name || phone.length < 7 || !newClientForm.price_list_id) return
+    if (email && !EMAIL_RE.test(email)) {
+      setNewClientError(t('invalidEmail'))
+      return
+    }
     // El unique constraint de la base compara el string completo: no
     // pesca un duplicado si el existente está guardado con código de
     // país y este nuevo no (o viceversa). Se chequea acá antes de
@@ -444,20 +621,44 @@ export default function ClientsAdmin() {
     const chosen = isAdmin ? newClientForm.vendedora_id || null : myVendedoraId
     const forced = ownerFor(newClientForm.price_list_id, chosen)
     const vendedoraId = forced !== undefined ? forced : chosen
-    const { error } = await supabase.from('clients').insert({
-      name,
-      phone,
-      token: generateToken(),
-      price_list_id: newClientForm.price_list_id,
-      vendedora_id: vendedoraId ?? null,
-    })
+    // .select('id'): el alta en SellerCloud necesita el id local recién
+    // creado. Si el insert falla, nada viaja a SellerCloud.
+    const { data: created, error } = await supabase
+      .from('clients')
+      .insert({
+        name,
+        phone,
+        email: email || null,
+        token: generateToken(),
+        price_list_id: newClientForm.price_list_id,
+        vendedora_id: vendedoraId ?? null,
+      })
+      .select('id')
+      .single()
     if (error) {
       setNewClientError(error.code === '23505' ? t('phoneInUse') : error.message)
-    } else {
-      setNewClientForm(null)
-      await load()
+      setNewClientBusy(false)
+      return
     }
+    setNewClientForm(null)
+    await load()
     setNewClientBusy(false)
+    // El cliente LOCAL ya quedó creado pase lo que pase de acá en más:
+    // SellerCloud nunca bloquea lo local. La Edge Function busca antes de
+    // crear — si el cliente parece existir allá, el panel muestra los
+    // candidatos y la decisión (vincular / crear igual) es humana.
+    if (scOn) {
+      const clientRow = { id: created.id, name, phone, email: email || null }
+      setScPanel({
+        client: clientRow,
+        status: 'creating',
+        candidates: [],
+        afterCreate: true,
+        first,
+        last,
+      })
+      createSc(clientRow, { first, last, force: false })
+    }
   }
 
   const copyLink = async (c) => {
@@ -556,7 +757,12 @@ export default function ClientsAdmin() {
 
   const startEdit = (client) => {
     setActionError('')
-    setEditForm({ clientId: client.id, name: client.name, phone: client.phone })
+    setEditForm({
+      clientId: client.id,
+      name: client.name,
+      phone: client.phone,
+      scid: client.sellercloud_id == null ? '' : String(client.sellercloud_id),
+    })
   }
 
   // Enter guarda, Escape cancela — mismo gesto que el teléfono editable
@@ -568,10 +774,10 @@ export default function ClientsAdmin() {
 
   // El botón Guardar ya se deshabilita con datos inválidos; las
   // validaciones de acá abajo las repite la RPC server-side (con los
-  // mensajes en español que muestra el banner). El duplicado se chequea
-  // antes por los últimos 10 dígitos — misma regla que el índice único de
-  // la base y que el alta (phoneKey) — para dar el mensaje amigable en el
-  // idioma del panel en vez del error crudo.
+  // mensajes en español que muestra el banner). Los duplicados se chequean
+  // antes — teléfono por los últimos 10 dígitos (misma regla que el índice
+  // único de la base y que el alta, phoneKey) y SellerCloud ID exacto — para
+  // dar el mensaje amigable en el idioma del panel en vez del error crudo.
   const saveEdit = async () => {
     setActionError('')
     const client = clients.find((c) => c.id === editForm.clientId)
@@ -585,20 +791,60 @@ export default function ClientsAdmin() {
       setActionError(t('phoneInUse'))
       return
     }
+    // Vínculo SellerCloud: solo admin (la vendedora ni ve el input, así que
+    // para ella `scidChanged` es siempre false y no se llama a la RPC).
+    const scid = editForm.scid.trim() === '' ? null : Number(editForm.scid)
+    const scidChanged = isAdmin && scid !== (client.sellercloud_id ?? null)
+    if (scidChanged && scid != null && clients.some((c) => c.id !== client.id && c.sellercloud_id === scid)) {
+      setActionError(t('sellercloudIdInUse'))
+      return
+    }
     setEditBusy(true)
     const { error } = await supabase.rpc('update_client_info', {
       p_client_id: client.id,
       p_name: name,
       p_phone: phone,
+      // Sin input de email en la tabla: se reenvía el guardado tal cual —
+      // omitirlo (o mandar null teniendo correo) se lo borraría al cliente.
+      p_email: client.email ?? null,
     })
-    setEditBusy(false)
     if (error) {
+      setEditBusy(false)
       setActionError(error.message)
       return
     }
+    if (scidChanged) {
+      const { error: scidError } = await supabase.rpc('set_client_sellercloud_id', {
+        p_client_id: client.id,
+        p_sellercloud_id: scid,
+      })
+      if (scidError) {
+        // Nombre/teléfono YA quedaron guardados: se reflejan igual, y la
+        // edición queda abierta con el error del vínculo en el banner.
+        setEditBusy(false)
+        setClients((prev) =>
+          prev.map((c) => (c.id === client.id ? { ...c, name, phone } : c))
+        )
+        setActionError(scidError.message)
+        return
+      }
+    }
+    setEditBusy(false)
     // Reflejar el cambio sin recargar todo (mismo criterio que updateList):
-    // la RPC guarda exactamente esto (nombre trimmeado, teléfono en dígitos).
-    setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, name, phone } : c)))
+    // las RPC guardan exactamente esto (nombre trimmeado, teléfono en
+    // dígitos).
+    setClients((prev) =>
+      prev.map((c) =>
+        c.id === client.id
+          ? {
+              ...c,
+              name,
+              phone,
+              ...(scidChanged ? { sellercloud_id: scid } : {}),
+            }
+          : c
+      )
+    )
     setEditForm(null)
   }
 
@@ -647,6 +893,166 @@ export default function ClientsAdmin() {
     if (target && target.id !== client.price_list_id) updateList(client, target.id)
   }
 
+  // Panel SellerCloud (2026-09-02; inline desde 2026-09-03 a pedido del
+  // usuario): un solo panel para los dos caminos — el alta con "Crear también
+  // en SellerCloud" (afterCreate) y el botón "Buscar en SellerCloud" de la
+  // fila. Se dibuja DENTRO de la tabla, como fila expandida bajo el cliente
+  // (mismo gesto que el detalle de un pedido en la bandeja); si esa fila no
+  // está a la vista (filtros, scroll infinito), cae al bloque de arriba de la
+  // tabla para no desaparecer en medio de un alta. Los candidatos vienen de
+  // la API real (email → teléfono → nombre) y la decisión de vincular o crear
+  // es siempre humana.
+  const scPanelInline =
+    scPanel && filtered.slice(0, visibleRows).some((c) => c.id === scPanel.client.id)
+  const scPanelBox = scPanel && (
+    <div className="animate-fade-up space-y-3 rounded-2xl border border-indigo-300 bg-indigo-50/50 p-4 dark:border-indigo-800 dark:bg-indigo-950/30">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-bold text-indigo-800 dark:text-indigo-300">
+          📦 SellerCloud — {scPanel.client.name}
+        </p>
+        <button
+          onClick={() => setScPanel(null)}
+          className="rounded-lg border border-line px-3 py-1 text-xs text-primary/60 transition-colors hover:border-primary/40"
+        >
+          {t('scCloseBtn')}
+        </button>
+      </div>
+
+      {scPanel.status === 'searching' && <p className="text-sm text-primary/60">{t('scSearching')}</p>}
+      {scPanel.status === 'creating' && <p className="text-sm text-primary/60">{t('scCreating')}</p>}
+      {scPanel.status === 'linking' && <p className="text-sm text-primary/60">{t('scLinking')}</p>}
+
+      {scPanel.status === 'done' && (
+        <p className="rounded-xl bg-green-100 p-3 text-sm font-medium text-green-800 dark:bg-green-900/40 dark:text-green-300">
+          ✓ {scPanel.message}
+        </p>
+      )}
+      {scPanel.status === 'failed' && (
+        <p className="max-h-32 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-xl bg-amber-100 p-3 text-sm font-medium text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+          ⚠️ {scPanel.message}
+        </p>
+      )}
+
+      {scPanel.status === 'candidates' && (
+        <>
+          <p className="text-sm text-primary/70">
+            {scPanel.candidates.length > 0 ? (
+              <>
+                <span className="font-semibold">{t('scLooksExisting')}</span> {t('scPickToLink')}
+              </>
+            ) : (
+              t('scNoCandidates')
+            )}
+          </p>
+          {scPanel.message && (
+            <p className="text-xs font-medium text-red-600 dark:text-red-400">{scPanel.message}</p>
+          )}
+          {scPanel.candidates.length > 0 && (
+            <ul className="divide-y divide-line rounded-xl border border-line bg-surface">
+              {scPanel.candidates.map((cand) => (
+                <li key={cand.id} className="flex flex-wrap items-center justify-between gap-2 p-2.5 text-sm">
+                  <span className="min-w-0">
+                    <span className="font-semibold">{cand.name}</span>
+                    <span className="ml-2 font-mono text-xs text-primary/50">#{cand.id}</span>
+                    <span className="block text-xs text-primary/50">
+                      {[cand.email, cand.phone, cand.business].filter(Boolean).join(' · ') || '—'}
+                    </span>
+                  </span>
+                  <button
+                    onClick={() => linkSc(scPanel.client, cand)}
+                    className="rounded-lg bg-ink px-3 py-1.5 text-xs font-bold text-secondary transition-opacity hover:opacity-90"
+                  >
+                    {t('scLinkBtn')}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {scPanel.afterCreate ? (
+            // Vino del alta: nombre y apellido ya están — crear igual es un
+            // solo click, explícito.
+            <button
+              onClick={() => createSc(scPanel.client, { first: scPanel.first, last: scPanel.last, force: true })}
+              className="rounded-lg border border-indigo-400 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
+            >
+              {scPanel.candidates.length > 0 ? t('scCreateAnyway') : t('scCreateHere')}
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                // Prefill partiendo el nombre local: última palabra →
+                // apellido (mismo criterio que customerDetails).
+                const parts = scPanel.client.name.trim().split(/\s+/)
+                setScPanel((p) => ({
+                  ...p,
+                  status: 'createForm',
+                  first: parts.length > 1 ? parts.slice(0, -1).join(' ') : parts[0] ?? '',
+                  last: parts.length > 1 ? parts[parts.length - 1] : '',
+                  emailField: p.client.email ?? '',
+                }))
+              }}
+              className="rounded-lg border border-indigo-400 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
+            >
+              {t('scCreateHere')}
+            </button>
+          )}
+        </>
+      )}
+
+      {scPanel.status === 'createForm' && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            const first = scPanel.first.trim()
+            const last = scPanel.last.trim()
+            const email = (scPanel.emailField ?? '').trim().toLowerCase()
+            if (!first || !last) return
+            if (email && !EMAIL_RE.test(email)) {
+              setScPanel((p) => ({ ...p, message: t('invalidEmail') }))
+              return
+            }
+            createSc(scPanel.client, { first, last, email: email || null, force: true })
+          }}
+          className="flex flex-wrap items-center gap-2"
+          title={t('scLastNameHint')}
+        >
+          <input
+            required
+            placeholder={t('firstNameLabel')}
+            value={scPanel.first}
+            onChange={(e) => setScPanel((p) => ({ ...p, first: e.target.value }))}
+            className="w-40 rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none transition-colors focus:border-secondary"
+          />
+          <input
+            required
+            placeholder={t('lastNameLabel')}
+            value={scPanel.last}
+            onChange={(e) => setScPanel((p) => ({ ...p, last: e.target.value }))}
+            className="w-40 rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none transition-colors focus:border-secondary"
+          />
+          {/* Correo propio del panel (2026-09-03, a pedido del usuario):
+              prellenado con el del cliente, editable — viaja al create de
+              SellerCloud. Vacío = el customer entra sin email (la API no lo
+              exige). */}
+          <input
+            type="email"
+            placeholder={t('emailOptional')}
+            value={scPanel.emailField ?? ''}
+            onChange={(e) => setScPanel((p) => ({ ...p, emailField: e.target.value }))}
+            className="w-52 rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none transition-colors focus:border-secondary"
+          />
+          <button className="rounded-lg bg-ink px-3 py-1.5 text-xs font-bold text-secondary transition-opacity hover:opacity-90">
+            {t('scCreateHere')}
+          </button>
+          <span className="text-xs text-primary/40">{t('scLastNameHint')}</span>
+          {scPanel.message && (
+            <span className="w-full text-xs font-medium text-red-600 dark:text-red-400">{scPanel.message}</span>
+          )}
+        </form>
+      )}
+    </div>
+  )
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -670,18 +1076,48 @@ export default function ClientsAdmin() {
           onSubmit={createClient}
           className="grid animate-fade-up gap-3 rounded-2xl border border-secondary/40 bg-surface p-5 shadow-sm md:grid-cols-2"
         >
-          <input
-            required
-            placeholder={t('name')}
-            value={newClientForm.name}
-            onChange={(e) => setNewClientForm({ ...newClientForm, name: e.target.value })}
-            className={inputCls}
-          />
+          {newClientForm.scCreate ? (
+            // Con el alta en SellerCloud, el nombre va PARTIDO: allá el
+            // apellido es obligatorio para poder facturar órdenes
+            // ("Customer's last name is not valid"). El name local se compone
+            // de ambos.
+            <div className="flex gap-2" title={t('scLastNameHint')}>
+              <input
+                required
+                placeholder={t('firstNameLabel')}
+                value={newClientForm.firstName}
+                onChange={(e) => setNewClientForm({ ...newClientForm, firstName: e.target.value })}
+                className={`${inputCls} min-w-0 flex-1`}
+              />
+              <input
+                required
+                placeholder={t('lastNameLabel')}
+                value={newClientForm.lastName}
+                onChange={(e) => setNewClientForm({ ...newClientForm, lastName: e.target.value })}
+                className={`${inputCls} min-w-0 flex-1`}
+              />
+            </div>
+          ) : (
+            <input
+              required
+              placeholder={t('name')}
+              value={newClientForm.name}
+              onChange={(e) => setNewClientForm({ ...newClientForm, name: e.target.value })}
+              className={inputCls}
+            />
+          )}
           <input
             required
             placeholder={t('phone')}
             value={newClientForm.phone}
             onChange={(e) => setNewClientForm({ ...newClientForm, phone: e.target.value })}
+            className={inputCls}
+          />
+          <input
+            type="email"
+            placeholder={t('emailOptional')}
+            value={newClientForm.email}
+            onChange={(e) => setNewClientForm({ ...newClientForm, email: e.target.value })}
             className={inputCls}
           />
           <select
@@ -692,10 +1128,14 @@ export default function ClientsAdmin() {
               // Al elegir una lista con dueñas, la vendedora del form se
               // preselecciona: la actual si ya es dueña, si no la principal.
               const forced = ownerFor(listId, newClientForm.vendedora_id)
+              // Lista 'quote' = cliente de cotización, sin precios: el alta
+              // en SellerCloud se apaga solo (se puede volver a prender).
+              const isQuote = priceLists.find((l) => l.id === listId)?.code === 'quote'
               setNewClientForm({
                 ...newClientForm,
                 price_list_id: listId,
                 ...(forced !== undefined ? { vendedora_id: forced } : {}),
+                ...(isQuote ? { scCreate: false } : {}),
               })
             }}
             className={inputCls}
@@ -758,6 +1198,27 @@ export default function ClientsAdmin() {
               <p className="flex items-center text-xs text-primary/50">{t('assignedToYou')}</p>
             )
           })()}
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-primary/70 md:col-span-2">
+            <input
+              type="checkbox"
+              checked={newClientForm.scCreate}
+              onChange={(e) => {
+                const on = e.target.checked
+                // Al prender con un nombre ya tipeado, se parte para no
+                // hacerlo escribir de nuevo: última palabra → apellido.
+                let { firstName, lastName } = newClientForm
+                if (on && !firstName && !lastName && newClientForm.name.trim()) {
+                  const parts = newClientForm.name.trim().split(/\s+/)
+                  lastName = parts.length > 1 ? parts[parts.length - 1] : ''
+                  firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : parts[0]
+                }
+                setNewClientForm({ ...newClientForm, scCreate: on, firstName, lastName })
+              }}
+              className="h-4 w-4 accent-secondary"
+            />
+            📦 {t('scCreateToggle')}
+            <span className="text-xs text-primary/40">— {t('scCreateToggleHint')}</span>
+          </label>
           {newClientError && (
             <p className="text-sm text-red-600 dark:text-red-400 md:col-span-2">{newClientError}</p>
           )}
@@ -778,6 +1239,12 @@ export default function ClientsAdmin() {
           </div>
         </form>
       )}
+
+      {/* El panel SellerCloud vive como fila expandida dentro de la tabla
+          (ver scPanelBox arriba); acá solo cae si la fila del cliente no está
+          a la vista — sin esto, un alta con filtros puestos dejaría el flujo
+          de creación corriendo en un panel invisible. */}
+      {scPanel && !scPanelInline && scPanelBox}
 
       {isAdmin && (
         <UploadZone
@@ -842,6 +1309,7 @@ export default function ClientsAdmin() {
             <tr className="border-b border-line text-left text-[11px] uppercase tracking-wider text-primary/45">
               <th className="p-3">{t('name')}</th>
               <th className="p-3">Tel</th>
+              <th className="p-3">SellerCloud</th>
               <th className="p-3">Lista</th>
               <th className="p-3">Vendedora</th>
               <th className="p-3" />
@@ -849,7 +1317,8 @@ export default function ClientsAdmin() {
           </thead>
           <tbody>
             {filtered.slice(0, visibleRows).map((c) => (
-              <tr key={c.id} className="border-b border-line/60 transition-colors hover:bg-gold-pale/20">
+              <Fragment key={c.id}>
+              <tr className="border-b border-line/60 transition-colors hover:bg-gold-pale/20">
                 <td className="p-3 font-medium">
                   {editForm?.clientId === c.id ? (
                     <input
@@ -874,6 +1343,45 @@ export default function ClientsAdmin() {
                     />
                   ) : (
                     c.phone
+                  )}
+                </td>
+                {/* Vínculo SellerCloud con columna propia (2026-09-01,
+                    reemplazó a la de Email, que nunca tuvo datos): un cliente
+                    sin ID no puede mandar pedidos allá. Editable solo por
+                    admin — set_client_sellercloud_id igual lo exige
+                    server-side. Vacío = quitar el vínculo. */}
+                <td className="p-3 font-mono text-xs text-primary/60">
+                  {editForm?.clientId === c.id && isAdmin ? (
+                    <input
+                      inputMode="numeric"
+                      placeholder="SellerCloud ID"
+                      value={editForm.scid}
+                      onChange={(e) =>
+                        setEditForm({ ...editForm, scid: e.target.value.replace(/\D/g, '') })
+                      }
+                      onKeyDown={editKeys}
+                      className="w-32 rounded-lg border border-secondary/60 bg-surface px-2 py-1 font-mono text-xs outline-none transition-colors focus:border-secondary"
+                    />
+                  ) : (
+                    c.sellercloud_id ?? (
+                      // Pieza 3 (2026-09-02): sin vínculo no se pueden enviar
+                      // órdenes — aviso + búsqueda guiada. Lo ven admin Y
+                      // vendedora (el permiso real vive en la RPC de link).
+                      <div className="flex flex-col items-start gap-1">
+                        <span
+                          title={t('scNoIdHint')}
+                          className="text-[11px] font-semibold text-amber-700 dark:text-amber-400"
+                        >
+                          ⚠️ {t('scNoId')}
+                        </span>
+                        <button
+                          onClick={() => openScPanel(c)}
+                          className="whitespace-nowrap rounded-lg border border-indigo-400 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
+                        >
+                          🔍 {t('scFind')}
+                        </button>
+                      </div>
+                    )
                   )}
                 </td>
                 <td className="p-3">
@@ -956,7 +1464,9 @@ export default function ClientsAdmin() {
                         <button
                           onClick={saveEdit}
                           disabled={
-                            editBusy || !editForm.name.trim() || cleanPhone(editForm.phone).length < 7
+                            editBusy ||
+                            !editForm.name.trim() ||
+                            cleanPhone(editForm.phone).length < 7
                           }
                           className="rounded-full bg-secondary px-3.5 py-1.5 text-xs font-bold text-ink transition-colors hover:bg-secondary-dark disabled:opacity-50"
                         >
@@ -1023,6 +1533,18 @@ export default function ClientsAdmin() {
                   </div>
                 </td>
               </tr>
+              {/* Panel SellerCloud como fila expandida (2026-09-03): la
+                  búsqueda, los candidatos y el alta se despliegan DEBAJO del
+                  cliente, mismo gesto que el detalle de un pedido en la
+                  bandeja. */}
+              {scPanel?.client.id === c.id && (
+                <tr className="border-b border-line/60 bg-indigo-50/30 dark:bg-indigo-950/20">
+                  <td colSpan={6} className="p-3">
+                    {scPanelBox}
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
           </tbody>
         </table>

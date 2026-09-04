@@ -21,6 +21,7 @@ const ACTION_STYLES = {
   delete_client: 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
   update_price_list: 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
   update_client_info: 'bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300',
+  set_client_sellercloud_id: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
   reassign_client: 'bg-gold-pale text-secondary-dark',
   edit_order_items: 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
   update_order_status: 'bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300',
@@ -47,6 +48,7 @@ const ACTION_LABELS = {
   delete_client: 'actionDelete',
   update_price_list: 'actionUpdateList',
   update_client_info: 'actionUpdateClientInfo',
+  set_client_sellercloud_id: 'actionSetSellercloudId',
   edit_order_items: 'actionEditOrder',
   update_order_status: 'actionUpdateOrderStatus',
   convert_quote_to_order: 'actionConvertQuote',
@@ -73,6 +75,7 @@ const ACTION_FILTERS = [
   ['delete_client', 'actionDelete'],
   ['update_price_list', 'actionUpdateList'],
   ['update_client_info', 'actionUpdateClientInfo'],
+  ['set_client_sellercloud_id', 'actionSetSellercloudId'],
   ['edit_order_items', 'actionEditOrder'],
   ['update_order_status', 'actionUpdateOrderStatus'],
   ['convert_quote_to_order', 'actionConvertQuote'],
@@ -144,7 +147,8 @@ export default function AuditLogAdmin() {
     }
     if (a.action === 'update_client_info') {
       // Solo lo que cambió: editar únicamente el teléfono no tiene por qué
-      // mostrar "Nombre → Nombre" (y viceversa).
+      // mostrar "Nombre → Nombre" (y viceversa). Email desde el 2026-08-31;
+      // las filas anteriores no traen esas claves y el !== las salta igual.
       const parts = []
       if (a.detail?.from_name !== a.detail?.to_name) {
         parts.push(`${a.detail?.from_name ?? '—'} → ${a.detail?.to_name ?? '—'}`)
@@ -152,7 +156,13 @@ export default function AuditLogAdmin() {
       if (a.detail?.from_phone !== a.detail?.to_phone) {
         parts.push(`${a.detail?.from_phone ?? '—'} → ${a.detail?.to_phone ?? '—'}`)
       }
+      if (a.detail?.from_email !== a.detail?.to_email) {
+        parts.push(`${a.detail?.from_email ?? '—'} → ${a.detail?.to_email ?? '—'}`)
+      }
       return parts.join(' · ')
+    }
+    if (a.action === 'set_client_sellercloud_id') {
+      return `SC ${a.detail?.from_sellercloud_id ?? '—'} → SC ${a.detail?.to_sellercloud_id ?? '—'}`
     }
     if (a.action === 'edit_order_items') {
       const before = a.detail?.before_items?.length ?? 0

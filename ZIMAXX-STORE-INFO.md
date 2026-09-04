@@ -31,7 +31,10 @@
 > el select viejo si `units` no existe — 42703). La Edge Function
 > `sellercloud-push-order` ganó logs de push: **redesplegada el 2026-08-28**
 > junto con el fix del punto 70 ("Allow shipping without payment" en true en
-> el create) — ese redeploy activó también estos logs de push.
+> el create) — ese redeploy activó también estos logs de push. **OJO
+> 2026-08-31: volvió a cambiar** (partido del nombre con `LastName` vacío,
+> punto 71) **y ese cambio está SIN desplegar** hasta el próximo
+> `supabase functions deploy sellercloud-push-order` (desde `zimaxx-store/`).
 > Ver puntos 62 y 63 y las secciones "Logs del sistema" y "Escalabilidad" del
 > README.
 >
@@ -79,7 +82,146 @@
 > estado real (2026-08-12)" — la lista de pendientes de este doc ya se equivocó
 > en las dos direcciones antes.
 >
-> Creado: 2026-07-02. Última actualización: 2026-08-28 (**las órdenes
+> Creado: 2026-07-02. Última actualización: 2026-09-03, cierre de la tanda
+> SellerCloud (**backfill aplicado + hallazgo de duplicados**, punto 77: el
+> `--apply` vinculó **5 clientes** (Genesis Mercado, Luis Linares, Manuel
+> García, Mohaya Askoul, Roxana Ortega) y **22 rebotaron por el índice único**
+> — ya existe OTRO cliente local con ese sellercloud_id: son pares de
+> **duplicados locales** (mismo nombre, teléfono con dígitos de más/de menos
+> que escapa a la dedup por sufijo) u **homónimos que NO hay que fusionar**
+> (las dos Diana Torres tienen teléfonos totalmente distintos). Varios pares
+> tienen pedidos EN AMBAS filas → la fusión es decisión humana, caso por caso;
+> no existe herramienta de merge todavía y `delete_client` rechaza filas con
+> pedidos. Reporte con conteos en
+> `Documents/catalogo/backfill-sellercloud-2026-09-03/duplicados.csv` (+ los
+> CSVs matches/ambiguous/unmatched finales en la misma carpeta). El dry-run
+> real dio: 1039 customers allá vs 1939 clientes sin vincular acá, 27
+> automáticos por nombre único, 0 por email (casi nadie tiene correo cargado),
+> y los 4 hits de teléfono degradados a revisión — **model.phoneNumber
+> matchea por SUBSTRING** y la primera corrida vinculaba 2 de 4 al customer
+> equivocado; el fix verifica contra el teléfono REAL del detalle del
+> customer. **PENDIENTE: deploy del frontend** (panel inline + drift +
+> outbox + lista de precios por pedido, todo sin deployar); resolver los 22
+> duplicados y los 4 ambiguos a mano; los 1908 sin candidato se crean bajo
+> demanda desde el panel.)
+>
+> Antes, misma fecha (**ejecución y ajustes
+> de la tanda SellerCloud**, punto 76: las 3 migraciones del 09-02 YA CORRIERON
+> en producción (usuario), `sellercloud-customers` y `sellercloud-push-order`
+> (v13 — saldado el redeploy pendiente del 08-31) DESPLEGADAS vía
+> `npx -y supabase` con token del usuario; contra la API real se pescaron y
+> corrigieron dos bugs del backfill — el servidor CLAMPEA pageSize a 50 (el
+> corte por "vino menos de lo pedido" paraba en la página 1 con 50/1037) y el
+> token de 60 min expiraba a mitad del loop de teléfonos (ahora token por
+> página/iteración vía getToken cacheado + reintento + un teléfono fallido no
+> tumba la corrida); a pedido del usuario el panel SellerCloud pasó a FILA
+> EXPANDIDA bajo el cliente (como el detalle de un pedido; fallback arriba de
+> la tabla si la fila no está a la vista), el form de crear ganó campo de
+> correo editable prellenado, y **CustomerType = 1** (Wholesale en ESTA
+> instancia — el Swagger se contradice entre el create y el filtro; manda lo
+> observado). Nota: el proyecto usa las API keys NUEVAS (`sb_secret_...`) —
+> las legacy service_role están deshabilitadas desde julio; el backfill usa la
+> nueva. Verificado: sc-customers 26/26 (con clamp y página repetida),
+> Playwright 26/26 (panel inline + correo), push 35 OK, build limpio.)
+>
+> Antes: 2026-09-02, cuarta tanda del día
+> (**clientes ↔ SellerCloud: backfill de IDs, alta y vinculación**, punto 75,
+> a pedido del usuario: la mayoría de los clientes no tienen `sellercloud_id`
+> — sin él el push rechaza sus pedidos — y el alta no lo asignaba, así que el
+> problema se regeneraba. Tres piezas: script local
+> `scripts/backfill-sellercloud-ids/` (dry-run → CSVs matches/ambiguous/
+> unmatched → `--apply` idempotente), Edge Function nueva
+> `sellercloud-customers` (buscar antes de crear, First/Last Name partidos,
+> teléfono por PUT en segundo paso, nunca bloquea lo local) + toggle "Crear
+> también en SellerCloud" en el alta, y botón "Buscar en SellerCloud" en la
+> fila de un cliente sin vínculo, con RPC auditada
+> `link_sellercloud_customer` en
+> `migration-2026-09-02-link-sellercloud-customer.sql` — **SIN CORRER en
+> producción**; también quedan pendientes el deploy del frontend, el deploy de
+> la Edge Function nueva (`supabase functions deploy sellercloud-customers`,
+> sin secrets nuevos) y correr el backfill local. Contrato de la API
+> confirmado contra el Swagger real: POST /Customers solo exige FirstName y no
+> acepta teléfono; GET /Customers filtra por model.email/phoneNumber/keyword y
+> el DTO del listado NO trae teléfono. Verificado: 27 asserts del matching +
+> 23 de la API de customers + 22 Playwright + 4 bloques SQL de la RPC +
+> preflight negativo + suites previas en verde + build limpio.)
+>
+> Antes, misma fecha, segunda tanda
+> (**outbox sin pérdidas silenciosas**, punto 73, a pedido del usuario tras
+> perderse una cotización real de $286.30 con tries: 0: el outbox de 24 h
+> DESCARTABA los pendientes expirados dejando solo un critical que ve el
+> superadmin. Ahora expirar = ENTREGAR a `order_failures` vía la RPC nueva
+> `report_outbox_expired` (idempotente por request_id,
+> `migration-2026-09-02-outbox-expired-report.sql` — **SIN CORRER en
+> producción**, aditiva, no bloquea el deploy) — la vendedora lo ve en el
+> aviso rojo y lo recupera con el botón de siempre; el pendiente solo se borra
+> del teléfono si la entrega tuvo éxito. Expiración diferenciada: order 24 h,
+> quote 72 h. Banner nuevo en el catálogo del cliente desde el primer fallo
+> con "Reintentar ahora" (y "reportado al equipo de ventas" tras la entrega).
+> Los handlers globales de errores ignoran ruido de extensiones
+> (chrome/moz/safari-extension://, MetaMask). El deploy del frontend también
+> está pendiente. Verificado: 9 bloques de assert SQL en PG 18 desechable +
+> preflight negativo, `tests/outbox-tests.mjs` NUEVO en el repo (26
+> comprobaciones del outbox real en Node), 21 aserciones Playwright contra el
+> build en viewport móvil, build de Vite limpio.)
+>
+> Antes, misma fecha: (**detección y ajuste
+> de cambios de precio en pedidos**, punto 72, a pedido del usuario: cuando la
+> lista de precios cambia después de creado un pedido, el pedido queda con el
+> precio congelado viejo y nadie se entera. Nueva
+> `migration-2026-09-02-orders-price-drift.sql` — **SIN CORRER en producción
+> todavía**; aditiva, puede correr antes del deploy sin romper el frontend
+> viejo — con `get_orders_price_drift(uuid[])` (hermana de
+> `get_quotes_live_pricing` pero para `kind='order'` y `status='new'`;
+> devuelve solo los pedidos con diferencias) y `refresh_order_prices(uuid)`
+> (actualiza a precios vigentes sin tocar productos/cantidades, auditada como
+> `refresh_order_prices`). La bandeja muestra badge "⚠️ Precios cambiaron",
+> panel de comparación congelado vs vigente en el detalle, botón con
+> confirmación del total nuevo, y aviso persistente si el pedido ya vive en
+> SellerCloud (allá NO se ajusta solo). El deploy del frontend también está
+> pendiente. Verificado: 8 bloques de assert SQL en PG 18 desechable +
+> preflight negativo, 28 aserciones Playwright contra el build real, build de
+> Vite limpio.)
+>
+> Antes: 2026-09-01 (**la migración de la
+> 08-31 ya corrió en producción** — verificado sondeando: `update_client_info`
+> vive con la firma de 4 parámetros y `set_client_sellercloud_id` está en
+> `pg_proc`. La columna Email del panel se ve toda en "—" porque **0 de 2755
+> clientes tienen correo cargado** — no es un bug: la columna arranca vacía y
+> nada la llena sola, ver punto 71. El redeploy de `sellercloud-push-order`
+> SIGUE pendiente: la versión viva es la v12 del 2026-08-28, anterior al
+> cambio de `customerDetails`. Y a pedido del usuario, la **columna Email se
+> quitó de la tabla de Clientes** — sin correos cargados no mostraba nada — y
+> el vínculo SellerCloud pasó a columna propia; `clients.email` sigue en la
+> base, la edición por fila reenvía el email guardado tal cual y el buscador
+> sigue matcheando por correo. Verificado: build de Vite + 13 aserciones
+> Playwright con Supabase interceptado.)
+>
+> Del 2026-08-31 (**email del cliente
+> visible en el panel + vínculo SellerCloud asignable a mano + el push ya no
+> depende de que el nombre esté perfecto allá**, punto 71, a pedido del
+> usuario. Tres piezas: (1) columna `clients.email` — copia para VERLA en
+> Clientes, el push sigue leyendo el de SellerCloud — que llenan la edición
+> manual, el alta, el Excel (columna email/correo, solo si viene) y el sync
+> **si el workflow de n8n empieza a mandar `email`** (sin ese cambio en n8n
+> nada se llena ni se borra); (2) `update_client_info` gana `p_email` y RPC
+> nueva `set_client_sellercloud_id` SOLO ADMIN (input "SellerCloud ID" al
+> editar la fila; sin vínculo, "Enviar a SellerCloud" rechaza los pedidos del
+> cliente y hasta hoy solo el sync podía vincular), todo en
+> `migration-2026-08-31-client-email-sellercloud-id.sql` **ya corrida
+> (verificado 2026-09-01)** — ojo: dropea la firma de 3 parámetros de
+> `update_client_info`
+> (dos overloads = PGRST203) y trae preflight; (3) `customerDetails` en
+> `sellercloud.ts` parte el nombre si `LastName` viene vacío allá (última
+> palabra → LastName, resto → FirstName, solo para el payload, nada se
+> escribe de vuelta) — **la Edge Function quedó con cambios sin desplegar:
+> redesplegar `sellercloud-push-order`** (desde `zimaxx-store/`). Verificado:
+> suite del push en **35 comprobaciones** en verde, build de Vite, 9 bloques
+> de assert SQL en cluster PG 18 desechable (partiendo de schema.sql + 07-10v2
+> + 07-15 + 08-25 reales; el test negativo del preflight pescó un bug real —
+> `text[] || literal` parseaba el texto como array literal) y 18 aserciones
+> Playwright de UI en los dos roles).
+> Antes: 2026-08-28 (**las órdenes
 > entraban a SellerCloud sin "Allow shipping without payment"**, punto 70:
 > el create no mandaba el campo y SellerCloud hereda el default del cliente
 > (false en casi todos); ahora viaja
@@ -2189,6 +2331,68 @@ exacta, lo que habría hecho este diagnóstico mucho más directo.
   orden única y los tres modos de fallo). Las órdenes YA creadas con el flag
   en false se corrigen a mano en SellerCloud (no hay endpoint para editarlo).
 
+- [ ] **Email del cliente en el panel + vínculo SellerCloud a mano + push
+  tolerante a `LastName` vacío** (2026-08-31, punto 71, a pedido del usuario):
+  `migration-2026-08-31-client-email-sellercloud-id.sql` **ya corrida en
+  producción** (verificado 2026-09-01 sondeando: firma de 4 parámetros de
+  `update_client_info` viva, `set_client_sellercloud_id` en `pg_proc`; en ese
+  momento **0 de 2755 clientes con email** — esperado: la columna arranca
+  vacía y solo la llenan la edición manual, un Excel con columna email o el
+  workflow de n8n si algún día manda `email`) + **redeploy TODAVÍA pendiente
+  de la Edge Function** (la versión viva de `sellercloud-push-order` es la
+  v12 del 2026-08-28, anterior a este cambio). Tres piezas:
+  (1) Columna `clients.email` (nullable, sin unique): copia local para VER el
+  correo en la lista de Clientes — el push NO la usa, la Edge Function sigue
+  leyendo el email de SellerCloud al enviar. La llenan: la edición manual, el
+  alta manual (campo opcional), el Excel de clientes (columna
+  email/correo/e-mail — solo se toca si el archivo la trae con valor válido;
+  re-subir uno viejo no borra nada) y el sync de n8n **solo si el workflow
+  empieza a mandar `email` por fila** (`sync_upsert_clients` reescrita —
+  cuerpo de la 07-15 — con `email` opcional: ausente o inválido = no tocar;
+  presente = pisa, SellerCloud manda para los del sync). El buscador matchea
+  por email y por SellerCloud ID.
+  (2) `update_client_info` gana `p_email` (email en minúsculas, vacío = null,
+  validación laxa algo@algo.algo, from/to_email en el detail) — **la
+  migración dropea la firma vieja de 3 parámetros**: dos overloads rompen
+  PostgREST con PGRST203, así que hay que correrla junto con este deploy del
+  frontend (el form siempre manda `p_email`). RPC nueva
+  `set_client_sellercloud_id(p_client_id, p_sellercloud_id)` **SOLO ADMIN**
+  (nivel reassign/delete: un ID equivocado manda la orden al cliente
+  equivocado allá): asigna/corrige/quita (null) el vínculo, mensaje de
+  duplicado con el nombre del dueño, auditada como
+  `'set_client_sellercloud_id'` ("Vínculo SellerCloud" en el Registro). UI:
+  el botón Editar suma inputs de Email (ambos roles) y SellerCloud ID (solo
+  admin, dos RPC en secuencia — si la del vínculo falla, lo demás ya quedó
+  guardado y el error queda en el banner con la edición abierta); la tabla
+  muestra "SC {id}" bajo el teléfono. **[UI superseded el 2026-09-01: la
+  columna Email y su input se quitaron de la tabla (0 clientes con correo) y
+  el vínculo SellerCloud pasó a columna propia, con el input de admin ahí;
+  la edición reenvía el email guardado tal cual. El resto sigue vigente.]**
+  Motivo: el vínculo solo lo escribía la
+  adopción por teléfono del sync, y un cliente cargado a mano con teléfono
+  distinto al de SellerCloud quedaba sin vínculo — y "Enviar a SellerCloud"
+  rechaza pedidos de clientes sin `sellercloud_id`.
+  (3) `customerDetails` (`sellercloud.ts`): si el cliente allá tiene
+  `LastName` vacío (cuentas con todo el nombre en `FirstName`), parte el
+  nombre SOLO para el payload — última palabra → LastName, resto →
+  FirstName, una palabra queda entera en LastName, el fallback de dirección
+  lo hereda — sin escribir nada de vuelta allá. **Requiere redeploy de
+  `sellercloud-push-order`** (desde `zimaxx-store/`, no desde la raíz).
+  **Verificado**: suite del push 29 → **35 comprobaciones** en verde; build
+  de Vite; 9 bloques de assert SQL en cluster PG 18 desechable partiendo del
+  estado real (schema.sql + 07-10v2 + 07-15 + 08-25: roles por RPC, email
+  normalizado/borrado/inválido, no-op sin auditoría, duplicado de teléfono,
+  duplicado de SC ID con nombre del dueño, quitar vínculo, sync con/sin/mal
+  email, adopción por teléfono con email), re-corrida idempotente y
+  `schema.sql` completo antes y después en limpio; el test negativo del
+  preflight contra una base incompleta **pescó un bug real del preflight**
+  (`text[] || 'literal'` se resuelve como array||array y parsea el texto como
+  array literal — corregido con `array_append`); 18 aserciones Playwright
+  (admin: columna Email, SC visible, RPC con payloads normalizados, duplicado
+  atajado client-side sin llamar la RPC, email inválido deshabilita Guardar,
+  búsqueda por email y por SC id; vendedora: sin input de SellerCloud ID,
+  guarda solo por `update_client_info`).
+
 ---
 
 
@@ -2972,10 +3176,16 @@ por qué no entró sin ir a los logs de la función.
   skipped, skipped_skus}` (primeros 50).
 - `sync_upsert_clients` **(v2, 2026-07-10,
   `migration-2026-07-10-sellercloud-sync-v2.sql` — reemplaza la versión
-  v1 que matcheaba por teléfono)**: filas `{sellercloud_id, name, phone,
-  salesman_name}`, upsert por `sellercloud_id` (General.ID de
+  v1 que matcheaba por teléfono; adopción por últimos 10 dígitos desde la
+  07-15; email opcional desde la 08-31)**: filas `{sellercloud_id, name,
+  phone, salesman_name, email?}`, upsert por `sellercloud_id` (General.ID de
   SellerCloud) — nunca por teléfono en este flujo (el teléfono sigue
   siendo el criterio de la carga manual por Excel, que no cambió).
+  **`email` es opcional** (2026-08-31): ausente o con pinta de no-email →
+  el guardado no se toca (el payload actual de n8n sigue andando igual);
+  presente y válido → pisa (para los del sync, SellerCloud es la fuente de
+  verdad, igual que name/phone). Para que se llene solo, hay que agregar
+  `email` al workflow de n8n.
   Detalles: (a) `salesman_name` se matchea contra `vendedores.name`
   normalizando ambos lados con `sync_normalize_name()` (minúsculas + sin
   acentos; usa `unaccent()` si la extensión está, si no `translate()`
@@ -3029,12 +3239,19 @@ por qué no entró sin ir a los logs de la función.
 - `delete_client`: borra el cliente. **Rechaza si tiene pedidos** (`orders.client_id`, FK RESTRICT sin cascade — borrarlo perdería el historial, y `orders` no guarda copia del nombre). Inserta la fila de auditoría ANTES del delete (snapshot). Devuelve `{ok}`.
 - Las lanza `ClientsAdmin.jsx` (select de vendedora por fila + botón Eliminar con confirmación inline); el mensaje de `raise exception` (en español) llega como `error.message` y se muestra en un banner. El **Registro de movimientos** (sección colapsable, solo admin) lee `admin_audit_log` directo (RLS `admin_read_audit`).
 
-### `update_client_info(p_client_id uuid, p_name text, p_phone text) → jsonb` (2026-08-25)
-- Edita nombre y teléfono de un cliente (`migration-2026-08-25-update-client-info.sql`). Mismo criterio que `update_client_price_list`: SECURITY DEFINER, admin edita cualquiera, **una vendedora solo sus propios clientes** (`vendedora_id = current_vendedora_id()`), y el cambio queda auditado sí o sí en `admin_audit_log` (acción `'update_client_info'`, detail `{from_name, to_name, from_phone, to_phone}`).
-- El teléfono se guarda **normalizado a solo dígitos** (igual que `cleanPhone` del frontend) y el nombre trimmeado. Valida: nombre no vacío, teléfono ≥ 7 dígitos.
+### `update_client_info(p_client_id uuid, p_name text, p_phone text, p_email text default null) → jsonb` (2026-08-25; email 2026-08-31)
+- Edita nombre, teléfono y email de un cliente (`migration-2026-08-25-update-client-info.sql`, ampliada por `migration-2026-08-31-client-email-sellercloud-id.sql`). Mismo criterio que `update_client_price_list`: SECURITY DEFINER, admin edita cualquiera, **una vendedora solo sus propios clientes** (`vendedora_id = current_vendedora_id()`), y el cambio queda auditado sí o sí en `admin_audit_log` (acción `'update_client_info'`, detail `{from_name, to_name, from_phone, to_phone, from_email, to_email}`).
+- El teléfono se guarda **normalizado a solo dígitos** (igual que `cleanPhone` del frontend) y el nombre trimmeado. Valida: nombre no vacío, teléfono ≥ 7 dígitos. El **email** se guarda en minúsculas; vacío/null = borrar el correo (el form siempre manda el campo); formato validado laxo (`algo@algo.algo`) — la misma regla que el frontend.
+- **La 08-31 dropea la firma vieja de 3 parámetros**: si convivieran las dos, PostgREST no puede elegir (PGRST203) y el botón Editar muere para todos los casos. Por eso esa migración va junto con el deploy del frontend que manda `p_email`.
 - **Duplicados por últimos 10 dígitos** (la clave del índice único parcial `clients_phone_normalized_key`): un cliente marcado `allow_shared_phone` se salta el chequeo (compartir con su par es lo legítimo); para el resto se compara contra **todos** los clientes, incluidos los marcados — a propósito más estricto que el índice (que ignora las filas marcadas en ambas puntas), porque un tercer cliente con el número del par rompería la deduplicación por teléfono del Excel; es la misma regla que ya aplica el alta manual. El handler de `unique_violation` atrapa la carrera y devuelve el mismo mensaje amigable.
-- **Guardar sin cambios es un no-op**: devuelve `{ok: true, changed: false}` sin escribir fila de auditoría.
-- Probada en cluster PG 18 desechable (10 casos: roles, normalización, no-op, duplicados en los 3 sabores de allow_shared_phone, trigger de clients intacto, grants). La lanza `ClientsAdmin.jsx` (botón Editar por fila).
+- **Guardar sin cambios es un no-op**: devuelve `{ok: true, changed: false}` sin escribir fila de auditoría (el email compara con `is not distinct from`: null = sin correo).
+- Probada en cluster PG 18 desechable (10 casos el 2026-08-25 y 9 bloques el 2026-08-31: roles, normalización, email borrado/inválido, no-op, duplicados, grants). La lanza `ClientsAdmin.jsx` (botón Editar por fila).
+
+### `set_client_sellercloud_id(p_client_id uuid, p_sellercloud_id integer) → jsonb` (2026-08-31)
+- Asigna, corrige o **quita** (`p_sellercloud_id = null`) el vínculo `clients.sellercloud_id` de un cliente (`migration-2026-08-31-client-email-sellercloud-id.sql`). **SOLO ADMIN** — a diferencia de `update_client_info`: un ID equivocado manda los pedidos AL CLIENTE EQUIVOCADO en SellerCloud, es del nivel de `reassign_client`/`delete_client`. Una vendedora ni ve el input en la UI y la RPC la rechaza igual server-side.
+- Motivo: hasta el 2026-08-31 el vínculo solo lo escribía el sync de n8n (adopción one-shot por teléfono, 07-10/07-15). Un cliente cargado a mano cuyo teléfono no coincide con el de SellerCloud quedaba sin vínculo para siempre, y sin vínculo el botón "Enviar a SellerCloud" rechaza sus pedidos ("este cliente todavía no está sincronizado").
+- Valida: entero positivo (o null); duplicado contra otro cliente con **mensaje que dice quién lo tiene** (la garantía real sigue siendo el índice único `clients_sellercloud_id_key`; `unique_violation` atrapa la carrera). No-op → `{changed: false}` sin auditar. Auditada como `'set_client_sellercloud_id'` (detail `{from_sellercloud_id, to_sellercloud_id}`, "Vínculo SellerCloud" en el Registro de movimientos).
+- Quitar el vínculo es reversible: el próximo sync puede re-adoptar por teléfono si corresponde.
 
 ---
 
@@ -3249,7 +3466,8 @@ por qué no entró sin ir a los logs de la función.
 ### Alta individual de clientes (2026-07-07)
 - Botón "+ Nuevo cliente" en la pestaña Clientes, alternativa a la carga
   por Excel para un cliente puntual. Campos: nombre, teléfono, lista de
-  precio (obligatorios) y, solo para admin, un selector de vendedora
+  precio (obligatorios), email (opcional desde 2026-08-31, validación laxa,
+  se guarda en minúsculas) y, solo para admin, un selector de vendedora
   (`"Sin asignar"` por defecto) — inserta directo contra `clients` con
   `supabase.from('clients').insert(...)`, sin RPC dedicada.
 - Si el usuario logueado es vendedora, el selector no se muestra: el
@@ -3260,23 +3478,40 @@ por qué no entró sin ir a los logs de la función.
 - Teléfono duplicado (constraint `clients.phone` único) muestra un error
   amigable (`phoneInUse` en `i18n.jsx`) en vez del mensaje crudo de Postgres.
 
-### Edición de nombre/teléfono del cliente (2026-08-25)
+### Edición de nombre/teléfono del cliente (2026-08-25; vínculo SellerCloud 2026-08-31; columna Email quitada 2026-09-01)
 - Botón **Editar** por fila (visible para admin y vendedora — la vendedora
   solo ve sus propios clientes, y la RPC igual lo valida server-side):
-  convierte las celdas Nombre y Tel en inputs, con Guardar/Cancelar en la
-  columna de acciones (Enter guarda, Escape cancela, mismo gesto que el
+  convierte las celdas Nombre y Tel en inputs, con Guardar/Cancelar en
+  la columna de acciones (Enter guarda, Escape cancela, mismo gesto que el
   teléfono editable de Vendedoras). Un solo cliente en edición a la vez.
+  **Solo para admin**, la celda de la columna SellerCloud se convierte en el
+  input **SellerCloud ID** (ver `set_client_sellercloud_id` en la sección
+  RPC); la vendedora la ve como texto fijo.
 - Guarda vía RPC `update_client_info` (ver sección RPC): queda auditado en
   `admin_audit_log` y aparece en el Registro de movimientos como
-  "Edición de cliente" (el detalle muestra solo lo que cambió).
+  "Edición de cliente" (el detalle muestra solo lo que cambió). La RPC exige
+  `p_email` y para ella vacío = borrar, así que el form **reenvía el email
+  guardado tal cual** — la tabla dejó de mostrarlo y editarlo el 2026-09-01.
+  Si el admin además cambió el SellerCloud ID, va una segunda RPC
+  (`set_client_sellercloud_id`, "Vínculo SellerCloud" en el Registro); si esa
+  segunda falla, nombre/teléfono ya quedaron guardados, se reflejan en
+  la fila y la edición queda abierta con el error en el banner.
 - Guardar se deshabilita con nombre vacío o teléfono de menos de 7 dígitos;
-  el duplicado por últimos 10 dígitos se chequea client-side primero
-  (mensaje `phoneInUse` en el idioma del panel) y la RPC lo repite
+  el duplicado de teléfono por últimos 10 dígitos y el de
+  SellerCloud ID se chequean client-side primero (mensajes `phoneInUse` /
+  `sellercloudIdInUse` en el idioma del panel) y las RPC los repiten
   server-side.
+- La tabla **ya no muestra la columna Email** (quitada el 2026-09-01 a pedido
+  del usuario: 0 de 2755 clientes con correo, no había nada que mostrar). En
+  su lugar el vínculo SellerCloud tiene **columna propia** (— si no hay;
+  antes iba como "SC {id}" bajo el teléfono). `clients.email` sigue en la
+  base y lo llenan el alta, el Excel y el sync; el buscador sigue matcheando
+  por email (aunque no se vea) y por SellerCloud ID (dígitos).
 - El motivo: hasta ahora un dato mal cargado solo se corregía re-subiendo
   un Excel (que matchea por teléfono — un **teléfono** mal cargado ni
   siquiera se podía corregir por ahí: creaba un duplicado) o entrando a la
-  base a mano.
+  base a mano. Y el correo directamente no se veía desde el panel: vivía
+  solo en SellerCloud.
 
 ### Vendedoras (pestaña Vendedoras, `/admin/vendedoras`)
 - Alta manual: nombre (obligatorio) + teléfono (opcional, se puede
@@ -3575,3 +3810,15 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 66. **Los ❤️ favoritos pasan a la base** (2026-08-20, quinta tanda del día, a pedido del usuario: "pq no hacemos una tabla y rpc por token mejor? y asi queda un registro de los favoritos de cada uno de los clientes" — pedido ANTES de deployar la v1 localStorage de la cuarta tanda, así que no hubo nada que migrar del lado del dispositivo) — `migration-2026-08-20-client-favorites.sql` (la cadena del catálogo queda 5 top-sellers → 6 top-by-line → 7 favorites, cada preflight corta si falta la anterior). El corazón deja de ser un dato del teléfono y pasa a ser **un dato del negocio**: `client_favorites (client_id, product_id, created_at)`, escrito SOLO vía `set_favorite(p_token, p_product_id, p_fav)` — por token como `create_order`, idempotente, **nunca lanza** (token inválido / producto apagado / tope de 500 → null; la RPC es pública por diseño y esos tres son el anti-abuso), ejecutable por `anon`; la tabla no tiene policy de escritura para nadie, y el panel la LEE con RLS en forma InitPlan (admin todo, vendedora sus clientes; la UI del panel queda para cuando se pida — el registro ya está consultable). `get_catalog` suma `is_fav` en las dos ramas (una resolución por llamada). El frontend queda **servidor-primero con caché**: localStorage pinta los corazones al instante y sirve de fallback si la migración no corrió (modo v1); al llegar `get_catalog`, el servidor pisa lo local y reescribe el caché; el toggle es optimista y `pushFavorite` viaja fire-and-forget con keepalive + 1 reintento — si aún así no llega, al recargar manda el servidor (pérdida asumida: un toggle hecho sin señal puede revertirse, preferible a bloquear el corazón esperando la red). Verificado: asserts SQL (idempotencia, basura → null sin filas, `is_fav` por rama con cada cliente viendo lo suyo, anon puede la RPC pero no la tabla, authenticated no inserta directo, RLS admin/vendedora-propia/vendedora-sin-clientes, forma InitPlan verificada en pg_policies, tope 500 con desmarcar vivo, cascade, migración ×2) y 26 aserciones Playwright (las 21 de la cuarta tanda + siembra desde `is_fav` sin localStorage previo, RPC capturada con token/producto/estado, y el servidor pisando lo optimista al recargar), más carrito y top-sellers re-corridas.
 
 67. **La etiqueta ✨ Nuevo pasa de ~10 días a 5 semanas** (2026-08-24, a pedido del usuario: "extiéndelo a que dure 1 mes/5 semanas aprox" — el valor original de 2026-07-09 salió de "~1 semana, quizás un poco más"). Se eligió 35 días (5 semanas exactas). La duración vivía en DOS lugares que tienen que coincidir: (a) `NEW_TAG_DAYS` en `ProductsAdmin.jsx` (alta manual, alta por Excel de productos y el botón ✨ Marcar del bloque — el frontend calcula el ISO y lo manda), cambiada a 35; (b) el INSERT de `sync_upsert_products` (`now() + interval '10 days'` para los productos nuevos que trae el sync de n8n), reescrito por `migration-2026-08-24-new-tag-35-days.sql` — idéntica a la versión viva de `migration-2026-07-14-product-upc.sql` cambiando solo el intervalo (la de exclude-box-skus del 2026-08-13 no tocaba esta función). **Segunda iteración el mismo día, a pedido del usuario ("si extiende los que ya tienen la etiqueta")**: la migración suma un backfill que extiende +25 días (la diferencia 10 → 35) todo `new_until` en el futuro, venga del sync, del Excel, del alta manual o del ✨ en bloque — las expiradas no reviven, las null no se tocan. Como un UPDATE así no es idempotente por naturaleza, el backfill va ANTES del `create or replace` y usa el cuerpo vivo de `sync_upsert_products` como marca: si ya dice `35 days`, la migración ya corrió y se salta (re-correrla no suma 25 dos veces); el NOTICE reporta cuántas extendió. Frontend y migración son independientes entre sí (cada lado degrada a "sigue poniendo 10 días" sin romper nada). **Verificado de verdad**: la migración probada contra un PostgreSQL 18 desechable (arnés con la tabla `products` mínima + `sync_is_noncatalog_product` verbatim del exclude-box-skus + roles de Supabase + la versión REAL de 10 días de product-upc como función viva, corriendo la migración DOS veces): producto nuevo entra con `new_until ≈ now() + 35 días`, el re-upsert del mismo SKU NO lo pisa, un `-BOX` se sigue salteando, contadores `{inserted, updated, skipped}` correctos, EXECUTE solo para `service_role`; el backfill extendió exactamente las 2 vigentes sembradas (+5 días → +30, +100 → +125), no revivió la expirada ni tocó la null, y la segunda corrida completa dijo "backfill saltado" sin mover ninguna fecha — más `npm run build` limpio.
+
+72. **Detección y ajuste de cambios de precio en pedidos** (2026-09-02, a pedido del usuario — los puntos 68-71 viven solo en el encabezado de este archivo) — un pedido (`kind='order'`) congela el precio al crearse como recibo de ese día; cuando la lista cambia después (llega mercancía, cambia el costo promedio), quedaba viejo sin que nadie se entere. Dos piezas en `migration-2026-09-02-orders-price-drift.sql` (aditiva e idempotente, con preflight que corta en limpio; **puede correr ANTES del deploy sin romper el frontend viejo**, que no la llama): (a) `get_orders_price_drift(p_order_ids uuid[])`, hermana de `get_quotes_live_pricing` pero para pedidos reales elegibles (`kind='order'` y `status='new'` — el pago es externo y el proxy de "ajustable" es el estado): compara el precio congelado de cada línea contra el vigente y devuelve SOLO los pedidos con diferencias como `{order_id: {items:[{sku,name,qty,frozen_price,current_price,delta}], frozen_total, current_total}}`; cotizaciones, atendidos/cancelados, ajenos y clientes borrados se OMITEN sin error (bulk-friendly, mismo patrón de permisos: SECURITY DEFINER, solo authenticated, admin todo / vendedora lo suyo). **No duplica la fórmula de precios**: llama a `compute_order_items` POR LÍNEA (array de 1 ítem) — con una sola llamada por pedido no se puede alinear el resultado contra lo congelado porque compute DESCARTA en silencio lo irresoluble, y una línea que se cae en silencio ya costó un pedido de ~10k. Bordes explícitos: producto sin precio resoluble hoy (fuera de la lista, precio 0, apagado a mano, borrado, o cliente movido a la lista 'quote') → la línea se reporta con `current_price: null` y NO entra en `current_total`; producto `deactivated_by_stock` sigue siendo pedible y se resuelve normal; `frozen_total` es `orders.total` (el recibo), `current_total` suma TODAS las líneas resolubles (no solo las que difieren); `delta` = (vigente − congelado) × qty. (b) `refresh_order_prices(p_order_id uuid)`: "Actualizar a precios vigentes" con revisión humana — recalcula con `compute_order_items` sin tocar productos/cantidades (sku/name se refrescan desde products, igual que convert_quote_to_order), y a diferencia de la detección acá los bordes CORTAN con error claro: cotización, no-'new', línea que compute descartaría (SKU en el mensaje), o línea sin precio vigente (mismo criterio require-price de `create_order`: un pedido real no se guarda con línea sin precio; nada de mezclar congelado con vigente). Auditada sí o sí en `admin_audit_log` (`refresh_order_prices`, con before/after de items y total) vía el mismo camino `app.allow_order_edit` del guard de orders. **Frontend** (`OrdersAdmin.jsx`): al cargar la bandeja se pide el drift de los pedidos elegibles en tandas de `LIVE_PRICING_CHUNK` (100, misma razón: statement_timeout + URL); si la RPC falla, aviso ámbar no bloqueante y la bandeja sigue (badges ausentes, nada roto). Badge "⚠️ Precios cambiaron" solo en filas con drift (cero ruido sin drift); el detalle desplegado muestra el panel de comparación (solo las líneas que difieren, congelado vs vigente vs delta; la línea sin precio dice "sin precio vigente — revisar" en vez de un número) con total congelado vs vigente y la diferencia neta resaltada; botón "Actualizar a precios vigentes" con confirmación "El total pasa de $X a $Y" (deshabilitado con tooltip si `current_total` es null — la RPC lo rechazaría igual); tras confirmar se actualiza la fila, se re-consulta el drift de ESE pedido (el badge desaparece) y, si el pedido ya tiene `sellercloud_order_id`, queda un aviso persistente en la fila recordando ajustar los precios allá antes del pago (actualizar SellerCloud automático quedó FUERA de alcance a propósito); marcar atendido/cancelar borra el badge localmente y reabrir re-consulta. i18n `priceDrift*` en ambos idiomas. **Verificado de verdad**: 8 bloques de assert contra un PostgreSQL 18 desechable partiendo del `schema.sql` real (drift en 2 de 3 líneas devuelve solo esas 2 con valores y totales exactos; sin drift/cotización/done/cancelado omitidos; vendedora no ve ajenos y un bulk 100% ajeno da `{}` sin error; sin rol corta 'no autorizado'; grants authenticated-sí/anon-no; refresh feliz con auditoría completa y drift que desaparece; los 7 cortes de refresh con su mensaje exacto; producto apagado por stock se actualiza normal; migración re-aplicada sin cambios) + preflight negativo en base vacía listando las piezas que faltan; 28 aserciones Playwright contra el build real con Supabase interceptado (badge solo con drift, panel completo, cancelar no llama la RPC, confirmar llama UNA vez, badge fuera y total nuevo en la fila, aviso SellerCloud solo con `sellercloud_order_id`, botón deshabilitado sin total, fallo de la RPC no rompe la bandeja); build de Vite limpio. **Pendiente: correr la migración en Supabase y deployar el frontend** (en ese orden o al revés, da igual — cada lado degrada solo).
+
+73. **Outbox sin pérdidas silenciosas** (2026-09-02, segunda tanda del día, a pedido del usuario tras un caso real: una cotización de $286.30 con `tries: 0` — el cliente cerró la pestaña tras el fallo, volvió a las 24+ h y el outbox DESCARTÓ el pedido dejando solo un `outbox_exhausted` critical en system_logs, que solo ve el superadmin). Tres cambios + un extra. **(1) Expirar ya no descarta: entrega a `order_failures`** — RPC nueva `report_outbox_expired(p_token, p_request_id, p_items, p_kind)` en `migration-2026-09-02-outbox-expired-report.sql` (aditiva, preflight, idempotente de re-correr): valida el token contra `clients` igual que `create_order`, ejecutable por `anon` (el catálogo corre sin sesión), **nunca lanza** (devuelve jsonb `{ok,...}` — el caller es un navegador con mala señal), e **idempotente por `request_id`** (columna nueva nullable `order_failures.request_id` + índice único parcial; reportar dos veces contesta `already_reported` sin duplicar; y si un pedido con ese `request_id` YA existe en `orders` —un keepalive que entró sin que el navegador viera la respuesta— contesta `already_registered` sin crear fallo). Con token inválido NO inserta (a diferencia de `create_order`): no hay flujo legítimo con token inválido acá y sería una vía de abuso con la anon key. La fila entra con el shape de siempre (`client_id/token_hint/reason/line_count/kind/items`), así el aviso rojo de la bandeja la muestra a la vendedora dueña (RLS existente) y el botón "Recuperar" (`recover_order_failure`) la remonta como cotización con precios vigentes SIN CAMBIOS. En el navegador (`orderOutbox.js`): al expirar se intenta la entrega; **solo un reporte exitoso borra el pendiente de localStorage** — sin red (o sin migración corrida: PGRST202) el ítem SE QUEDA y la entrega se reintenta en la próxima visita ("expirado = pendiente de entregar"); un rechazo determinista (token/payload inválido) limpia porque reintentar daría lo mismo, con el critical como respaldo. El critical `outbox_exhausted reason: expired` se mantiene, ahora con `delivered` y el **payload completo de ítems** en el context — y para que ese payload tenga sku/nombre/precio, `savePending` ahora guarda los ítems completos en localStorage (`storedItems`) mientras los POST a `create_order` siguen viajando slim (id/qty/flash, `postOrder` re-slimea; los pendientes viejos con shape slim siguen funcionando). **(2) Expiración diferenciada**: `ORDER_MAX_AGE_MS = 24 h` (un pedido congela precio; los precios cambian ~2 veces al día y el stock se mueve — no se registra tarde sin revisión) y `QUOTE_MAX_AGE_MS = 72 h` (una cotización nunca congela — la bandeja la recalcula con `get_quotes_live_pricing`), con `maxAgeFor(kind)`. **(3) Banner visible al cliente** — componente nuevo `OutboxBanner.jsx` montado arriba del catálogo: aparece desde el PRIMER fallo (marca `failed` en el pendiente, puesta por `markFailed()` desde el settle del drawer y los reintentos fallidos del flush; el envío normal en curso no muestra nada), con botón **"Reintentar ahora"** que llama `flushPending(token, {manual: true})` — el modo manual se salta `MAX_AUTO_TRIES` — y desaparece solo cuando el outbox queda vacío; tras una entrega exitosa cambia a "Tu pedido/cotización fue reportado al equipo de ventas — te contactarán pronto" (marca en **sessionStorage**: dura la sesión y se limpia sola en la próxima). Reactividad sin polling: `subscribeOutbox`/`outboxStatus` + `useSyncExternalStore` (snapshot string primitivo a propósito — un objeto nuevo por llamada re-renderiza en loop). Textos i18n `outbox*` en tono neutro sin jerga (es/en). **Extra**: los handlers globales de `systemLog.js` ignoran errores de extensiones del navegador ANTES del rate-limit — origen `(chrome|moz|safari|safari-web)-extension://` en stack/filename como criterio principal, mensaje `/metamask/i` como refuerzo para promesas sin stack útil (caso real: `js_error` del inpage.js de MetaMask). **Verificado de verdad**: 9 bloques de assert contra un PostgreSQL 18 desechable partiendo del `schema.sql` real (fila con payload completo tal cual + token_hint/kind/line_count; idempotencia ×2; token inválido rechazado sin insertar; already_registered sin fallo; payloads inválidos —sin request_id, vacío, no-array, 1001 líneas— rechazados sin insertar; grants anon+authenticated; recover del reportado → quote con precios recalculados (el precio del teléfono NO viaja al pedido), recovered_order_id y auditoría; filas null de create_order no chocan con el índice parcial; migración re-aplicada intacta) + preflight negativo en base vacía; **`tests/outbox-tests.mjs` NUEVO en el repo** (26 comprobaciones en Node del código real — reemplaza `import.meta.env` y stubea storage/fetch/Date.now: expiración 24/72 h, slim en el wire vs completo en el teléfono, entrega solo-con-éxito, doble expiración sin duplicar, critical con/sin delivered, banner desde el primer fallo, manual salta el tope, compat con pendientes viejos); 21 aserciones Playwright contra el build real en viewport móvil con Supabase interceptado (flujo completo carrito→checkout→fallo→banner→reintento manual→banner fuera; expirado entregado → mensaje "reportado", report una vez, critical forense; entrega fallida → pendiente se queda; extensión chrome-extension:// y MetaMask NO loguean, error normal SÍ); build de Vite limpio. **Pendiente: correr `migration-2026-09-02-outbox-expired-report.sql` en Supabase y deployar el frontend** (cualquier orden: cada lado degrada solo — el frontend viejo no llama la RPC, y el nuevo sin migración deja el pendiente reintentando la entrega, que es el contrato).
+
+74. **La lista de precios del cliente, visible en cada fila de Pedidos** (2026-09-02, tercera tanda del día, a pedido del usuario: "que se vea de qué lista de precio viene cada orden"). Cambio SOLO de frontend, sin migración: `ORDER_SELECT`/`ORDER_SELECT_LEGACY` en `OrdersAdmin.jsx` suman `price_lists(code, label)` anidado en el join de `clients`, y la celda del cliente muestra una etiqueta 🏷️ con el `label` (ej. "US Wholesale") bajo el teléfono, con tooltip "Lista de precios del cliente" (i18n `orderPriceList`, es/en). **Decisión clave documentada en el código**: lo que se muestra es la lista ACTUAL del cliente — un pedido congela los PRECIOS en `items`, no la lista con la que se creó, así que si al cliente le cambiaron la lista después del pedido acá se ve la nueva (mismo criterio que la detección de drift del punto 72, que también compara contra la lista vigente). Para una vendedora el join funciona por la RLS existente de `price_lists` (`can_vendedora_use_price_list`: las listas sin dueñas las ve cualquiera, y una lista con dueñas fuerza al cliente a quedar con una de ellas, así que siempre puede leer las listas de SUS clientes); si RLS o un dato viejo dejan el join en null, la fila se ve normal sin etiqueta. Verificado: build de Vite limpio + 6 aserciones Playwright contra el build real con Supabase interceptado (la etiqueta correcta por fila, dos listas distintas en dos filas, tooltip, sin dato no hay etiqueta ni se rompe la fila, cliente borrado se dibuja igual). Va en el MISMO deploy que ya está pendiente; no depende de ninguna migración.
+
+75. **Clientes ↔ SellerCloud: backfill de IDs, alta y vinculación** (2026-09-02, cuarta tanda del día, a pedido del usuario — el botón 📦 exige `clients.sellercloud_id`, la mayoría lo tenía vacío, y el alta no lo asignaba: el problema se regeneraba solo). **Contrato de la API confirmado contra el Swagger real del servidor** (`/rest/swagger/docs/v1`) — decisiones que salen de ahí: `POST /rest/api/Customers` (CreateCustomerRequest) **solo exige FirstName** y acepta LastName/Email/BusinessName/CompanyID/CustomerType (0 = WholeSale); devuelve el ID como entero pelado; **NO acepta teléfono** — se setea en un segundo paso con `PUT /Customers/{id} {Phone1}` (UpdateCustomerRequest), mejor-esfuerzo con warning; `GET /rest/api/Customers` filtra por `model.email` / `model.phoneNumber` / `model.firstName/lastName` / `model.keyword` / `model.companyIds` con paginación `model.pageNumber/pageSize` y responde `{Items, TotalResults}` — y el CustomerDto del LISTADO **no trae teléfono** (vive en el detalle, `Personal.Phone1`). Aunque la API no lo exige, acá el **apellido es obligatorio** en todo camino que cree customers: SellerCloud valida Last Name al crear órdenes ("Customer's last name is not valid", 2026-08-31). Todo lo de API vive como funciones nuevas en el `sellercloud.ts` existente (searchCustomers/listAllCustomers/createCustomer/setCustomerPhone/customerSummary — mismo cliente HTTP, mismos errores endurecidos HTML/no-JSON, cero auth duplicada). **Pieza 1 — script local `scripts/backfill-sellercloud-ids/`** (Node 23+, README con comandos y env; NUNCA corre en producción): baja los dos universos completos (customers paginados; clients con `sellercloud_id` null vía PostgREST con service_role), matchea por confianza descendente con normalización (email exacto → teléfono por últimos 10 dígitos, PERO compartido/`allow_shared_phone` va a revisión → nombre sin acentos/minúsculas/espacios colapsados solo si es único de ambos lados; toda colisión manda a revisión con los 3 más parecidos por similitud de bigramas; un customer solo se asigna una vez; revisión por llave fuerte NO se rescata con llave débil); como el listado no trae teléfonos, tras la primera pasada busca server-side (`model.phoneNumber`, full y últimos 10) los teléfonos de los sin-resolver y re-corre. `--dry-run` (default) escribe `matches.csv`/`ambiguous.csv` (con columna `sellercloud_id` vacía para completar a mano)/`unmatched.csv` + resumen; `--apply` aplica SOLO los automáticos, **idempotente por construcción** (el PATCH lleva `&sellercloud_id=is.null`: jamás pisa un ID existente) y reporta exactamente qué NO se aplicó con motivo (exit ≠ 0); `--apply-file resolved.csv` aplica los ambiguos resueltos. Reintentos con backoff exponencial para 429/5xx/red (6 intentos); 4xx de datos no se reintenta. **Pieza 2 — Edge Function nueva `sellercloud-customers`** (mismos secrets del push, nunca service_role, todo con el JWT del caller; valida rol server-side con `get_my_role` — sin rol, 403 — porque search/create no tocan tablas y serían un proxy gratis): `action:'search'` busca candidatos email → teléfono (full y últimos 10) → nombre-solo-si-nada (`model.keyword`), completa teléfono/email desde el detalle de cada candidato (mejor-esfuerzo, máx. 8); `action:'create'` **busca antes de crear** — con coincidencias devuelve `{exists:true, candidates}` sin crear y la decisión (vincular / `force:true`) es humana; crea con First/Last partidos + email opcional + CustomerType WholeSale + CompanyID, teléfono por PUT después, y vincula vía la RPC; si el link local falla tras crear allá → **critical `create_annotate_failed`** con el ID en el error ("NO lo vuelvas a crear"), mismo patrón que push_annotate_failed; `action:'link'` verifica que el ID exista allá (GET detalle) y recién ahí llama la RPC. Fallos a `system_logs` source `sellercloud_customers`. **RPC `link_sellercloud_customer(p_client_id, p_sellercloud_id, p_detail)`** en `migration-2026-09-02-link-sellercloud-customer.sql` (aditiva, preflight, idempotente): SECURITY DEFINER, authenticated; admin cualquiera, **vendedora sus propios clientes** (a diferencia de `set_client_sellercloud_id` que sigue solo-admin y sigue siendo el único camino para QUITAR un vínculo — acá los IDs vienen verificados contra la API, no de un input libre); no-op si ya tiene ese ID (sin fila de auditoría), corta claro si el ID es de otro cliente (lo nombra), audita `link_sellercloud_customer` con from/to + detail FILTRADO a llaves esperadas y recortadas (`sc_name`/`sc_email`/`via` ∈ search|create|backfill — el detail viene del navegador). **Frontend (`ClientsAdmin.jsx`)**: toggle "Crear también en SellerCloud" activado por defecto en el alta (elegir la lista `quote` lo apaga solo; se puede reprender), con el toggle ON el nombre se pide PARTIDO (nombre + apellido, el `name` local se compone; al prender con nombre ya tipeado se parte solo: última palabra → apellido) — el insert local va PRIMERO y SellerCloud nunca lo bloquea: si su API falla, aviso "Cliente creado; no se pudo dar de alta en SellerCloud" y se resuelve después desde la fila; panel único SellerCloud para los dos caminos (candidatos con nombre/email/teléfono/ID, "Vincular" por candidato, "Crear de todos modos"/"Crear en SellerCloud" con form de apellido y prefill partiendo el nombre local); en la fila de un cliente sin vínculo: "⚠️ Sin vínculo" (tooltip "no se pueden enviar órdenes") + "🔍 Buscar en SellerCloud" — visible también para la vendedora (el permiso real vive en la RPC), y es el destino de los `ambiguous.csv` que no se resuelvan por CSV. i18n `sc*`/`firstNameLabel`/`lastNameLabel` en es/en. **Verificado de verdad**: `tests/backfill-matching-tests.mjs` NUEVO (27 asserts: normalización, email gana a teléfono, compartido/allow_shared_phone a revisión, nombre duplicado a revisión, colisión cruzada, ya-vinculado intacto, revisión fuerte no rescatada por llave débil, unmatched, idempotencia, un-customer-una-vez); `tests/sc-customers-tests.mjs` NUEVO (23 asserts contra servidor falso con el contrato real: filtros/paginación completa de 3 páginas sin duplicados, payload del create con First/Last y sin teléfono, ID pelado y envuelto, corta sin apellido ANTES de llamar, PUT Phone1 único campo, HTML → mensaje del secret); 22 aserciones Playwright contra el build real con Edge Function interceptada (toggle default ON, apellido required bloquea, name compuesto, create sin force, "parece existir" → vincular sin crear, "Crear de todos modos" visible, fallo 502 → cliente local creado + aviso, fila sin vínculo → buscar → elegir → ID guardado y aviso fuera, lista quote apaga el toggle); 4 bloques de assert SQL de la RPC en PG 18 desechable (schema real + sync-v2 + fix-phones: vendedora dueña vincula con detail filtrado de basura, no-op sin auditoría nueva, ajeno/ID-tomado-nombrando-dueño/null/cero/inexistente/sin-rol cortan claro, admin vincula ajenos, grants authenticated-sí/anon-no) + re-aplicación idempotente + preflight negativo en base vacía; suites previas (sc-push 35, outbox 26) siguen en verde; build de Vite limpio. **Pendiente**: correr `migration-2026-09-02-link-sellercloud-customer.sql` en Supabase, `supabase functions deploy sellercloud-customers` (sin secrets nuevos), deploy del frontend, y correr el backfill local (dry-run → revisar CSVs → --apply). Nada corrió contra producción ni contra la API real.
+
+76. **Ejecución de la tanda SellerCloud + ajustes pescados contra la API real** (2026-09-03, continuación del punto 75) — (a) **Ejecutado**: las 3 migraciones del 09-02 corrieron en producción (las corrió el usuario en el SQL Editor); `sellercloud-customers` (v1→v2) y `sellercloud-push-order` (v12→v13, saldando el redeploy pendiente desde el 08-31) desplegadas con `npx -y supabase functions deploy` — el CLI no está instalado, se usa npx, y el login fue con Personal Access Token del usuario vía `setx SUPABASE_ACCESS_TOKEN` en una ventana aparte (el flujo interactivo no anda sin TTY); dato importante: **el proyecto usa las API keys nuevas** (`sb_publishable_...`/`sb_secret_...`) — las legacy anon/service_role están DESHABILITADAS desde 2026-07-13, cualquier script server-side tiene que usar la `sb_secret` (se obtiene con `npx supabase projects api-keys --project-ref yukulanekksquqkateqk --reveal`). (b) **Dos bugs reales del backfill, pescados en la primera corrida contra la API viva y corregidos con test**: el servidor CLAMPEA el pageSize (se piden 500, sirve 50) y el corte por "vinieron menos de los pedidos" paraba la descarga en la página 1 con 50 de 1037 customers — ahora `listAllCustomers` corta solo por total alcanzado o por página sin IDs nuevos (anti-loop), y ya no recibe token: lo pide POR PÁGINA vía `getToken` (cacheado, se renueva a los 55 min) porque el segundo bug fue justamente un 401 a mitad del loop de teléfonos al expirar el token de 60 min en una corrida larga; el loop de teléfonos además pide token por iteración, reintenta una vez tras `resetTokenCache()` y una búsqueda fallida se anota y NO tumba la corrida (progreso cada 200). (c) **Ajustes de UI a pedido del usuario**: el panel SellerCloud dejó de abrirse arriba de la página — ahora es una FILA EXPANDIDA debajo del cliente en la tabla (mismo gesto que el detalle de un pedido en la bandeja; `scPanelBox` + Fragment por fila, con fallback al bloque de arriba si la fila no está a la vista por filtros/scroll — un alta con filtros puestos no puede dejar el flujo corriendo invisible); el form "Crear en SellerCloud" ganó campo de **correo editable** prellenado con el del cliente (viaja en el create; vacío = sin email, la API no lo exige; validado con EMAIL_RE); y **CustomerType pasó de 0 a 1** — el usuario confirmó que en SU instancia 1 = Wholesale; el Swagger se contradice a sí mismo (el x-enumNames del create dice 0=WholeSale, el del filtro del GET dice 1=Wholesale), así que manda lo observado en los datos reales, documentado en el código. Verificado: `sc-customers-tests` 26/26 (3 nuevos: pageSize clampeado baja TODO en 25 páginas, página repetida corta sin loop infinito, CustomerType 1), Playwright 26/26 (panel dentro de la tabla bajo la fila, correo prellenado y editado viajando en el create, más los 22 previos), push 35 OK, build de Vite limpio. El dry-run del backfill quedó corriendo contra la API real (1037 customers bajados completos). **Pendiente: deploy del frontend y el `--apply` del backfill tras revisar los CSVs.**
+
+77. **Backfill aplicado (parcial) + hallazgo de clientes duplicados** (2026-09-03, cierre del punto 76) — el dry-run contra la API real terminó: 1039 customers allá vs 1939 clientes sin vincular acá; 27 matches automáticos por nombre único (0 por email — casi nadie tiene correo cargado — y los 4 hits de teléfono degradados a revisión: **el filtro model.phoneNumber de SellerCloud matchea por SUBSTRING** y la primera corrida vinculó 2 de 4 al customer equivocado; el fix lee el teléfono REAL del detalle del customer y solo un sufijo que coincide de verdad matchea automático — los aproximados van a ambiguous.csv con el candidato). `--apply-file` de los 27: **5 aplicados** (Genesis Mercado, Luis Linares, Manuel García, Mohaya Askoul, Roxana Ortega) y **22 bloqueados por el índice único**: ya existe OTRO cliente local con ese sellercloud_id — son pares de duplicados locales (mismo nombre, teléfono con dígitos de más/de menos que escapa a la dedup por sufijo: ej. Carlos Alberto Escobar 584146330638 vs 5841463306) u homónimos que NO hay que fusionar (ej. las dos Diana Torres tienen teléfonos totalmente distintos). El índice único hizo exactamente su trabajo. Reporte con conteo de pedidos por gemelo en `Documents/catalogo/backfill-sellercloud-2026-09-03/duplicados.csv` (varios pares tienen pedidos EN AMBAS filas — la fusión es decisión humana, caso por caso; los CSVs matches/ambiguous/unmatched finales están en la misma carpeta). Pendiente: deploy del frontend; resolver los 22 duplicados y los 4 ambiguos a mano (panel o CSV); los 1908 sin candidato se crean bajo demanda desde el panel.

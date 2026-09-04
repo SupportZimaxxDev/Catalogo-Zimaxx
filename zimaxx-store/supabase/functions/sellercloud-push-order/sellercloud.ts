@@ -34,6 +34,12 @@
 // Como el create de esta API puede ignorar campos en silencio, pushOrder lo
 // verifica releyendo la orden (donde el campo se llama distinto:
 // ShippingDetails.AllowShippingWithoutPaymentValue).
+//
+// 2026-08-31: si el cliente allá tiene LastName vacío (cuentas con el nombre
+// completo metido entero en FirstName), customerDetails parte el nombre para
+// el payload — última palabra → LastName, resto → FirstName — en vez de que
+// el envío dependa de que el dato esté perfecto en SellerCloud. Solo para el
+// payload: nunca se escribe nada de vuelta en el cliente de allá.
 
 export const CHANNEL_WHOLESALE = 21
 
@@ -351,6 +357,319 @@ function pick(obj: unknown, ...paths: string[]): unknown {
   return undefined
 }
 
+// ============================================================
+// Customers: búsqueda, listado paginado y alta (2026-09-02, para el backfill
+// de sellercloud_id y el alta/vinculación de clientes desde el panel).
+//
+// Contrato confirmado contra el Swagger del servidor (/rest/swagger/docs/v1):
+//   * GET /rest/api/Customers — filtros `model.email`, `model.phoneNumber`,
+//     `model.firstName`, `model.lastName`, `model.keyword`,
+//     `model.companyIds`, `model.pageNumber`, `model.pageSize`. Respuesta:
+//     GetAllResponse<CustomerDto> = { Items: [...], TotalResults: n }.
+//     El CustomerDto del LISTADO trae UserID/Email/FirstName/LastName/
+//     CorporateName — SIN teléfono: el teléfono vive en el DETALLE
+//     (GET /Customers/{id} → Personal.Phone1...) o como filtro server-side.
+//   * POST /rest/api/Customers — CreateCustomerRequest: FirstName es EL ÚNICO
+//     campo requerido por la API; LastName/Email/BusinessName/CompanyID/
+//     CustomerType (0 = WholeSale, 1 = Retail) opcionales. Devuelve el ID
+//     nuevo como entero pelado. OJO: el create NO acepta teléfono — se setea
+//     en un segundo paso con PUT /Customers/{id} { Phone1 } (UpdateCustomerRequest).
+//   * Aunque la API solo exige FirstName, ACÁ el apellido es obligatorio:
+//     SellerCloud valida Last Name al crear ÓRDENES ("Customer's last name is
+//     not valid", aprendido a golpes el 2026-08-31) — un customer creado sin
+//     apellido no serviría para lo único que lo creamos.
+// ============================================================
+
+export type CustomerSummary = {
+  id: number
+  firstName: string
+  lastName: string
+  email: string | null
+  business: string | null
+  // Solo cuando se conoce (viene del detalle o de una búsqueda por teléfono);
+  // el DTO del listado no lo trae.
+  phone: string | null
+}
+
+// Normaliza una fila del LISTADO (CustomerDto). Las claves con variantes por
+// la misma razón que customerDetails: una respuesta real puede venir con otra
+// capitalización y un match que se pierde por eso es carísimo de diagnosticar.
+export function customerSummary(raw: unknown): CustomerSummary | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const id = Number(pick(r, 'UserID', 'UserId', 'ID', 'Id', 'id', 'CustomerID'))
+  if (!Number.isFinite(id) || id <= 0) return null
+  const s = (v: unknown) => (v == null ? '' : String(v).trim())
+  const email = s(pick(r, 'Email', 'email'))
+  const phone = s(pick(r, 'Phone', 'Phone1', 'phone', 'Personal.Phone1'))
+  return {
+    id,
+    firstName: s(pick(r, 'FirstName', 'firstName', 'General.FirstName')),
+    lastName: s(pick(r, 'LastName', 'lastName', 'General.LastName')),
+    email: email ? email.toLowerCase() : null,
+    business: s(pick(r, 'CorporateName', 'BusinessName', 'General.CorporateName')) || null,
+    phone: phone || null,
+  }
+}
+
+export type CustomerFilters = {
+  email?: string | null
+  phone?: string | null // viaja como model.phoneNumber
+  firstName?: string | null
+  lastName?: string | null
+  keyword?: string | null
+  pageNumber?: number
+  pageSize?: number
+}
+
+export async function searchCustomers(
+  cfg: Config,
+  token: string,
+  filters: CustomerFilters,
+  f: Fetcher = fetch,
+): Promise<{ items: CustomerSummary[]; total: number }> {
+  const params = new URLSearchParams()
+  if (filters.email) params.set('model.email', String(filters.email).trim())
+  if (filters.phone) params.set('model.phoneNumber', String(filters.phone).trim())
+  if (filters.firstName) params.set('model.firstName', String(filters.firstName).trim())
+  if (filters.lastName) params.set('model.lastName', String(filters.lastName).trim())
+  if (filters.keyword) params.set('model.keyword', String(filters.keyword).trim())
+  // Acotado a la compañía del negocio, igual que las órdenes (el parámetro es
+  // plural/array en el Swagger; un solo valor viaja como un elemento).
+  params.set('model.companyIds', String(cfg.companyId))
+  params.set('model.pageNumber', String(filters.pageNumber ?? 1))
+  params.set('model.pageSize', String(filters.pageSize ?? 50))
+
+  const url = `${cfg.baseUrl}/rest/api/Customers?${params.toString()}`
+  const res = await f(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+  })
+  const data = (await readJson(res, 'No se pudo buscar clientes en SellerCloud', url)) as {
+    Items?: unknown[]
+    TotalResults?: number
+  } | null
+  const items = (data?.Items ?? [])
+    .map(customerSummary)
+    .filter((c): c is CustomerSummary => c != null)
+  return { items, total: Number(data?.TotalResults) || items.length }
+}
+
+// Todos los customers de la compañía, paginando hasta agotar. `onPage` es un
+// hook de progreso (el backfill imprime "página X de ~Y"). El tope de páginas
+// es un cortafuegos contra un TotalResults mentiroso o una API que repite la
+// última página para siempre — no un límite de negocio.
+//
+// Dos lecciones de la corrida real (2026-09-03):
+//   * El servidor CLAMPEA el pageSize: se piden 500 y sirve 50. Cortar por
+//     "vinieron menos de los pedidos" paraba en la página 1 con 50 de 1037.
+//     Se corta por total alcanzado o por falta de progreso, nunca por tamaño.
+//   * El token dura 60 min y una descarga completa + el loop de teléfonos del
+//     backfill pueden pasarse: el token se pide POR PÁGINA vía getToken, que
+//     cachea y se renueva solo a los 55 min — por eso esta función ya no
+//     recibe el token como parámetro.
+const LIST_PAGE_SIZE = 500
+const LIST_MAX_PAGES = 400
+
+export async function listAllCustomers(
+  cfg: Config,
+  f: Fetcher = fetch,
+  onPage?: (page: number, got: number, total: number) => void,
+  now = Date.now,
+): Promise<CustomerSummary[]> {
+  const all: CustomerSummary[] = []
+  const seen = new Set<number>()
+  for (let page = 1; page <= LIST_MAX_PAGES; page++) {
+    const token = await getToken(cfg, now, f)
+    const { items, total } = await searchCustomers(
+      cfg,
+      token,
+      { pageNumber: page, pageSize: LIST_PAGE_SIZE },
+      f,
+    )
+    if (items.length === 0) break
+    const before = all.length
+    for (const c of items) {
+      if (!seen.has(c.id)) {
+        seen.add(c.id)
+        all.push(c)
+      }
+    }
+    onPage?.(page, all.length, total)
+    if (all.length >= total) break
+    // Página sin ningún ID nuevo = el servidor repite la última página: cortar
+    // acá evita el loop infinito sin depender del TotalResults.
+    if (all.length === before) break
+  }
+  return all
+}
+
+// ============================================================
+// Inventario (2026-09-04, para la Edge Function sellercloud-refresh-stock).
+//
+// Endpoint verificado contra la doc oficial (developer.sellercloud.com,
+// "Get Inventory Info for Multiple Products"):
+//   GET {base}/rest/api/Inventory?pageNumber=N&pageSize=50&companyID=<id>
+//   → { Items: [ { ID, InventoryAvailableQty, ... } ], TotalResults: n }
+//
+// Tres cosas que importan y NO son como en Orders/Customers:
+//   * Los parámetros van SIN el prefijo `model.` — así los muestra la doc de
+//     este endpoint (Orders/Customers sí lo llevan, verificado contra la API
+//     real en su momento).
+//   * pageSize máximo 50 POR CONTRATO ("The maximum number of products that
+//     can be pulled with a single call is 50") — acá el clampeo que Customers
+//     hacía en silencio está documentado, así que se pide 50 directo.
+//   * El `ID` del item ES el SKU (mismo dato que la columna del export de
+//     Excel que hoy sube el encargado); el disponible es
+//     InventoryAvailableQty (el Excel lo llama InventoryAvailableQTY).
+// El filtro companyID acota a la compañía del negocio, igual que hace el
+// resto del código con model.companyID/companyIds.
+// ============================================================
+
+export type InventoryRow = { sku: string; qty: number }
+
+export const INVENTORY_PAGE_SIZE = 50
+
+// Normaliza un item del listado. Claves con variantes por el mismo motivo que
+// customerSummary: una respuesta real puede venir con otra capitalización y
+// un SKU que se pierde por eso es carísimo de diagnosticar. Devuelve null si
+// no hay SKU o el disponible no es numérico — el llamador lo cuenta como
+// omitido, nunca inventa un 0 (0 significa "sin stock" y despublica).
+export function inventoryRow(raw: unknown): InventoryRow | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const sku = String(pick(r, 'ID', 'Id', 'id', 'SKU', 'Sku', 'sku', 'ProductID') ?? '').trim()
+  if (!sku) return null
+  const qty = Number(
+    pick(r, 'InventoryAvailableQty', 'InventoryAvailableQTY', 'inventoryAvailableQty', 'AvailableQty'),
+  )
+  if (!Number.isFinite(qty)) return null
+  return { sku, qty: Math.trunc(qty) }
+}
+
+export async function fetchInventoryPage(
+  cfg: Config,
+  token: string,
+  page: number,
+  f: Fetcher = fetch,
+): Promise<{ rows: InventoryRow[]; skipped: number; total: number }> {
+  const params = new URLSearchParams()
+  params.set('pageNumber', String(page))
+  params.set('pageSize', String(INVENTORY_PAGE_SIZE))
+  params.set('companyID', String(cfg.companyId))
+
+  const url = `${cfg.baseUrl}/rest/api/Inventory?${params.toString()}`
+  const res = await f(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+  })
+  const data = (await readJson(res, 'No se pudo leer el inventario de SellerCloud', url)) as {
+    Items?: unknown[]
+    TotalResults?: number
+  } | null
+  const items = data?.Items ?? []
+  const rows: InventoryRow[] = []
+  let skipped = 0
+  for (const it of items) {
+    const row = inventoryRow(it)
+    if (row) rows.push(row)
+    else skipped++
+  }
+  return { rows, skipped, total: Number(data?.TotalResults) || 0 }
+}
+
+export type NewCustomer = {
+  firstName: string
+  lastName: string
+  email?: string | null
+  business?: string | null
+}
+
+// CustomerType 1 = Wholesale (2026-09-03, confirmado por el usuario contra su
+// instancia). OJO: el Swagger se contradice a sí mismo — el x-enumNames del
+// CreateCustomerRequest dice 0 = WholeSale / 1 = Retail, pero el del FILTRO
+// del GET dice 0 = Retail / 1 = Wholesale. Manda lo observado en los datos
+// reales, no el Swagger. Todos los clientes de este negocio son mayoristas.
+const CUSTOMER_TYPE_WHOLESALE = 1
+
+export async function createCustomer(
+  cfg: Config,
+  token: string,
+  c: NewCustomer,
+  f: Fetcher = fetch,
+): Promise<number> {
+  const firstName = String(c.firstName ?? '').trim()
+  const lastName = String(c.lastName ?? '').trim()
+  // La API solo exige FirstName, pero sin LastName el customer nace inválido
+  // para crear órdenes (ver cabecera de esta sección): acá se exigen los dos.
+  if (!firstName || !lastName) {
+    throw new Error('para crear el cliente en SellerCloud hacen falta nombre Y apellido')
+  }
+  const email = String(c.email ?? '').trim()
+  const url = `${cfg.baseUrl}/rest/api/Customers/`
+  const res = await f(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      CompanyID: cfg.companyId,
+      FirstName: firstName,
+      LastName: lastName,
+      ...(email ? { Email: email } : {}),
+      ...(c.business ? { BusinessName: String(c.business).trim() } : {}),
+      CustomerType: CUSTOMER_TYPE_WHOLESALE,
+    }),
+  })
+  const data = await readJson(res, 'SellerCloud rechazó el alta del cliente', url)
+  const id = typeof data === 'number' ? data : pick(data, 'ID', 'Id', 'id', 'UserID', 'CustomerID')
+  const num = Number(id)
+  if (!Number.isFinite(num) || num <= 0) {
+    // Igual que createOrder: el customer PUEDE existir allá aunque no sepamos
+    // su ID — reintentar a ciegas lo duplicaría.
+    throw new Error(
+      `SellerCloud no devolvió el ID del cliente (respondió: ${JSON.stringify(data)?.slice(0, 200)}).` +
+        ' Buscalo en SellerCloud antes de reintentar.',
+    )
+  }
+  return num
+}
+
+// El teléfono no viaja en el create (CreateCustomerRequest no lo tiene): se
+// setea después con el PUT del UpdateCustomerRequest, donde sí existe como
+// Phone1. Mejor-esfuerzo a propósito: si esto falla, el customer YA existe y
+// el llamador avisa en vez de fallar — mismo criterio que setSalesRep.
+export async function setCustomerPhone(
+  cfg: Config,
+  token: string,
+  customerId: number,
+  phone: string,
+  f: Fetcher = fetch,
+): Promise<void> {
+  const url = `${cfg.baseUrl}/rest/api/Customers/${customerId}`
+  const res = await f(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ Phone1: phone }),
+  })
+  const text = await readBody(res)
+  if (!res.ok) {
+    throw failure(`No se pudo cargar el teléfono del cliente ${customerId}`, url, res, text)
+  }
+}
+
 export function customerDetails(customer: Record<string, unknown>) {
   const email = pick(customer, 'Email', 'email', 'UserName', 'Username', 'General.Email')
   const first = pick(customer, 'FirstName', 'firstName', 'General.FirstName', 'BillingAddress.FirstName')
@@ -366,11 +685,26 @@ export function customerDetails(customer: Record<string, unknown>) {
     )
   }
 
+  // LastName vacío allá (2026-08-31): pasa seguido — cuentas cargadas con el
+  // nombre completo (o el de la empresa) metido entero en FirstName. En vez
+  // de depender de que el dato esté perfecto en SellerCloud, se parte el
+  // nombre completo SOLO para el payload de la orden: última palabra →
+  // LastName, el resto → FirstName (con una sola palabra, queda toda en
+  // LastName). Mismo criterio que ya usa toOrderAddress con el ContactName.
+  // Nada se escribe de vuelta en SellerCloud — el cliente allá queda tal cual.
+  let firstName = String(first ?? '').trim()
+  let lastName = String(last ?? '').trim()
+  if (!lastName && firstName) {
+    const parts = firstName.split(/\s+/)
+    lastName = parts[parts.length - 1]
+    firstName = parts.slice(0, -1).join(' ')
+  }
+
   return {
     ID: typeof id === 'number' ? id : Number(id) || undefined,
     Email: String(email),
-    FirstName: String(first ?? ''),
-    LastName: String(last ?? ''),
+    FirstName: firstName,
+    LastName: lastName,
   }
 }
 

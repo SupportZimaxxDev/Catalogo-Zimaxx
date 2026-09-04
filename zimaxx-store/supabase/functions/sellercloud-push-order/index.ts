@@ -36,6 +36,7 @@ import {
   type OrderExtras,
   type OrderItem,
 } from './sellercloud.ts'
+import { freshnessGate } from './freshness.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')
@@ -114,7 +115,9 @@ Deno.serve(async (req) => {
     global: { headers: { Authorization: authHeader } },
   })
 
-  let body: { order_id?: string }
+  // `override` (2026-09-04): salteo del candado de frescura, SOLO superadmin
+  // y siempre auditado — ver el bloque del candado más abajo. Nunca default.
+  let body: { order_id?: string; override?: boolean }
   try {
     body = await req.json()
   } catch {
@@ -161,6 +164,29 @@ Deno.serve(async (req) => {
   // no puede saltearse. De paso, atender el pedido ya descontó el stock local.
   if (order.status !== 'done') {
     return json({ error: 'marcá el pedido como Atendido antes de enviarlo a SellerCloud' }, 400)
+  }
+
+  // Candado de frescura de inventario (2026-09-04): el push es un punto de
+  // contacto con el inventario real, así que exige que la última corrida
+  // exitosa (Excel o refresco) esté dentro del umbral. La regla vive en la
+  // base (get_inventory_freshness + audit_freshness_override); la traducción
+  // a HTTP vive en ./freshness.ts (sin Deno, testeable desde Node) y se
+  // aplica ANTES de tocar la API — un rechazo no puede dejar una orden creada
+  // a medias allá. Si la RPC no existe (migración sin correr), el gate deja
+  // pasar con un warning en system_logs.
+  {
+    const gate = await freshnessGate(
+      (name, args) => caller.rpc(name, args),
+      orderId,
+      body.override === true,
+    )
+    if (!gate.allow) return json(gate.body, gate.status)
+    if (gate.warning) {
+      await logPush(caller, 'warning', gate.warning.event, gate.warning.message, {
+        order_id: orderId,
+        override: gate.overrode,
+      })
+    }
   }
 
   const client = Array.isArray(order.clients) ? order.clients[0] : order.clients

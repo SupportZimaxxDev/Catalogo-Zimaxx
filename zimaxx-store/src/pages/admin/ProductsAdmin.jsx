@@ -373,10 +373,75 @@ export default function ProductsAdmin() {
         .map((p) => ({ ...p, new_until: newUntilIso }))
       const existingRows = upserts.filter((p) => existingSkus.has(p.sku.toLowerCase()))
 
-      for (const batch of [newRows, existingRows]) {
-        if (batch.length === 0) continue
-        const { error } = await supabase.from('products').upsert(batch, { onConflict: 'sku' })
-        if (error) throw error
+      // Frescura de inventario (2026-09-04): si el archivo trae stock, la
+      // corrida queda registrada en inventory_syncs — es una de las dos vías
+      // que alimentan el indicador del header y el candado de Atendido/push.
+      // Tres salidas del begin:
+      //   * ok           → se registra y al final se cierra (ok/error);
+      //   * ZS002 (lock) → hay un refresco/carga corriendo AHORA: se corta la
+      //     subida con ese mensaje (pisarse el stock entre dos corridas es
+      //     justo lo que el lock evita);
+      //   * cualquier otro error (p. ej. migración sin correr) → la carga
+      //     sigue sin registrarse, como siempre — degradación en silencio,
+      //     mismo criterio que logEvent.
+      let invSyncId = null
+      if (hasInventory) {
+        try {
+          const { data: run, error: beginError } = await supabase.rpc('inventory_sync_begin', {
+            p_source: 'excel_upload',
+          })
+          if (beginError) {
+            if (beginError.code === 'ZS002') throw new Error(beginError.message)
+          } else {
+            invSyncId = run?.id ?? null
+          }
+        } catch (e) {
+          if (/en curso/i.test(e?.message ?? '')) throw e
+          /* sin registro: la carga sigue igual */
+        }
+      }
+
+      try {
+        for (const batch of [newRows, existingRows]) {
+          if (batch.length === 0) continue
+          const { error } = await supabase.from('products').upsert(batch, { onConflict: 'sku' })
+          if (error) throw error
+        }
+      } catch (err) {
+        // La corrida no puede quedar 'running' colgada por una subida que
+        // falló a mitad de tanda: se cierra como error y se relanza.
+        if (invSyncId) {
+          // then(ok, err) y no .catch(): el builder de supabase-js es un
+          // thenable, no una Promise completa.
+          supabase
+            .rpc('inventory_sync_finish', {
+              p_id: invSyncId,
+              p_status: 'error',
+              p_error: err?.message ?? String(err),
+            })
+            .then(
+              () => {},
+              () => {},
+            )
+        }
+        throw err
+      }
+
+      // Corrida buena: products_updated = filas con stock del archivo. Los
+      // contadores de desactivados/reactivados quedan en null a propósito —
+      // los decide el trigger de la base fila por fila y este camino no los
+      // ve (el refresco sí los reporta, refresh_stock_upsert los devuelve).
+      if (invSyncId) {
+        supabase
+          .rpc('inventory_sync_finish', {
+            p_id: invSyncId,
+            p_status: 'ok',
+            p_products_updated: upserts.length,
+          })
+          .then(
+            () => {},
+            () => {},
+          )
       }
 
       const created = newRows.length
