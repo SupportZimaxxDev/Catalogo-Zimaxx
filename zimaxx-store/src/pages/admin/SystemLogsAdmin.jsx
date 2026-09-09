@@ -32,6 +32,9 @@ const SOURCES = [
   'product_upload',
   'sync',
   'frontend',
+  // 2026-09-08: descargas del Excel de la lista de precios desde el catálogo
+  // del cliente (info) — sirve para saber quién sigue pidiendo el Excel.
+  'catalog',
 ]
 
 // Gris info / amarillo warning / rojo error / rojo oscuro critical (pedido

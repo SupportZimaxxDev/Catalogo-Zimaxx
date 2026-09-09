@@ -109,6 +109,97 @@ export async function downloadMetricsExcel({ rows, header, widths, sheetName, pe
   XLSX.writeFile(wb, `zimaxx-metricas-${periodStamp}.xlsx`)
 }
 
+// ---------- Lista de precios en Excel (2026-09-08) ----------
+// Puente para los clientes que siguen pidiendo "el catálogo en Excel" mientras
+// se acostumbran al link: el MISMO archivo se genera desde el catálogo del
+// cliente (PriceListExcel.jsx, con lo que ya devolvió get_catalog — no hay RPC
+// ni migración detrás) y desde la pestaña Precios (PricesUpload.jsx, para que
+// la vendedora se lo mande por WhatsApp a quien lo prefiera así). Las dos
+// pantallas arman las filas con priceListExcelRows para que el archivo sea
+// uno solo, venga de donde venga.
+
+const AVAILABILITY_KEY = { available: 'inStock', preorder: 'preorder', flash: 'flashSale' }
+
+// Convierte productos (shape de get_catalog o de la matriz del panel) en
+// { header, rows, widths, priceCol }. `withSku` solo desde el panel: el SKU es
+// dato interno (get_catalog no lo expone) y el cliente identifica por UPC.
+// Sin precios (lista `quote`) la columna Precio no va: un catálogo de
+// cotización no tiene precio que mostrar. Las celdas vacías van como null
+// (SheetJS no crea la celda) y no como '' (crearía una celda de texto vacío).
+export function priceListExcelRows({ t, products, lineLabel, withSku = false }) {
+  const hasPrices = products.some((p) => p.price != null)
+  const header = [
+    ...(withSku ? [t('excelColSku')] : []),
+    t('upc'),
+    t('excelColBrand'),
+    t('product'),
+    t('excelColLine'),
+    t('excelColAvailability'),
+    ...(hasPrices ? [t('excelColPrice')] : []),
+  ]
+  const widths = [...(withSku ? [24] : []), 16, 22, 60, 18, 16, ...(hasPrices ? [12] : [])]
+  const rows = products.map((p) => [
+    ...(withSku ? [p.sku || null] : []),
+    p.upc || null,
+    p.category || null,
+    p.name,
+    p.product_line ? lineLabel(p.product_line) : null,
+    AVAILABILITY_KEY[p.availability] ? t(AVAILABILITY_KEY[p.availability]) : p.availability || null,
+    ...(hasPrices ? [p.price == null ? null : Number(p.price)] : []),
+  ])
+  return { header, rows, widths, priceCol: hasPrices ? header.length - 1 : -1 }
+}
+
+// Arma el workbook SIN escribirlo — separado de la descarga para poder
+// probarlo en Node leyendo el resultado (tests/price-list-excel-tests.mjs).
+// Membrete arriba (título + líneas de contexto), una fila en blanco y la tabla
+// con autofiltro, como las listas wholesale que el negocio siempre mandó. Los
+// precios van como NÚMERO con formato de moneda (sumables en Excel), no como
+// texto "$22.00".
+export function buildPriceListWorkbook(
+  XLSX,
+  { title, metaLines = [], header, rows, widths, priceCol = -1, sheetName },
+) {
+  const aoa = [[title], ...metaLines.map((line) => [line]), [], header, ...rows]
+  const headerRow = 1 + metaLines.length + 1
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  if (priceCol >= 0) {
+    for (let r = headerRow + 1; r < aoa.length; r++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c: priceCol })]
+      if (cell && typeof cell.v === 'number') cell.z = '"$"#,##0.00'
+    }
+  }
+  if (widths) ws['!cols'] = widths.map((wch) => ({ wch }))
+  if (rows.length > 0) {
+    ws['!autofilter'] = {
+      ref: XLSX.utils.encode_range({
+        s: { r: headerRow, c: 0 },
+        e: { r: aoa.length - 1, c: header.length - 1 },
+      }),
+    }
+  }
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, sheetName)
+  return wb
+}
+
+export async function downloadPriceListExcel({ filename, ...opts }) {
+  const XLSX = await import('xlsx')
+  const wb = buildPriceListWorkbook(XLSX, opts)
+  XLSX.writeFile(wb, filename)
+}
+
+// Trozo seguro para un nombre de archivo (sin acentos, minúsculas, guiones).
+export function fileSlug(s, max = 40) {
+  return String(s ?? '')
+    .normalize('NFD')
+    .replace(DIACRITICS, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, max)
+}
+
 export function normalizeHeader(h) {
   return String(h)
     .toLowerCase()

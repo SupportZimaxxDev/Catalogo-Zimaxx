@@ -265,12 +265,18 @@ const dict = {
     bulkUpload: 'Carga masiva por Excel',
     imageUpload: 'Fotos por Excel',
     searchProducts: 'Buscar por nombre o SKU...',
-    searchClients: 'Buscar por nombre, teléfono o vendedora...',
+    searchClients: 'Buscar por nombre, teléfono, correo o vendedora...',
     searchOrders: 'Buscar por nombre o teléfono del cliente...',
     allStatuses: 'Todos los estados',
     allTypes: 'Todos los tipos',
     allLists: 'Todas las listas',
     allReps: 'Todas las vendedoras',
+    // Chips con/sin correo de la pestaña Clientes (2026-09-08).
+    withEmail: 'con correo',
+    withoutEmail: 'sin correo',
+    showEmail: 'Ver correo',
+    hideEmail: 'Ocultar correo',
+    copyEmail: 'Copiar correo',
     allLines: 'Todas las líneas',
     lineDesigner: 'Diseñador',
     lineArabic: 'Árabes',
@@ -602,6 +608,35 @@ const dict = {
     favorites: 'Favoritos',
     favAdd: 'Agregar a favoritos',
     favRemove: 'Quitar de favoritos',
+
+    // Excel de la lista de precios (2026-09-08): puente para los clientes que
+    // siguen pidiendo el catálogo "en Excel" mientras se acostumbran al link.
+    // El bloque del catálogo (PriceListExcel.jsx) y el botón de la pestaña
+    // Precios generan el mismo archivo. Tono neutro: el cliente es un
+    // mayorista externo.
+    excelListTitle: '¿Prefieres verlo en Excel?',
+    excelListHint:
+      'Descarga tu lista de precios completa, con todos los productos y precios de tu catálogo, para revisarla como siempre.',
+    excelListHintNoPrices: 'Descarga el catálogo completo en Excel para revisarlo como siempre.',
+    excelListButton: 'Descargar lista en Excel',
+    excelListBusy: 'Preparando el archivo…',
+    excelListFailed: 'No se pudo generar el archivo. Revisa tu conexión e intenta de nuevo.',
+    excelListSheet: 'Lista de precios',
+    excelSalesRep: 'Asesora',
+    excelGeneratedAt: 'Generado',
+    excelColSku: 'SKU',
+    excelColBrand: 'Marca',
+    excelColLine: 'Línea',
+    excelColAvailability: 'Disponibilidad',
+    excelColPrice: 'Precio',
+    // Pestaña Precios: el mismo Excel, por lista, para que la vendedora se lo
+    // mande a quien lo prefiera así.
+    listExcelButton: 'Descargar Excel de la lista',
+    listExcelChoose: 'Elegí una lista en el selector para descargar su Excel.',
+    listExcelHint:
+      'Genera la lista de precios en Excel tal como la ve un cliente de esa lista (solo productos activos con precio), para mandársela a quien prefiera revisarla así.',
+    listExcelEmpty: 'Esa lista no tiene productos publicados con precio.',
+    listExcelDone: 'Excel generado',
   },
   en: {
     search: 'Search by name, category or UPC...',
@@ -829,12 +864,17 @@ const dict = {
     bulkUpload: 'Bulk upload via Excel',
     imageUpload: 'Photos via Excel',
     searchProducts: 'Search by name or SKU...',
-    searchClients: 'Search by name, phone or rep...',
+    searchClients: 'Search by name, phone, email or rep...',
     searchOrders: 'Search by client name or phone...',
     allStatuses: 'All statuses',
     allTypes: 'All types',
     allLists: 'All lists',
     allReps: 'All reps',
+    withEmail: 'with email',
+    withoutEmail: 'without email',
+    showEmail: 'Show email',
+    hideEmail: 'Hide email',
+    copyEmail: 'Copy email',
     allLines: 'All lines',
     lineDesigner: 'Designer',
     lineArabic: 'Arabic',
@@ -1155,6 +1195,28 @@ const dict = {
     favorites: 'Favorites',
     favAdd: 'Add to favorites',
     favRemove: 'Remove from favorites',
+
+    excelListTitle: 'Prefer to see it in Excel?',
+    excelListHint:
+      'Download your full price list, with every product and price in your catalog, to review it the way you always have.',
+    excelListHintNoPrices: 'Download the full catalog in Excel to review it the way you always have.',
+    excelListButton: 'Download price list (Excel)',
+    excelListBusy: 'Preparing the file…',
+    excelListFailed: 'The file could not be generated. Check your connection and try again.',
+    excelListSheet: 'Price list',
+    excelSalesRep: 'Sales rep',
+    excelGeneratedAt: 'Generated',
+    excelColSku: 'SKU',
+    excelColBrand: 'Brand',
+    excelColLine: 'Line',
+    excelColAvailability: 'Availability',
+    excelColPrice: 'Price',
+    listExcelButton: 'Download list as Excel',
+    listExcelChoose: 'Pick a list in the selector to download its Excel.',
+    listExcelHint:
+      'Generates the price list in Excel exactly as a client on that list sees it (active products with a price only), to send to anyone who prefers to review it that way.',
+    listExcelEmpty: 'That list has no published products with a price.',
+    listExcelDone: 'Excel generated',
   },
 }
 

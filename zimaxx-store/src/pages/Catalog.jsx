@@ -8,6 +8,7 @@ import ProductCard from '../components/ProductCard'
 import CartBar from '../components/CartBar'
 import CartDrawer from '../components/CartDrawer'
 import OutboxBanner from '../components/OutboxBanner'
+import PriceListExcel from '../components/PriceListExcel'
 import { useInfiniteRows } from '../hooks/useInfiniteRows'
 import { loadFavorites, pushFavorite, saveFavorites } from '../utils/favorites'
 
@@ -305,6 +306,11 @@ export default function Catalog() {
           </div>
         ) : (
           <>
+            {/* Excel de la lista de precios (2026-09-08): puente para los
+                clientes que todavía prefieren el Excel al link. Va sobre el
+                catálogo COMPLETO (products, no filtered): es "su lista", no lo
+                que tenga filtrado en pantalla. */}
+            <PriceListExcel token={token} client={client} products={products} lineLabel={lineLabel} />
             {filtered.length === 0 ? (
               <p className="py-20 text-center text-primary/50">{t('noProducts')}</p>
             ) : (

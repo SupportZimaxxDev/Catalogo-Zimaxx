@@ -234,17 +234,19 @@ export default function ClientsAdmin() {
   // cambio pendiente a la vez, { clientId, listId } | null.
   const [pendingList, setPendingList] = useState(null)
 
-  // Edición de nombre/teléfono (2026-08-25) y SellerCloud ID (2026-08-31):
-  // un solo cliente en edición a la vez, { clientId, name, phone, scid } |
-  // null. Nombre/teléfono van por la RPC update_client_info (admin edita
-  // cualquiera, una vendedora solo los suyos) — la RPC exige p_email y para
-  // ella vacío = borrar, así que se le reenvía el email guardado tal cual:
-  // la columna Email se quitó de la tabla el 2026-09-01 (0 de 2755 clientes
-  // con correo, no había nada que mostrar) pero clients.email sigue en la
-  // base y lo llenan el alta, el Excel y el sync. El vínculo con SellerCloud
-  // va aparte por set_client_sellercloud_id (SOLO ADMIN: un ID equivocado
-  // manda los pedidos al cliente equivocado allá — el input ni se muestra a
-  // la vendedora). Todo queda auditado en admin_audit_log sí o sí.
+  // Edición de nombre/teléfono (2026-08-25), SellerCloud ID (2026-08-31) y
+  // correo (2026-09-08): un solo cliente en edición a la vez,
+  // { clientId, name, phone, email, scid } | null. Nombre/teléfono/correo van
+  // por la RPC update_client_info (admin edita cualquiera, una vendedora solo
+  // los suyos) — la RPC exige p_email y vacío = borrar, que acá es una acción
+  // explícita del input. Historia: la columna Email se quitó de la tabla el
+  // 2026-09-01 (0 de 2755 clientes con correo) y la edición reenviaba el
+  // guardado tal cual; el 2026-09-08 el usuario pidió volver a VER qué correo
+  // tiene cada cliente — ahora se muestra bajo el teléfono solo si lo hay,
+  // con chips con/sin correo, y se edita junto con el teléfono. El vínculo
+  // con SellerCloud va aparte por set_client_sellercloud_id (SOLO ADMIN: un
+  // ID equivocado manda los pedidos al cliente equivocado allá — el input ni
+  // se muestra a la vendedora). Todo queda auditado en admin_audit_log.
   const [editForm, setEditForm] = useState(null)
   const [editBusy, setEditBusy] = useState(false)
 
@@ -381,7 +383,17 @@ export default function ClientsAdmin() {
   const [query, setQuery] = useState('')
   const [listFilter, setListFilter] = useState('')
   const [repFilter, setRepFilter] = useState('')
-  const [visibleRows, sentinelRef] = useInfiniteRows(100, [query, listFilter, repFilter])
+  // Con/sin correo (2026-09-08): '' | 'has' | 'missing'. Ver los chips junto
+  // a los filtros y el comentario de `base` más abajo.
+  const [emailFilter, setEmailFilter] = useState('')
+  // Correo desplegable por fila (2026-09-08, segunda iteración a pedido del
+  // usuario): mostrarlo en línea bajo el teléfono ensanchaba la columna y
+  // empujaba la de acciones fuera de la vista ("Eliminar quedaba cortado").
+  // Ahora una flechita junto al teléfono abre una fila debajo con el correo
+  // y un botón Copiar. Varias filas pueden estar abiertas a la vez (Set).
+  const [emailOpen, setEmailOpen] = useState(() => new Set())
+  const [copiedEmailId, setCopiedEmailId] = useState(null)
+  const [visibleRows, sentinelRef] = useInfiniteRows(100, [query, listFilter, repFilter, emailFilter])
 
   const load = async () => {
     try {
@@ -406,7 +418,10 @@ export default function ClientsAdmin() {
     load()
   }, [])
 
-  const filtered = useMemo(() => {
+  // Universo tras buscador + lista + vendedora, ANTES del filtro de correo:
+  // sobre esto se cuentan "con correo / sin correo" (2026-09-08), así los
+  // chips dicen cuántos de los que se están mirando tienen correo cargado.
+  const base = useMemo(() => {
     const q = query.trim()
     // Mismo criterio que la bandeja de Pedidos (2026-08-12, ver
     // utils/search.js): por términos, no por subcadena contigua. Acá importa
@@ -429,6 +444,13 @@ export default function ClientsAdmin() {
       )
     })
   }, [clients, query, listFilter, repFilter])
+
+  const withEmailCount = useMemo(() => base.filter((c) => !!c.email).length, [base])
+  const filtered = useMemo(() => {
+    if (emailFilter === 'has') return base.filter((c) => !!c.email)
+    if (emailFilter === 'missing') return base.filter((c) => !c.email)
+    return base
+  }, [base, emailFilter])
 
   const resolveListId = (raw) => {
     const norm = normalizeHeader(raw ?? '')
@@ -668,6 +690,22 @@ export default function ClientsAdmin() {
     setTimeout(() => setCopiedId(null), 1500)
   }
 
+  const toggleEmail = (id) =>
+    setEmailOpen((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  // Mismo gesto que copyLink: feedback "✓ Copiado" 1.5 s en el propio botón.
+  const copyEmail = async (c) => {
+    if (!c.email) return
+    await navigator.clipboard.writeText(c.email)
+    setCopiedEmailId(c.id)
+    setTimeout(() => setCopiedEmailId(null), 1500)
+  }
+
   // Listas con dueña (ej. 'luzmar', 2026-07-09; varias dueñas desde
   // 2026-08-04): un cliente con esa lista SIEMPRE tiene que quedar asignado
   // a UNA de sus dueñas — evita que precios especiales negociados por ellas
@@ -761,6 +799,7 @@ export default function ClientsAdmin() {
       clientId: client.id,
       name: client.name,
       phone: client.phone,
+      email: client.email ?? '',
       scid: client.sellercloud_id == null ? '' : String(client.sellercloud_id),
     })
   }
@@ -791,6 +830,13 @@ export default function ClientsAdmin() {
       setActionError(t('phoneInUse'))
       return
     }
+    // Correo (2026-09-08): mismo chequeo laxo que el alta; se guarda en
+    // minúsculas; vacío = sin correo.
+    const email = editForm.email.trim().toLowerCase()
+    if (email && !EMAIL_RE.test(email)) {
+      setActionError(t('invalidEmail'))
+      return
+    }
     // Vínculo SellerCloud: solo admin (la vendedora ni ve el input, así que
     // para ella `scidChanged` es siempre false y no se llama a la RPC).
     const scid = editForm.scid.trim() === '' ? null : Number(editForm.scid)
@@ -804,9 +850,7 @@ export default function ClientsAdmin() {
       p_client_id: client.id,
       p_name: name,
       p_phone: phone,
-      // Sin input de email en la tabla: se reenvía el guardado tal cual —
-      // omitirlo (o mandar null teniendo correo) se lo borraría al cliente.
-      p_email: client.email ?? null,
+      p_email: email || null,
     })
     if (error) {
       setEditBusy(false)
@@ -823,7 +867,7 @@ export default function ClientsAdmin() {
         // edición queda abierta con el error del vínculo en el banner.
         setEditBusy(false)
         setClients((prev) =>
-          prev.map((c) => (c.id === client.id ? { ...c, name, phone } : c))
+          prev.map((c) => (c.id === client.id ? { ...c, name, phone, email: email || null } : c))
         )
         setActionError(scidError.message)
         return
@@ -840,6 +884,7 @@ export default function ClientsAdmin() {
               ...c,
               name,
               phone,
+              email: email || null,
               ...(scidChanged ? { sellercloud_id: scid } : {}),
             }
           : c
@@ -1295,6 +1340,32 @@ export default function ClientsAdmin() {
             ))}
           </select>
         )}
+        {/* Con/sin correo (2026-09-08, a pedido del usuario: "ver qué correos
+            están asignados a cada cliente"). Los contadores van sobre lo que
+            ya filtran buscador/lista/vendedora; el chip activo recorta la
+            tabla. Así se responde sin volver a una columna casi vacía. */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setEmailFilter(emailFilter === 'has' ? '' : 'has')}
+            className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+              emailFilter === 'has'
+                ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                : 'bg-green-100 text-green-800 hover:bg-green-200 dark:bg-green-900/50 dark:text-green-300 dark:hover:bg-green-900'
+            }`}
+          >
+            ✉️ {withEmailCount} {t('withEmail')}
+          </button>
+          <button
+            onClick={() => setEmailFilter(emailFilter === 'missing' ? '' : 'missing')}
+            className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+              emailFilter === 'missing'
+                ? 'bg-ink text-secondary ring-1 ring-secondary/40'
+                : 'bg-primary/10 text-primary/60 hover:bg-primary/15'
+            }`}
+          >
+            {base.length - withEmailCount} {t('withoutEmail')}
+          </button>
+        </div>
       </div>
 
       {actionError && (
@@ -1332,17 +1403,45 @@ export default function ClientsAdmin() {
                     c.name
                   )}
                 </td>
+                {/* Tel + correo (2026-09-08): el correo vuelve a verse, pero
+                    NO en línea (ensanchaba la columna y cortaba "Eliminar"):
+                    una flechita junto al teléfono, solo si hay correo, abre
+                    una fila debajo con el correo y Copiar. Al editar, el input
+                    de correo va bajo el del teléfono; vacío = sin correo. */}
                 <td className="p-3 font-mono text-xs text-primary/60">
                   {editForm?.clientId === c.id ? (
-                    <input
-                      inputMode="tel"
-                      value={editForm.phone}
-                      onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
-                      onKeyDown={editKeys}
-                      className="w-32 rounded-lg border border-secondary/60 bg-surface px-2 py-1 font-mono text-xs outline-none transition-colors focus:border-secondary"
-                    />
+                    <div className="flex flex-col gap-1">
+                      <input
+                        inputMode="tel"
+                        value={editForm.phone}
+                        onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                        onKeyDown={editKeys}
+                        className="w-32 rounded-lg border border-secondary/60 bg-surface px-2 py-1 font-mono text-xs outline-none transition-colors focus:border-secondary"
+                      />
+                      <input
+                        type="email"
+                        placeholder={t('emailOptional')}
+                        value={editForm.email}
+                        onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                        onKeyDown={editKeys}
+                        className="w-44 rounded-lg border border-secondary/60 bg-surface px-2 py-1 font-mono text-xs outline-none transition-colors focus:border-secondary"
+                      />
+                    </div>
                   ) : (
-                    c.phone
+                    <span className="flex items-center gap-1.5 whitespace-nowrap">
+                      {c.phone}
+                      {c.email && (
+                        <button
+                          onClick={() => toggleEmail(c.id)}
+                          aria-expanded={emailOpen.has(c.id)}
+                          aria-label={t(emailOpen.has(c.id) ? 'hideEmail' : 'showEmail')}
+                          title={t(emailOpen.has(c.id) ? 'hideEmail' : 'showEmail')}
+                          className="rounded-md px-1 text-[11px] leading-none text-primary/50 transition-colors hover:bg-gold-pale/60 hover:text-primary"
+                        >
+                          ✉️ {emailOpen.has(c.id) ? '▴' : '▾'}
+                        </button>
+                      )}
+                    </span>
                   )}
                 </td>
                 {/* Vínculo SellerCloud con columna propia (2026-09-01,
@@ -1457,7 +1556,10 @@ export default function ClientsAdmin() {
                     c.vendedores?.name || (isAdmin ? t('unassigned') : '')
                   )}
                 </td>
-                <td className="p-3">
+                {/* whitespace-nowrap (2026-09-08): que los botones nunca se
+                    partan en dos líneas ni se recorten; si no entra, la tabla
+                    scrollea (overflow-x-auto del contenedor). */}
+                <td className="whitespace-nowrap p-3">
                   <div className="flex items-center justify-end gap-2">
                     {editForm?.clientId === c.id ? (
                       <>
@@ -1533,6 +1635,29 @@ export default function ClientsAdmin() {
                   </div>
                 </td>
               </tr>
+              {/* Correo desplegado (2026-09-08): fila propia debajo del
+                  cliente, mismo gesto que el panel SellerCloud. Solo existe
+                  si el cliente tiene correo (sin correo no hay flechita). */}
+              {c.email && emailOpen.has(c.id) && (
+                <tr className="border-b border-line/60 bg-gold-pale/15">
+                  <td colSpan={6} className="px-3 py-2">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-primary/50">✉️ {t('email')}:</span>
+                      <span className="select-all font-mono text-primary/80">{c.email}</span>
+                      <button
+                        onClick={() => copyEmail(c)}
+                        className={`rounded-full px-3 py-1 font-semibold transition-all ${
+                          copiedEmailId === c.id
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-secondary/15 text-secondary-dark hover:bg-secondary/30'
+                        }`}
+                      >
+                        {copiedEmailId === c.id ? `✓ ${t('copied')}` : t('copyEmail')}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )}
               {/* Panel SellerCloud como fila expandida (2026-09-03): la
                   búsqueda, los candidatos y el alta se despliegan DEBAJO del
                   cliente, mismo gesto que el detalle de un pedido en la

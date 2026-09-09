@@ -302,6 +302,44 @@ localStorage previo, la RPC disparada con token/producto/estado en cada
 toggle, y el servidor pisando lo optimista al recargar), más las suites del
 carrito (22) y de top-sellers (15) re-corridas en verde.
 
+### 📊 Excel de la lista de precios (2026-09-08)
+
+Puente para los clientes —los de más edad sobre todo— que se resisten al link
+y siguen pidiendo "la lista en Excel como siempre". A pedido del usuario, y
+**temporal a propósito**: cuando dejen de usarlo se quita el componente y nada
+más.
+
+- **En el catálogo del cliente**: un bloque "📊 ¿Prefieres verlo en Excel?"
+  arriba de los resultados, con el botón **Descargar lista en Excel**. Baja un
+  `.xlsx` con **su lista completa** (todos los productos que ve en el
+  catálogo, con sus precios — no lo que tenga filtrado en pantalla): membrete
+  (Zimaxx Store — Lista de precios · Cliente · Asesora y teléfono · fecha),
+  una fila en blanco y la tabla UPC · Marca · Producto · Línea ·
+  Disponibilidad · Precio con autofiltro. Los precios van como **número con
+  formato de moneda** (sumables en Excel), el UPC como texto (no pierde ceros
+  ni pasa a notación científica), y línea/disponibilidad traducidas al idioma
+  del catálogo. Para la lista `quote` (sin precios) el archivo sale igual,
+  llamado "catálogo" y sin la columna Precio.
+- **Se arma en el navegador** con lo que ya devolvió `get_catalog`: sin RPC ni
+  migración, el archivo dice exactamente lo mismo que la pantalla. SheetJS se
+  carga bajo demanda al tocar el botón (como jsPDF en el carrito) — el bundle
+  inicial del catálogo no engorda. Si el import falla (mala señal) se avisa y
+  el botón queda libre para reintentar; nunca se traba.
+- **Cada descarga deja un `info` en `system_logs`** (source `catalog`, evento
+  `price_list_excel_downloaded`, con `token_hint` de 8 caracteres —nunca el
+  token completo—, cliente, lista, cantidad e idioma) y cada fallo un
+  `warning`. Es lo que responde "¿quién sigue pidiendo el Excel?" y, con el
+  tiempo, "¿ya se puede sacar?". La pestaña ⚙️ Sistema filtra por ese source.
+- **En la pestaña Precios**, el mismo archivo por lista para que la vendedora
+  se lo mande por WhatsApp: ver "Precios (pestaña Precios)" más abajo.
+- Código: `components/PriceListExcel.jsx` (bloque del catálogo),
+  `priceListExcelRows`/`buildPriceListWorkbook`/`downloadPriceListExcel` en
+  `utils/excel.js` (generador compartido por las dos pantallas).
+  Verificado: `tests/price-list-excel-tests.mjs` (40 comprobaciones en Node
+  del archivo real leído de vuelta) + 43 aserciones Playwright en el catálogo
+  (es/en, quote, token inválido, fallo del import, móvil) + 24 en la pestaña
+  Precios (admin y vendedora), contra el build con Supabase interceptado.
+
 ### Flujo del pedido
 
 1. Cliente abre su link → catálogo con sus precios → arma carrito.
@@ -1374,6 +1412,17 @@ La matriz de precios (debajo, de solo lectura) tiene botones con contador
 para ver solo productos **con precio** o **sin precio** (según la lista
 seleccionada en el filtro).
 
+**Descargar Excel de la lista** (2026-09-08): botón a la derecha de los
+contadores que genera la lista elegida en el selector **tal como la ve un
+cliente de esa lista** — mismo criterio que `get_catalog` (activo **y** precio
+> 0 en esa lista, orden marca → nombre) y el mismo generador que el botón del
+catálogo del cliente (ver "📊 Excel de la lista de precios"), con una columna
+SKU de más porque acá lo usa la vendedora. Sirve para mandárselo por WhatsApp
+a los clientes que todavía prefieren el Excel al link. Lo ven admin y
+vendedora (las dos mandan listas); sin lista elegida pide elegir una, y una
+lista sin productos publicados con precio avisa en vez de bajar un archivo
+vacío. No hace ningún request: se arma con lo que la matriz ya tiene cargado.
+
 **Filtros por grupo de producto** (2026-08-07): además del buscador, la
 matriz filtra por marca, línea de perfume y estado (activo/inactivo, con/sin
 stock, Pre-Order, 🔥 Flash Sale, ✨ Nuevo) — son literalmente los mismos de la
@@ -1528,9 +1577,30 @@ Function sigue leyendo el email de allá al enviar). Se llena por el sync de
 n8n (**si el workflow manda `email`** en cada fila — hay que agregarlo allá;
 mientras no lo mande, nada cambia y nada se borra), por el alta manual
 (campo opcional) o por el Excel de clientes (columna
-email/correo/e-mail; solo se toca si el archivo la trae con un valor válido);
-la edición por fila ya no lo toca. El buscador de la pestaña sigue matcheando
-por email aunque no se muestre.
+email/correo/e-mail; solo se toca si el archivo la trae con un valor válido).
+El buscador de la pestaña matchea por email.
+
+**Correo visible y editable de nuevo** (2026-09-08, a pedido del usuario:
+"poder ver qué correos están asignados a cada cliente registrado"). No volvió
+la columna vacía ni va en línea: junto al teléfono, **solo si el cliente tiene
+correo**, hay una flechita **✉️ ▾** que despliega una fila debajo del cliente
+con el correo completo y un botón **Copiar correo** (feedback "✓ Copiado",
+igual que Copiar link); varias filas pueden estar abiertas a la vez. La
+primera versión del mismo día lo mostraba en línea bajo el teléfono y el
+usuario lo rechazó: ensanchaba la columna y empujaba **Eliminar** fuera de la
+vista — por eso la celda de acciones además lleva `whitespace-nowrap`. Junto a
+los filtros hay dos chips con contador, **✉️ N con correo / M sin correo**,
+que se calculan sobre lo que ya filtran buscador/lista/vendedora y al tocarlos
+recortan la tabla — es la forma de responder "¿qué correos tengo cargados?" de
+un vistazo. Al **Editar** una fila aparece el input de correo debajo del de
+teléfono (mismo chequeo laxo que el alta, se guarda en minúsculas; vacío =
+quitar el correo, y eso sí viaja como `null` a `update_client_info` porque
+ahora es una acción explícita, no un reenvío). Lo ven, copian y editan admin y
+vendedora (el permiso real lo valida la RPC). Verificado con 41 aserciones
+Playwright contra el build real con Supabase interceptado (flechita solo con
+correo, desplegar/cerrar, portapapeles, varias abiertas, sin scroll horizontal
+a 1400 y 1280 px incluso con un correo largo, chips, buscar por correo,
+agregar/corregir/quitar, inválido sin RPC, rol vendedora).
 
 **Vínculo SellerCloud** (2026-08-31, solo admin): al editar una fila aparece
 el input **SellerCloud ID** — asigna, corrige o quita (vacío) el
@@ -2391,13 +2461,14 @@ src/
   hooks/useInfiniteRows.js  Scroll infinito por lotes
   context/CartContext.jsx   Carrito (localStorage, clave por product id) + request_id por carrito (idempotencia del alta)
   utils/
-    excel.js            Parser Excel (detección de encabezados, columna de fotos) + exports: pedido (UploadTemplate.xls), productos sin foto, registro de movimientos
+    excel.js            Parser Excel (detección de encabezados, columna de fotos) + exports: pedido (UploadTemplate.xls), productos sin foto, registro de movimientos, lista de precios (priceListExcelRows/buildPriceListWorkbook/downloadPriceListExcel — compartido por el catálogo y la pestaña Precios)
     token.js            Tokens de cliente + SKU autogenerado
     whatsapp.js         Mensaje de pedido + link wa.me
     pdf.js              PDF del pedido/cotización (jsPDF; columnas Producto · UPC · Cantidad · Precio unit. · Subtotal)
     format.js           money / cleanPhone
   components/           Header, FilterBar, ProductCard, CartBar,
-                        CartDrawer, ProductImage, ThemeToggle
+                        CartDrawer, ProductImage, ThemeToggle,
+                        PriceListExcel (bloque "¿Prefieres verlo en Excel?" — puente temporal, 2026-09-08)
   pages/
     Catalog.jsx         Catálogo del cliente
     admin/
@@ -2417,4 +2488,5 @@ supabase/functions/admin-create-vendedora-user/  Edge Function (Deno) — crea e
 supabase/functions/superadmin-users/  Edge Function (Deno) — cambia contraseñas y crea admins (Admin API de Auth), requiere deploy manual (⚠️ 2026-08-19: NO está desplegada en producción — redesplegarla)
 supabase/functions/sellercloud-push-order/  Edge Function (Deno) — crea la orden en SellerCloud + Sales Rep y direcciones vía PUT (v11 en producción, 2026-08-19)
 tests/sc-push-tests.mjs  Suite del cliente de SellerCloud (35 comprobaciones, Node contra un servidor falso)
+tests/price-list-excel-tests.mjs  Excel de la lista de precios (40 comprobaciones, Node; el workbook se serializa y se lee de vuelta)
 ```

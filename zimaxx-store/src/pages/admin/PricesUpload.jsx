@@ -2,7 +2,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
-import { parseSheet, normalizeHeader } from '../../utils/excel'
+import {
+  parseSheet,
+  normalizeHeader,
+  downloadPriceListExcel,
+  fileSlug,
+  priceListExcelRows,
+} from '../../utils/excel'
 import { money } from '../../utils/format'
 import { logEvent } from '../../utils/systemLog'
 import {
@@ -71,6 +77,10 @@ export default function PricesUpload() {
   const [catFilter, setCatFilter] = useState('')
   const [lineFilter, setLineFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  // Excel de la lista "tal como la ve el cliente" (2026-09-08): estado del
+  // botón de descarga de la matriz. excelMsg = { ok, text } | null.
+  const [excelBusy, setExcelBusy] = useState(false)
+  const [excelMsg, setExcelMsg] = useState(null)
   const [visibleRows, sentinelRef] = useInfiniteRows(100, [
     query,
     priceFilter,
@@ -273,6 +283,52 @@ export default function PricesUpload() {
 
   const cancelPreview = () => setPreview(null)
 
+  // Excel de una lista tal como la ve un cliente de esa lista (2026-09-08, a
+  // pedido del usuario: hay clientes que siguen prefiriendo el Excel al link,
+  // y la vendedora se lo manda por WhatsApp). Mismo criterio que get_catalog
+  // —activo Y precio > 0 en ESA lista, orden marca → nombre— y el mismo
+  // generador que el botón del catálogo del cliente (priceListExcelRows), con
+  // la columna SKU de más porque acá lo usa la vendedora. Se lee del estado ya
+  // cargado en la matriz: no hay request nuevo.
+  const downloadListExcel = async () => {
+    if (excelBusy) return
+    const list = orderedLists.find((l) => l.id === listFilter)
+    if (!list) {
+      setExcelMsg({ ok: false, text: t('listExcelChoose') })
+      return
+    }
+    const byCatalogOrder = (a, b) => {
+      // category nulls last, después nombre — el `order by` de get_catalog.
+      if (!a.category !== !b.category) return a.category ? -1 : 1
+      return (a.category ?? '').localeCompare(b.category ?? '') || a.name.localeCompare(b.name)
+    }
+    const rows = products
+      .filter((p) => p.active && hasPrice(p.id, list.id))
+      .sort(byCatalogOrder)
+      .map((p) => ({ ...p, price: Number(priceMap.get(p.id)[list.id]) }))
+    if (rows.length === 0) {
+      setExcelMsg({ ok: false, text: t('listExcelEmpty') })
+      return
+    }
+    setExcelBusy(true)
+    setExcelMsg(null)
+    try {
+      const stamp = new Date()
+      await downloadPriceListExcel({
+        ...priceListExcelRows({ t, products: rows, lineLabel, withSku: true }),
+        title: `Zimaxx Store — ${list.label}`,
+        metaLines: [`${t('excelGeneratedAt')}: ${stamp.toLocaleString()}`],
+        sheetName: t('excelListSheet'),
+        filename: `zimaxx-lista-precios-${fileSlug(list.code)}-${stamp.toISOString().slice(0, 10)}.xlsx`,
+      })
+      setExcelMsg({ ok: true, text: `${t('listExcelDone')}: ${list.label} · ${rows.length} ${t('results')}` })
+    } catch (err) {
+      setExcelMsg({ ok: false, text: err.message })
+    } finally {
+      setExcelBusy(false)
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="max-w-2xl space-y-4">
@@ -464,7 +520,27 @@ export default function PricesUpload() {
           >
             {missingPricesCount} {t('withoutPrices')}
           </button>
+          {/* Excel de la lista elegida en el selector, para mandárselo al
+              cliente que lo prefiera así (2026-09-08). Visible para admin y
+              vendedora: las dos mandan listas. */}
+          <button
+            onClick={downloadListExcel}
+            disabled={excelBusy}
+            title={t('listExcelHint')}
+            className="rounded-full border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-primary/70 transition-colors hover:border-secondary hover:text-primary disabled:opacity-50 md:ml-auto"
+          >
+            ⬇️ {excelBusy ? t('processing') : t('listExcelButton')}
+          </button>
         </div>
+        {excelMsg && (
+          <p
+            className={`text-xs ${
+              excelMsg.ok ? 'text-green-700 dark:text-green-300' : 'text-red-600 dark:text-red-400'
+            }`}
+          >
+            {excelMsg.text}
+          </p>
+        )}
 
         <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-sm">
           <table className="w-full text-sm">
