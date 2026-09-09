@@ -643,17 +643,57 @@ export async function createCustomer(
   return num
 }
 
-// El teléfono no viaja en el create (CreateCustomerRequest no lo tiene): se
-// setea después con el PUT del UpdateCustomerRequest, donde sí existe como
-// Phone1. Mejor-esfuerzo a propósito: si esto falla, el customer YA existe y
-// el llamador avisa en vez de fallar — mismo criterio que setSalesRep.
-export async function setCustomerPhone(
+// Ficha del customer que el create NO acepta (2026-09-09, a pedido del
+// usuario: los clientes tienen que registrarse con business name, customer
+// group, account manager, salesman y comments). Va toda por el PUT del
+// UpdateCustomerRequest (Swagger real: BusinessName, AccountManager1Id,
+// Salesman, Comments, Phone1) en UNA sola llamada después de crear — o para
+// actualizar un customer que ya existía. Solo viajan las claves con valor:
+// el PUT de esta API toma lo ausente como "no tocar" (es lo que ya hacía el
+// PUT de Phone1 solo, verificado en producción el 2026-09-03), así que
+// mandar `null` explícito podría BORRAR un dato cargado a mano allá.
+//
+// Lo que se vio en los datos reales (887 customers, 2026-09-09): el
+// AccountManagerId de cada customer es el ID de empleado de su vendedora (el
+// mismo `sellercloud_rep_id` que viaja como Sales Rep en las órdenes),
+// SalesMan es el nombre de la vendedora en texto, y Comment es el tipo de
+// cliente del negocio ("Mayorista"/"Minorista"/"Distribuidor"/...).
+export type CustomerFields = {
+  phone?: string | null
+  businessName?: string | null
+  accountManagerId?: number | null
+  salesman?: string | null
+  comments?: string | null
+}
+
+export function customerUpdateBody(fields: CustomerFields): Record<string, unknown> {
+  const body: Record<string, unknown> = {}
+  const s = (v: unknown) => String(v ?? '').trim()
+  if (s(fields.phone)) body.Phone1 = s(fields.phone)
+  if (s(fields.businessName)) body.BusinessName = s(fields.businessName)
+  const am = Number(fields.accountManagerId)
+  if (fields.accountManagerId != null && Number.isInteger(am) && am > 0) body.AccountManager1Id = am
+  if (s(fields.salesman)) body.Salesman = s(fields.salesman)
+  if (s(fields.comments)) body.Comments = s(fields.comments)
+  return body
+}
+
+// PUT /Customers/{id}. Devuelve las claves que viajaron (vacío = no se llamó
+// a la API porque no había nada que mandar). Lanza con contexto si la API
+// rechaza; el llamador decide si eso es error o warning — tras un create, el
+// customer YA existe, así que se degrada a warning (mismo criterio que
+// setSalesRep).
+export async function updateCustomer(
   cfg: Config,
   token: string,
   customerId: number,
-  phone: string,
+  fields: CustomerFields,
   f: Fetcher = fetch,
-): Promise<void> {
+  what = `No se pudo actualizar el cliente ${customerId} en SellerCloud`,
+): Promise<string[]> {
+  const body = customerUpdateBody(fields)
+  const keys = Object.keys(body)
+  if (keys.length === 0) return []
   const url = `${cfg.baseUrl}/rest/api/Customers/${customerId}`
   const res = await f(url, {
     method: 'PUT',
@@ -662,11 +702,71 @@ export async function setCustomerPhone(
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body: JSON.stringify({ Phone1: phone }),
+    body: JSON.stringify(body),
   })
   const text = await readBody(res)
   if (!res.ok) {
-    throw failure(`No se pudo cargar el teléfono del cliente ${customerId}`, url, res, text)
+    throw failure(what, url, res, text)
+  }
+  return keys
+}
+
+// El teléfono no viaja en el create (CreateCustomerRequest no lo tiene): se
+// setea después con el PUT del UpdateCustomerRequest, donde sí existe como
+// Phone1. Mejor-esfuerzo a propósito: si esto falla, el customer YA existe y
+// el llamador avisa en vez de fallar — mismo criterio que setSalesRep. Desde
+// 2026-09-09 es un caso particular de updateCustomer (lo sigue usando el
+// backfill y las pruebas; el alta del panel manda teléfono + ficha en un
+// solo PUT).
+export async function setCustomerPhone(
+  cfg: Config,
+  token: string,
+  customerId: number,
+  phone: string,
+  f: Fetcher = fetch,
+): Promise<void> {
+  await updateCustomer(
+    cfg,
+    token,
+    customerId,
+    { phone },
+    f,
+    `No se pudo cargar el teléfono del cliente ${customerId}`,
+  )
+}
+
+// Agregar el customer a un grupo de clientes: POST
+// /Customers/CustomersGroups/{groupId}/Customers {CustomersIDs: [id]}
+// (Swagger real, Customers_AddCustomersToGroup). Es lo ÚNICO que la API
+// permite hacer con grupos: no hay endpoint para listarlos ni para quitar un
+// customer de uno — cambiar de grupo desde el panel lo agrega al nuevo y del
+// anterior hay que sacarlo en SellerCloud. Por eso el mapeo vendedora → grupo
+// vive en `vendedores.sellercloud_group_id`, cargado a mano. Mejor-esfuerzo
+// para el llamador, igual que updateCustomer.
+export async function addCustomerToGroup(
+  cfg: Config,
+  token: string,
+  groupId: number,
+  customerId: number,
+  f: Fetcher = fetch,
+): Promise<void> {
+  const gid = Number(groupId)
+  if (!Number.isInteger(gid) || gid <= 0) {
+    throw new Error(`ID de grupo de SellerCloud inválido: ${String(groupId)}`)
+  }
+  const url = `${cfg.baseUrl}/rest/api/Customers/CustomersGroups/${gid}/Customers`
+  const res = await f(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ CustomersIDs: [customerId] }),
+  })
+  const text = await readBody(res)
+  if (!res.ok) {
+    throw failure(`No se pudo agregar el cliente ${customerId} al grupo ${gid}`, url, res, text)
   }
 }
 

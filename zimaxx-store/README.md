@@ -903,7 +903,7 @@ Pestañas:
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador, botones con contador "con precios" / "sin precios" y **los mismos filtros por grupo de producto que la pestaña Productos** (2026-08-07: marca, línea, activo/inactivo, con/sin stock, Pre-Order, 🔥 Flash Sale, ✨ Nuevo) para revisar los precios de un recorte concreto. |
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora) **por términos** (2026-08-12, mismo criterio que Pedidos — ver "Buscadores del panel" más abajo), filtros por lista y vendedora, **selector de lista por fila con confirmación** (2026-07-15: elegir una opción no aplica el cambio de una — pide "¿Cambiar la lista a X?" con Confirmar/Cancelar; ahora lo puede hacer también una vendedora con sus propios clientes, no solo admin) y campo **"$ inversión → nivel"** (solo admin, asigna el nivel automáticamente sin confirmación — pensado para carga rápida), **reasignar vendedora** por fila y **eliminar cliente** (ambos solo admin, vía RPC con registro de auditoría), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). |
 | **🛡️ Registro de movimientos** (solo admin, pestaña propia desde 2026-07-15 — antes vivía colapsada dentro de Clientes) | Historial de quién reasignó/borró un cliente, le cambió la lista de precio, o tocó un pedido (editar ítems, cambiar estado, convertir cotización) — con el **movimiento de stock** de ese cambio de estado cuando hubo uno (2026-08-04: "Stock descontado: N · M sin dato de stock"; el `detail` guarda producto, SKU, cantidad y el antes/después de cada uno). Fecha, usuario, acción, cliente, detalle, leído directo de `admin_audit_log`. Desde 2026-08-05 también registra **todo lo que se hace en la pestaña Superadmin** (rol admin, cambios de contraseña, dueñas de listas, alta/renombre/borrado de listas) — en esas filas la columna "Cliente / objetivo" no es un cliente sino el email del usuario o el nombre de la lista. **Filtros** (2026-07-15): por usuario, por acción y por rango de fechas (desde/hasta). **"⬇️ Descargar Excel"** (2026-08-05): baja **todo** el historial, no los 200 que muestra la tabla (usa `fetchAll`, así pasa el corte de 1,000 filas de PostgREST), respetando los filtros activos — el botón aclara "(todo el historial)" o "(filtrado)". Columnas: Fecha (texto `YYYY-MM-DD HH:MM:SS` local, ordenable en cualquier Excel sin depender de la configuración regional), Usuario, Acción, Cliente / objetivo, Detalle, ID cliente, ID pedido y **Datos completos (JSON)** — el `detail` crudo, porque el resumen legible deja cosas afuera (el antes/después ítem por ítem de una edición de pedido, el stock producto por producto). Con filtros que no dejan ninguna fila no genera archivo vacío: avisa. Es de solo lectura: la tabla no tiene policy de insert/update/delete para nadie, solo la escriben las RPC (`reassign_client`/`delete_client`/`update_client_price_list`/las de pedidos/`sa_log` desde las `sa_*`). |
-| **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**, dos formas de dar acceso a una vendedora sin cuenta: **"Vincular acceso"** (email de un usuario que ya existe en Supabase Auth, RPC `link_vendedora_login`) o **"+ Crear acceso"** (2026-07-15: crea el usuario de una — el admin define email + contraseña inicial ahí mismo, sin pasar por el dashboard de Supabase — vía la Edge Function `admin-create-vendedora-user`, ver sección 6). "Desvincular" le quita el acceso sin borrar la vendedora ni el usuario de Auth. |
+| **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. Columna **SellerCloud** (ID de empleado: Sales Rep de las órdenes y account manager de sus clientes) y columna **Grupo SellerCloud** (2026-09-09: ID + nombre del grupo de clientes de esa vendedora; se propone como grupo al crear un cliente suyo — la API no lista grupos, por eso se carga acá). El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**, dos formas de dar acceso a una vendedora sin cuenta: **"Vincular acceso"** (email de un usuario que ya existe en Supabase Auth, RPC `link_vendedora_login`) o **"+ Crear acceso"** (2026-07-15: crea el usuario de una — el admin define email + contraseña inicial ahí mismo, sin pasar por el dashboard de Supabase — vía la Edge Function `admin-create-vendedora-user`, ver sección 6). "Desvincular" le quita el acceso sin borrar la vendedora ni el usuario de Auth. |
 | **Pedidos** | **Todos los pedidos, sin tope** (2026-08-07: antes traía los últimos 200, así que el conteo del encabezado decía "200" hubiera 200 o 900 y los pedidos viejos no se podían ni ver ni marcar atendidos). Carga con `fetchAll` (páginas de 1,000 en paralelo) y se renderiza por lotes con scroll infinito; el encabezado muestra el total real y, con filtros puestos, "coinciden / total". Click en una fila expande un detalle de ancho completo (tabla Producto/Cantidad/Precio/Subtotal, 2026-07-17 — antes se abría angosto dentro de la columna Ítems). Cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado; 2026-07-17: las 3 acciones piden confirmación en un modal antes de aplicarse, y quedan auditadas vía RPC `update_order_status`, antes un `update` directo sin rastro) y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) **por términos** (2026-08-12: todos los términos tienen que aparecer, en cualquier orden y sin acentos — antes pedía una subcadena contigua y buscar "robert carlos" no encontraba a "Robert Edu Carlos Pacheco"; ver "Buscadores del panel" más abajo) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"**/**"Descargar Excel"** por fila (2026-07-17 el primero, mismo generador que el carrito del cliente; el Excel con las columnas exactas de `UploadTemplate.xls` para subirlo directo al bulk-order upload de SellerCloud); debajo, separados, **"Editar"** y **"Convertir en pedido"** — ambos **solo para cotizaciones** (`kind = 'quote'`), nunca para un pedido real, y "Editar" además solo mientras la cotización sigue `new` (ni atendida ni cancelada se edita). "Editar" (RPC auditada `update_order_items`) deja cambiar cantidad/quitar/agregar producto — cualquiera con acceso al pedido puede hacerlo (admin siempre, vendedora solo los de sus propios clientes). "Convertir en pedido" (RPC `convert_quote_to_order`) congela el precio de ese momento con la lista real del cliente (a diferencia de la cotización, que sigue mostrando el precio **vigente** vía `get_quotes_live_pricing` — ver sección 6) y deja de ajustarse a cambios de precio futuros. Arriba de la lista, **aviso rojo de los pedidos que el cliente envió y no se registraron** (2026-08-05, `order_failures`): cliente, fecha, motivo y cantidad de líneas, con un botón **"Recuperar"** que lo carga como pedido con los precios vigentes de su lista (RPC `recover_order_failure`, auditada) — antes un pedido rechazado no dejaba rastro en ninguna parte. Aparece también cuando todavía no hay ningún pedido, para que "aún no hay pedidos" no tape justo lo que hay que ver. Una vendedora solo ve (y recupera) los de sus propios clientes. Al lado, **"💬 Cargar pedido desde WhatsApp"** (2026-08-17): pega el mensaje del chat y crea el pedido, para el caso en que el registro nunca llegó al sistema y el cliente no vuelve a abrir el catálogo — ver la sección 2 para el detalle. |
 | **🔐 Superadmin** (2026-08-05, solo superadmin) | Lo que antes obligaba a entrar al SQL Editor o al dashboard de Auth. **Usuarios y accesos**: todos los usuarios de Supabase Auth con su rol (Superadmin/Admin/Vendedora/Sin rol), la vendedora vinculada, fecha de alta y último acceso; por fila, "Hacer admin"/"Quitar admin" (con confirmación) y **"Cambiar contraseña"** (sirve para cualquier acceso: vendedora, admin o el propio superadmin); arriba, **"+ Crear admin"** (crea el usuario de Auth con su contraseña inicial y le da el rol, en un paso). **Listas de precio y dueñas**: por lista, cuántos clientes y cuántos precios tiene, sus dueñas con la principal marcada (★), agregar/quitar dueña y cambiar cuál es la principal; si al mover dueñas quedaron clientes con una vendedora que ya no es dueña, avisa cuántos y ofrece pasarlos a la principal de una vez. También **crear** una lista nueva (código + nombre visible; el código se valida y no se puede cambiar después), **renombrar** el nombre visible y **eliminar** una lista que no sea de las base y esté completamente vacía. Todo va por RPC `sa_*` con `is_superadmin()` adentro (o por la Edge Function `superadmin-users` cuando hace falta la Admin API de Auth) y **todo queda en el Registro de movimientos**. |
 | **📈 Métricas** (2026-08-06, solo superadmin) | Los KPIs de todo el sistema en una pantalla, **en vivo** (se refresca solo cada 60 s, más un botón "↻ Actualizar" y un cartel "actualizado hace X"). Selector de rango **7 / 14 / 30 días** (default 14). Nueve tarjetas: monto capturado, pedidos, ticket promedio, cotizaciones, vendedoras activas, **tiempo promedio a atender** (horas desde que entró el pedido hasta la primera vez que se marcó Atendido; "—" con la aclaración "aún sin pedidos marcados atendidos" cuando todavía no hay ninguno), cotizaciones convertidas, cancelados y **Enviados a SellerCloud** (2026-08-18, `migration-2026-08-18-sa-metrics-sellercloud.sql`: pedidos del período con `sellercloud_order_id` anotado — cancelados incluidos a propósito, un pedido enviado y cancelado acá igual salió — con el total histórico en la leyenda; muestra "—" mientras la RPC sea la vieja); debajo, los **fallos de envío** del período y cuántos se recuperaron. Después, un **mini-gráfico de barras del monto por día** (SVG propio, sin librería de charts) y la tabla **"Adopción por vendedora"** (pedidos, monto, ticket y cotizaciones por vendedora, ordenada por monto, con fila de total del período que cuadra con las tarjetas) y su **"⬇️ Descargar Excel"**. Los pedidos sin vendedora salen agrupados en una fila "—". **Las cuentas de prueba (`SystemsPruebas` y compañía) quedan afuera de todos los números** y sus nombres se listan al pie de la tabla, para que la exclusión se vea en vez de ser invisible. Toda la data viene de **una sola RPC** `sa_metrics_overview(p_days)` con `is_superadmin()` adentro: los agregados cruzan a todas las vendedoras, así que sumarlos desde el cliente daría un número distinto según quién mira (la RLS le recorta a cada vendedora sus propios pedidos). Es la única `sa_*` que **no** audita: es de solo lectura, y una fila por refresco llenaría `admin_audit_log` con una por minuto por pestaña abierta. |
@@ -1132,6 +1132,10 @@ cliente **en ninguna parte**. Ahora hay un registro central consultable:
 | `price_upload` | `price_apply_summary` / `price_apply_failed` | info / error | El resumen lo escribe la propia `apply_price_list` **dentro de su transacción** (solo con `p_commit = true`; `migration-2026-08-20-price-apply-log.sql`, misma firma y mismo retorno). El fallo lo loguea el frontend: una excepción en la RPC revierte la transacción entera, incluido cualquier log hecho adentro |
 | `product_upload` | `product_upload_summary` / `product_upload_failed` | info / error | Resumen por corrida del Excel de productos (creados/actualizados/salteados/basura/no-catálogo); lo emite el frontend porque esa carga son upserts directos, no una RPC |
 | `frontend` | `js_error` | error | `window.onerror` + `unhandledrejection` globales (registrados en `main.jsx` antes del primer render), con **throttle** (máx. 5/min) y **dedupe** (el mismo mensaje no se repite consecutivo: un error en loop = 1 fila por carga de página). La URL va **sin query string** — `?c=<token>` es la credencial del cliente y no puede quedar en un log |
+| `sellercloud_customers` | `search_failed` / `link_verify_failed` / `link_ok` / `create_failed` / `create_annotate_failed` / `create_ok` / `update_failed` / `update_ok` | error / error / info / error / critical / info / error / info-o-warning | Búsqueda, vinculación, alta y ficha de customers desde Clientes (Edge Function `sellercloud-customers`, 2026-09-02; `update_*` desde 2026-09-09). El context lleva `client_id`, `client` (nombre), `sellercloud_id` y, en el alta/ficha, lo que entró (`applied`, `group`) y el `warning` de lo que no |
+| `clients` | `client_created` | info | **Cada cliente creado desde el catálogo** (2026-09-09): el alta individual (`via: 'panel'`) y cada cliente NUEVO de una carga por Excel (`via: 'excel'`, con `file`); los actualizados por Excel no. El context es la ficha completa **por nombres** (name, phone, email, price_list, vendedora, business_name, group, account_manager, salesman, comments), `sellercloud_requested` y `created_by` (email del usuario logueado — `log_event` no guarda identidad). Es lo que alimenta el filtro rápido y el Excel de la pestaña Sistema |
+| `catalog` | `price_list_excel_downloaded` / `price_list_excel_failed` | info / warning | Descargas del Excel de la lista de precios desde el catálogo del cliente (2026-09-08, `token_hint` de 8, nunca el token) |
+| `stock_refresh` / `manual_refresh` | — | — | Refresco de inventario desde SellerCloud y su override manual (Edge Function `sellercloud-refresh-stock`, 2026-09-04) |
 | `sync` | — | — | Reservado para n8n (puede llamar `log_event` con la service_role key); hoy el sync sigue reportando solo en `sync_runs` |
 
 La pestaña **⚙️ Sistema** (`SystemLogsAdmin.jsx`, ruta `/admin/system`, solo
@@ -1141,6 +1145,45 @@ filtros por severity y source, el `context` expandible como JSON y botón
 "Cargar más". Sin polling a propósito: un log se consulta cuando algo anda
 mal, no en vivo. Si la migración no corrió, la pestaña avisa cuál falta en
 vez de romper (mismo patrón PGRST202 que Métricas).
+
+**Filtro rápido, búsqueda y Excel** (2026-09-09, a pedido del usuario: "que
+se pueda filtrar la búsqueda de eventos por clientes creados desde el
+catálogo, además de poder descargar/exportar un Excel con los datos que se
+filtren"):
+
+- **Chip 👤 "Clientes creados desde el catálogo"**: pone el origen en
+  `clients` (los eventos `client_created` de arriba); tocarlo de nuevo lo
+  quita. Es el mismo estado que el select de origen, así que ambos se
+  reflejan. Cada fila de ese origen muestra en línea vía · lista · vendedora
+  · comentario · creado por, sin abrir el detalle.
+- **Búsqueda de texto** (evento + mensaje + detalle serializado, por
+  términos como el resto del panel) sobre **lo ya cargado**; el contador
+  pasa a "visibles / cargados" y "Cargar más" trae más filas para seguir
+  buscando. Sin migración: la RPC solo filtra severidad y origen.
+- **⬇️ Exportar Excel**: baja **todos** los eventos que cumplen severidad +
+  origen + búsqueda, no solo los 100 en pantalla — recorre todas las páginas
+  de la RPC (de a 500, el máximo que clampea) hasta un tope de 5,000 filas
+  (aviso si se llegó al tope). Membrete (título · Filtro · Búsqueda ·
+  Generado con el conteo), fila en blanco y tabla con autofiltro. El
+  `context` va **aplanado en columnas**: cada clave que aparezca en alguna
+  fila es una columna (etiquetada si se conoce: Cliente, Teléfono, Lista de
+  precio, Vendedora, Grupo, Account manager, Creado por, Vía…), booleanos como
+  Sí/No, objetos anidados como JSON, y si hubiera más de 40 claves el resto va
+  junto en una última columna. Así el Excel de "clientes creados" sale con la
+  ficha en columnas propias, listo para filtrar en Excel. Nombre
+  `zimaxx-logs-sistema[-origen]-<fecha>.xlsx`.
+- El select de origen suma los sources que faltaban: `sellercloud_customers`,
+  `clients`, `stock_refresh`, `manual_refresh`.
+
+Verificado con `tests/system-logs-excel-tests.mjs` (23 comprobaciones en Node
+del generador, workbook serializado y leído de vuelta) y 62 aserciones
+Playwright contra el build real con la RPC interceptada (620 logs sembrados:
+chip → RPC con `p_source`, resumen en línea, búsqueda sobre lo cargado y
+contador, export con chip + búsqueda leyendo el .xlsx descargado —columnas,
+vía traducida, Sí/No, todas las filas cumplen—, export sin filtros en dos
+páginas de 500 con cursor, export vacío con aviso, tope de 5,000 en 10
+páginas, admin común sin la pestaña); y en Clientes, que el alta dispara
+`client_created` con la ficha por nombres y `created_by`.
 
 Contra el abuso (la RPC es pública por diseño): message/context van topeados,
 la tabla no se puede leer por API, y la retención la vacía sola. Verificado
@@ -1615,6 +1658,85 @@ columna, el buscador matchea por ese número, y
 un ID que ya es de otro cliente se rechaza diciendo de quién es. Es
 admin-only a propósito: un ID equivocado manda la orden al cliente
 equivocado allá.
+
+**Ficha SellerCloud del cliente** (2026-09-09, a pedido del usuario: "el
+cliente se debe crear con business name, customer group, account manager,
+salesmen y comments"). Hasta acá el alta en SellerCloud mandaba solo
+nombre/apellido/email + teléfono, y el customer nacía sin grupo, sin account
+manager, sin salesman y sin el comentario con el tipo de cliente. Ahora cada
+cliente tiene una ficha de cinco campos (`migration-2026-09-09-client-sellercloud-profile.sql`):
+
+- **Empresa** (`business_name`, texto libre) → `BusinessName` al crear.
+- **Grupo** (`sc_customer_group_id` + `sc_customer_group_name`): el grupo de
+  clientes de SellerCloud. La API **no lista grupos** (solo agrega:
+  `POST /Customers/CustomersGroups/{id}/Customers`), así que el mapeo vive en
+  la pestaña Vendedoras (columna **Grupo SellerCloud**, ID + nombre por
+  vendedora; sembrado para las 12 vendedoras conocidas con los grupos vistos
+  en el export real). Cambiar el grupo de un cliente lo **agrega** al nuevo;
+  del anterior hay que sacarlo en SellerCloud (no hay endpoint para quitar).
+- **Account manager** (`sc_account_manager_id`) → `AccountManager1Id`. Se
+  elige entre las vendedoras con ID de empleado: en los customers reales el
+  AccountManagerId **es** el `vendedores.sellercloud_rep_id` de su vendedora
+  (verificado uno a uno contra producción), así que no hay ID nuevo que cargar.
+- **Salesman** (`sc_salesman`, texto con sugerencias = nombres de vendedoras)
+  → `Salesman`.
+- **Comentarios** (`sc_comments`, texto con sugerencias Mayorista / Minorista
+  / Distribuidor / Zimaxx Box / Zimaxx Plus — lo que el negocio usa en
+  SellerCloud) → `Comments`.
+
+**Prellenado**: al elegir vendedora en el alta, grupo/account manager/salesman
+se completan con los suyos (la vendedora logueada arranca con los propios);
+al elegir lista, el comentario se propone por nivel (min → Minorista,
+wholesale → Mayorista, special → Distribuidor) salvo que haya un texto propio
+tipeado. Todo editable. La ficha va en el mismo insert del cliente y la Edge
+Function `sellercloud-customers` la lee de la fila: el create manda
+`BusinessName`, después **un solo PUT** con teléfono + account manager +
+salesman + comentarios (`UpdateCustomerRequest`; solo viajan las claves con
+valor — mandar `null` borraría lo cargado allá) y un POST al grupo. Los tres
+pasos posteriores al create son mejor-esfuerzo: el customer ya existe, se
+vincula igual y lo que no entró vuelve como aviso.
+
+**Edición**: al tocar **Editar** se despliega una fila bajo el cliente con los
+cinco campos (en las dos vistas). Guardar los manda a la RPC
+`update_client_sc_profile` (admin cualquiera; vendedora sus clientes y **solo
+con su propio grupo y ella como account manager** — asignar el account manager
+de otra es tocar comisiones ajenas; auditada como "Ficha SellerCloud" con solo
+lo que cambió) y, si el cliente ya tiene `sellercloud_id`, la acción `update`
+de la Edge Function la empuja a SellerCloud: banner verde "Ficha actualizada
+en SellerCloud (#id)" o ámbar con el detalle de lo que no entró (o "no está
+vinculado"). Sin cambios en la ficha no se llama a nada. El botón "Crear en
+SellerCloud" de la fila de un cliente viejo también muestra la ficha
+(prellenada con lo guardado o, si no hay nada, con lo de su vendedora y su
+lista) y la guarda antes de crear.
+
+**Vista completa** (botón **⤢ Vista completa / ⤡ Vista compacta** junto a
+"+ Nuevo cliente", se recuerda por navegador): la compacta es la de siempre
+(6 columnas); la completa muestra **todas las columnas registradas** —
+Nombre, Empresa, Tel, Email, SellerCloud, Grupo, Account manager (nombre +
+#id), Salesman, Comentarios, Lista, Vendedora y Alta. En la completa el correo
+tiene columna propia (la flechita ✉️ es solo de la compacta). El buscador
+también matchea empresa, grupo, salesman y comentarios ("zimaxx box" trae
+esos clientes).
+
+**Cómo se desplaza a los lados** (mismo día, segunda iteración — el usuario
+reportó que "no había manera de scrollear a los lados"): con 13 columnas la
+tabla es más ancha que el panel, y la barra horizontal del contenedor quedaba
+al pie de una tabla de cientos de filas, fuera de pantalla. En vista completa
+el cuadro de la tabla tiene **alto acotado hasta el fondo de la ventana** con
+su propio scroll vertical (se mide desde donde empieza el cuadro, así que un
+form de alta abierto o un aviso arriba no lo empujan bajo el pliegue), y por
+eso la barra horizontal queda siempre visible al pie del cuadro. Además:
+**encabezado fijo** al bajar, **columna Nombre fija** al desplazar a los
+lados, una fila de pista con **botones ◀ ▶** que mueven la tabla de a 320 px
+(también sirve Shift + rueda o arrastrar la barra), y las filas desplegadas
+(ficha en edición, panel SellerCloud) se quedan a la vista a la izquierda en
+vez de irse con el scroll. El pie con el conteo de resultados quedó fuera del
+cuadro. La vista compacta no cambia: la página scrollea como siempre.
+Verificado con 138 aserciones Playwright contra el build real (admin,
+vendedora, Vendedoras, móvil 390 px, tabla con 150 filas de relleno), 44 en
+Node del cliente de la API y 16 bloques SQL en PG 18. De paso, la prueba móvil pescó que el form de alta ya
+desbordaba la página a 390 px desde antes (grilla sin `grid-cols-1` +
+etiqueta del toggle sin `flex-wrap`); quedó corregido.
 
 ---
 

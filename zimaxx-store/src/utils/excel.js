@@ -189,6 +189,78 @@ export async function downloadPriceListExcel({ filename, ...opts }) {
   XLSX.writeFile(wb, filename)
 }
 
+// El mismo generador membrete + tabla + autofiltro sirve para cualquier export
+// tabular del panel — alias con nombre neutro (2026-09-09, logs del sistema).
+export const buildTableWorkbook = buildPriceListWorkbook
+export const downloadTableExcel = downloadPriceListExcel
+
+// ---------- Logs del sistema en Excel (2026-09-09) ----------
+// Exporta lo que la pestaña ⚙️ Sistema tiene filtrado (a pedido del usuario:
+// "poder descargar/exportar un excel con los datos que se filtren"). Las
+// columnas fijas son las de la tabla; el `context` jsonb se APLANA: cada clave
+// que aparezca en alguna fila es una columna (en orden de aparición, con la
+// etiqueta de `labels` si la hay), así un filtro de "clientes creados desde el
+// catálogo" sale con Cliente / Teléfono / Empresa / Grupo / … en columnas
+// propias y no como un JSON pegado. Valores anidados (objetos, arrays) van
+// como JSON en su celda; booleanos como Sí/No; null sin celda. Si hay más
+// claves que `maxContextCols`, el resto va junto en una última columna JSON.
+// `stamp` formatea la fecha (inyectable para probarlo sin depender del locale).
+export function systemLogsExcelRows({
+  t,
+  rows,
+  labels = {},
+  maxContextCols = 40,
+  stamp = (iso) => new Date(iso).toLocaleString(),
+}) {
+  const keys = []
+  const seen = new Set()
+  for (const r of rows) {
+    for (const k of Object.keys(r.context ?? {})) {
+      if (!seen.has(k)) {
+        seen.add(k)
+        keys.push(k)
+      }
+    }
+  }
+  const cols = keys.slice(0, maxContextCols)
+  const overflow = keys.slice(maxContextCols)
+  const header = [
+    t('date'),
+    t('systemSeverity'),
+    t('systemSource'),
+    t('systemEvent'),
+    t('systemMessage'),
+    ...cols.map((k) => labels[k] ?? k),
+    ...(overflow.length ? [t('systemContext')] : []),
+  ]
+  const cell = (v) => {
+    if (v == null) return null
+    if (typeof v === 'boolean') return v ? t('yes') : t('no')
+    if (typeof v === 'object') return JSON.stringify(v)
+    return v
+  }
+  const out = rows.map((r) => {
+    const ctx = r.context && typeof r.context === 'object' ? r.context : {}
+    return [
+      r.created_at ? stamp(r.created_at) : null,
+      r.severity,
+      r.source,
+      r.event,
+      r.message ?? null,
+      ...cols.map((k) => cell(ctx[k])),
+      ...(overflow.length
+        ? [
+            JSON.stringify(
+              Object.fromEntries(overflow.filter((k) => k in ctx).map((k) => [k, ctx[k]])),
+            ),
+          ]
+        : []),
+    ]
+  })
+  const widths = [20, 10, 20, 28, 50, ...cols.map(() => 22), ...(overflow.length ? [40] : [])]
+  return { header, rows: out, widths, contextKeys: cols }
+}
+
 // Trozo seguro para un nombre de archivo (sin acentos, minúsculas, guiones).
 export function fileSlug(s, max = 40) {
   return String(s ?? '')

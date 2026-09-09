@@ -9,20 +9,27 @@
 //     UserID/FirstName/LastName/Email/CorporateName (SIN teléfono).
 //   * POST /rest/api/Customers → CreateCustomerRequest (FirstName es lo único
 //     requerido por la API) y devuelve el ID nuevo como entero pelado.
-//   * PUT /rest/api/Customers/{id} → UpdateCustomerRequest (Phone1).
+//   * PUT /rest/api/Customers/{id} → UpdateCustomerRequest (Phone1, y desde
+//     2026-09-09 la ficha: BusinessName / AccountManager1Id / Salesman /
+//     Comments).
+//   * POST /rest/api/Customers/CustomersGroups/{groupId}/Customers
+//     {CustomersIDs: [..]} → agrega al grupo (2026-09-09).
 import { createServer } from 'node:http'
 
 const mod = await import(
   new URL('../supabase/functions/sellercloud-push-order/sellercloud.ts', import.meta.url).href
 )
 const {
+  addCustomerToGroup,
   createCustomer,
   customerSummary,
+  customerUpdateBody,
   getToken,
   listAllCustomers,
   resetTokenCache,
   searchCustomers,
   setCustomerPhone,
+  updateCustomer,
 } = mod
 
 let passed = 0
@@ -106,6 +113,14 @@ const server = createServer((req, res) => {
       }
       res.writeHead(200, { 'Content-Type': 'application/json' })
       return res.end('true')
+    }
+    if (/^\/rest\/api\/Customers\/CustomersGroups\/\d+\/Customers$/.test(url.pathname) && req.method === 'POST') {
+      if (state.failGroup) {
+        res.writeHead(404, { 'Content-Type': 'application/json' })
+        return res.end(JSON.stringify({ Message: 'group not found' }))
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      return res.end('')
     }
     res.writeHead(404, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ Message: 'not found' }))
@@ -251,6 +266,105 @@ console.log('setCustomerPhone: segundo paso')
   }
   ok(/teléfono del cliente 777/.test(threw ?? ''), 'un PUT fallido lanza con contexto (el caller degrada a warning)')
   state.failPut = false
+}
+
+console.log('createCustomer: BusinessName (ficha, 2026-09-09)')
+{
+  state.requests = []
+  await createCustomer(cfg, token, { firstName: 'A', lastName: 'B', business: '  ACME Perfumes ' })
+  const req = state.requests.find((r) => r.method === 'POST' && r.path === '/rest/api/Customers/')
+  ok(req.body.BusinessName === 'ACME Perfumes', 'BusinessName viaja trimmeado en el create')
+  state.requests = []
+  await createCustomer(cfg, token, { firstName: 'A', lastName: 'B', business: null })
+  ok(!('BusinessName' in state.requests.find((r) => r.method === 'POST').body), 'sin empresa el campo no viaja')
+}
+
+console.log('customerUpdateBody: solo lo que tiene valor (UpdateCustomerRequest real)')
+{
+  const b = customerUpdateBody({
+    phone: ' 7865550001 ',
+    businessName: ' ACME ',
+    accountManagerId: 75448,
+    salesman: 'Adriana Montilla',
+    comments: ' Mayorista ',
+  })
+  ok(
+    b.Phone1 === '7865550001' && b.BusinessName === 'ACME' && b.AccountManager1Id === 75448 &&
+      b.Salesman === 'Adriana Montilla' && b.Comments === 'Mayorista',
+    'las 5 claves del Swagger, trimmeadas',
+  )
+  ok(Object.keys(b).length === 5, 'y ninguna otra')
+  const empty = customerUpdateBody({ phone: '', businessName: null, accountManagerId: null, salesman: '  ', comments: undefined })
+  ok(Object.keys(empty).length === 0, 'vacío/null/espacios NO viajan (mandar null borraría lo cargado allá)')
+  ok(!('AccountManager1Id' in customerUpdateBody({ accountManagerId: 0 })), 'account manager 0 no viaja')
+  ok(!('AccountManager1Id' in customerUpdateBody({ accountManagerId: -3 })), 'account manager negativo no viaja')
+  ok(customerUpdateBody({ accountManagerId: '75448' }).AccountManager1Id === 75448, 'account manager como string numérico se convierte')
+  ok(!('AccountManager1Id' in customerUpdateBody({ accountManagerId: 'abc' })), 'account manager no numérico no viaja')
+}
+
+console.log('updateCustomer: PUT con la ficha completa')
+{
+  state.requests = []
+  const applied = await updateCustomer(cfg, token, 777, {
+    phone: '7865550001',
+    businessName: 'ACME',
+    accountManagerId: 75448,
+    salesman: 'Adriana Montilla',
+    comments: 'Mayorista',
+  })
+  const req = lastReq()
+  ok(req.method === 'PUT' && req.path === '/rest/api/Customers/777', 'PUT /Customers/{id}')
+  ok(
+    req.body.Phone1 === '7865550001' && req.body.AccountManager1Id === 75448 && req.body.Salesman === 'Adriana Montilla' &&
+      req.body.Comments === 'Mayorista' && req.body.BusinessName === 'ACME',
+    'teléfono + ficha en UN solo PUT',
+  )
+  ok(applied.length === 5 && applied.includes('Comments'), 'devuelve las claves que viajaron')
+
+  state.requests = []
+  const none = await updateCustomer(cfg, token, 777, { phone: '', businessName: null })
+  ok(none.length === 0 && state.requests.length === 0, 'sin nada que mandar NO llama a la API')
+
+  state.failPut = true
+  let threw = null
+  try {
+    await updateCustomer(cfg, token, 777, { comments: 'x' })
+  } catch (e) {
+    threw = e.message
+  }
+  ok(/actualizar el cliente 777/.test(threw ?? ''), 'PUT fallido lanza con contexto (el caller degrada a warning)')
+  state.failPut = false
+}
+
+console.log('addCustomerToGroup: POST al grupo')
+{
+  state.requests = []
+  await addCustomerToGroup(cfg, token, 4, 777)
+  const req = lastReq()
+  ok(
+    req.method === 'POST' && req.path === '/rest/api/Customers/CustomersGroups/4/Customers',
+    'POST /Customers/CustomersGroups/{groupId}/Customers',
+  )
+  ok(JSON.stringify(req.body) === JSON.stringify({ CustomersIDs: [777] }), 'body {CustomersIDs: [id]}')
+
+  let threw = null
+  state.requests = []
+  try {
+    await addCustomerToGroup(cfg, token, 0, 777)
+  } catch (e) {
+    threw = e.message
+  }
+  ok(/grupo de SellerCloud inválido/.test(threw ?? '') && state.requests.length === 0, 'grupo 0 corta ANTES de llamar')
+
+  state.failGroup = true
+  threw = null
+  try {
+    await addCustomerToGroup(cfg, token, 99, 777)
+  } catch (e) {
+    threw = e.message
+  }
+  ok(/agregar el cliente 777 al grupo 99/.test(threw ?? ''), 'grupo inexistente lanza con contexto')
+  state.failGroup = false
 }
 
 console.log('errores endurecidos')

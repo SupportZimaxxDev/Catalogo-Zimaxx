@@ -22,6 +22,7 @@ const ACTION_STYLES = {
   update_price_list: 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
   update_client_info: 'bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300',
   set_client_sellercloud_id: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
+  update_client_sc_profile: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
   reassign_client: 'bg-gold-pale text-secondary-dark',
   edit_order_items: 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
   update_order_status: 'bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300',
@@ -49,6 +50,7 @@ const ACTION_LABELS = {
   update_price_list: 'actionUpdateList',
   update_client_info: 'actionUpdateClientInfo',
   set_client_sellercloud_id: 'actionSetSellercloudId',
+  update_client_sc_profile: 'actionUpdateClientScProfile',
   edit_order_items: 'actionEditOrder',
   update_order_status: 'actionUpdateOrderStatus',
   convert_quote_to_order: 'actionConvertQuote',
@@ -76,6 +78,7 @@ const ACTION_FILTERS = [
   ['update_price_list', 'actionUpdateList'],
   ['update_client_info', 'actionUpdateClientInfo'],
   ['set_client_sellercloud_id', 'actionSetSellercloudId'],
+  ['update_client_sc_profile', 'actionUpdateClientScProfile'],
   ['edit_order_items', 'actionEditOrder'],
   ['update_order_status', 'actionUpdateOrderStatus'],
   ['convert_quote_to_order', 'actionConvertQuote'],
@@ -163,6 +166,26 @@ export default function AuditLogAdmin() {
     }
     if (a.action === 'set_client_sellercloud_id') {
       return `SC ${a.detail?.from_sellercloud_id ?? '—'} → SC ${a.detail?.to_sellercloud_id ?? '—'}`
+    }
+    // Ficha SellerCloud (2026-09-09): la RPC guarda solo las claves que
+    // cambiaron (from_x/to_x) más `changes`; acá se listan como "Etiqueta:
+    // antes → después". El grupo muestra el nombre si lo hay, si no el ID.
+    if (a.action === 'update_client_sc_profile') {
+      const d = a.detail ?? {}
+      const arrow = (from, to) => `${from ?? '—'} → ${to ?? '—'}`
+      const parts = []
+      if ('to_business_name' in d) parts.push(`${t('businessName')}: ${arrow(d.from_business_name, d.to_business_name)}`)
+      if ('to_group_id' in d) {
+        parts.push(
+          `${t('scGroup')}: ${arrow(d.from_group_name ?? d.from_group_id, d.to_group_name ?? d.to_group_id)}`,
+        )
+      }
+      if ('to_account_manager_id' in d) {
+        parts.push(`${t('scAccountManager')}: ${arrow(d.from_account_manager_id, d.to_account_manager_id)}`)
+      }
+      if ('to_salesman' in d) parts.push(`${t('scSalesman')}: ${arrow(d.from_salesman, d.to_salesman)}`)
+      if ('to_comments' in d) parts.push(`${t('scComments')}: ${arrow(d.from_comments, d.to_comments)}`)
+      return parts.join(' · ')
     }
     if (a.action === 'edit_order_items') {
       const before = a.detail?.before_items?.length ?? 0

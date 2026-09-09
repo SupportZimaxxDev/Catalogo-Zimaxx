@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
@@ -6,6 +6,7 @@ import { parseSheet, pick, normalizeHeader } from '../../utils/excel'
 import { generateToken } from '../../utils/token'
 import { cleanPhone, hasCountryCode } from '../../utils/format'
 import { searchTerms, matchesTerms } from '../../utils/search'
+import { logEvent } from '../../utils/systemLog'
 import { SearchIcon, UploadZone, inputCls, useInfiniteRows } from './ui'
 
 // Alias aceptados en el Excel de clientes (es/en, con o sin acentos).
@@ -144,7 +145,84 @@ const EMPTY_CLIENT = {
   price_list_id: '',
   vendedora_id: '',
   scCreate: true,
+  // Ficha SellerCloud (2026-09-09), ver PROFILE_KEYS.
+  business_name: '',
+  sc_customer_group_id: '',
+  sc_account_manager_id: '',
+  sc_salesman: '',
+  sc_comments: '',
 }
+
+// Ficha SellerCloud del cliente (2026-09-09, a pedido del usuario: "el
+// cliente se debe crear con business name, customer group, account manager,
+// salesmen y comments"). Cinco columnas de `clients` (más
+// sc_customer_group_name, la foto del nombre del grupo): el alta las inserta
+// junto con el cliente, la edición las guarda por la RPC
+// update_client_sc_profile (auditada, solo lo que cambió) y la Edge Function
+// sellercloud-customers las manda a SellerCloud — en el alta (create → PUT
+// con teléfono + ficha → POST al grupo) y con la acción 'update' cuando se
+// edita la ficha de un cliente ya vinculado.
+//
+// De dónde salen las opciones (la API de SellerCloud no lista grupos ni
+// empleados): el grupo y el account manager son datos DE LA VENDEDORA
+// (vendedores.sellercloud_group_id / sellercloud_rep_id — en los customers
+// reales el AccountManagerId es exactamente el rep_id de su vendedora), el
+// salesman es su nombre y el comentario sale de la lista de precio. Todo se
+// prellena y se puede cambiar.
+const PROFILE_KEYS = ['business_name', 'sc_customer_group_id', 'sc_account_manager_id', 'sc_salesman', 'sc_comments']
+
+// Valores que el negocio usa en Comments (export real de SellerCloud:
+// Mayorista 439, Minorista 279, Distribuidor 35, Zimaxx Box 12, Zimaxx Plus
+// 4, con typos varios). Son sugerencias del input, no una lista cerrada.
+const COMMENT_SUGGESTIONS = ['Mayorista', 'Minorista', 'Distribuidor', 'Zimaxx Box', 'Zimaxx Plus']
+
+// Comentario propuesto según la lista de precio — el espejo de
+// resolvePriceListCode (que va de Comments a lista) para el camino inverso.
+export function commentsForListCode(code) {
+  if (!code) return ''
+  if (code === 'special') return 'Distribuidor'
+  if (code.endsWith('_wholesale')) return 'Mayorista'
+  if (code.endsWith('_min')) return 'Minorista'
+  return ''
+}
+
+// Ficha de un form (strings) → shape de la fila / la RPC (null = vacío).
+export function profilePayload(form) {
+  const int = (v) => {
+    const raw = String(v ?? '').trim()
+    const n = Number(raw)
+    return raw !== '' && Number.isInteger(n) && n > 0 ? n : null
+  }
+  const txt = (v) => String(v ?? '').trim() || null
+  return {
+    business_name: txt(form.business_name),
+    sc_customer_group_id: int(form.sc_customer_group_id),
+    sc_account_manager_id: int(form.sc_account_manager_id),
+    sc_salesman: txt(form.sc_salesman),
+    sc_comments: txt(form.sc_comments),
+  }
+}
+
+// Ficha de una fila → valores de form ('' = vacío).
+function profileForm(row) {
+  return {
+    business_name: row?.business_name ?? '',
+    sc_customer_group_id: row?.sc_customer_group_id == null ? '' : String(row.sc_customer_group_id),
+    sc_account_manager_id: row?.sc_account_manager_id == null ? '' : String(row.sc_account_manager_id),
+    sc_salesman: row?.sc_salesman ?? '',
+    sc_comments: row?.sc_comments ?? '',
+  }
+}
+
+const profileChanged = (a, b) => PROFILE_KEYS.some((k) => (a[k] ?? null) !== (b[k] ?? null))
+
+// Clase de los inputs de la ficha (alta, edición y panel SellerCloud).
+// min-w-0 (2026-09-09): un <select> con opciones largas ("Clientes Adriana
+// Montilla") tiene ancho mínimo intrínseco y, dentro de una grilla, empujaba
+// la página entera a scroll horizontal en móvil (390 px) — mismo bug que el
+// UploadZone del 2026-07-06.
+const profileInputCls =
+  'w-full min-w-0 rounded-lg border border-line bg-surface px-2 py-1.5 text-xs outline-none transition-colors placeholder:text-primary/35 focus:border-secondary'
 
 // Chequeo laxo de email (algo@algo.algo): atajar el typo obvio sin rechazar
 // correos raros pero reales. La RPC update_client_info aplica la misma regla
@@ -215,7 +293,7 @@ function ListPicker({ client, options, pending, onRequest, onConfirm, onCancel, 
 }
 
 export default function ClientsAdmin() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const { role } = useOutletContext()
   const isAdmin = role === 'admin'
   const [clients, setClients] = useState([])
@@ -258,6 +336,135 @@ export default function ClientsAdmin() {
   const [newClientBusy, setNewClientBusy] = useState(false)
   const myVendedoraId = !isAdmin ? vendedoresList[0]?.id : undefined
 
+  // Opciones de la ficha SellerCloud. Grupos: los cargados en alguna
+  // vendedora (la API no los lista). Account managers: las vendedoras con ID
+  // de empleado (sellercloud_rep_id). Una vendedora solo lee su propia fila
+  // de `vendedores` (RLS), así que sus opciones son ella misma — y la RPC
+  // igual rechaza el grupo/account manager de otra.
+  const groupOptions = useMemo(() => {
+    const m = new Map()
+    for (const v of vendedoresList) {
+      if (v.sellercloud_group_id != null && !m.has(v.sellercloud_group_id)) {
+        m.set(v.sellercloud_group_id, {
+          id: v.sellercloud_group_id,
+          name: v.sellercloud_group_name || `#${v.sellercloud_group_id}`,
+        })
+      }
+    }
+    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name))
+  }, [vendedoresList])
+  const accountManagerOptions = useMemo(
+    () =>
+      vendedoresList
+        .filter((v) => v.sellercloud_rep_id != null)
+        .map((v) => ({ id: v.sellercloud_rep_id, name: v.name })),
+    [vendedoresList],
+  )
+  const groupName = (id) => groupOptions.find((g) => String(g.id) === String(id))?.name ?? null
+  const accountManagerName = (id) =>
+    accountManagerOptions.find((a) => String(a.id) === String(id))?.name ?? null
+  // El select de grupo suma el del cliente si ya no está en ninguna
+  // vendedora (grupo viejo/ajeno): que se vea y se pueda conservar.
+  const groupOptionsFor = (form, row) => {
+    const cur = String(form.sc_customer_group_id ?? '')
+    if (!cur || groupOptions.some((g) => String(g.id) === cur)) return groupOptions
+    return [...groupOptions, { id: Number(cur), name: row?.sc_customer_group_name || `#${cur}` }]
+  }
+
+  // Ficha propuesta para un cliente de esta vendedora: su grupo, ella como
+  // account manager y su nombre como salesman.
+  const profileFromVendedora = (vendedoraId) => {
+    const v = vendedoresList.find((x) => x.id === vendedoraId)
+    if (!v) return { sc_customer_group_id: '', sc_account_manager_id: '', sc_salesman: '' }
+    return {
+      sc_customer_group_id: v.sellercloud_group_id == null ? '' : String(v.sellercloud_group_id),
+      sc_account_manager_id: v.sellercloud_rep_id == null ? '' : String(v.sellercloud_rep_id),
+      sc_salesman: v.name,
+    }
+  }
+  const listCode = (listId) => priceLists.find((l) => l.id === listId)?.code ?? ''
+
+  // Quién está logueado, para el context de los eventos: log_event no guarda
+  // identidad. getSession lee el storage local, sin request.
+  const [userEmail, setUserEmail] = useState(null)
+  useEffect(() => {
+    supabase.auth
+      .getSession()
+      .then(({ data }) => setUserEmail(data?.session?.user?.email ?? null))
+      .catch(() => {})
+  }, [])
+
+  // Rastro en system_logs de cada cliente creado desde el catálogo (2026-09-09,
+  // a pedido del usuario: filtrar y exportar "clientes creados desde el
+  // catálogo" en ⚙️ Sistema). Source `clients`, evento `client_created`; el
+  // context lleva la ficha completa con NOMBRES (lista, vendedora, grupo,
+  // account manager) y no IDs, porque es lo que se exporta a Excel tal cual.
+  // `via` distingue el formulario del Excel. Fire-and-forget: nunca frena el
+  // alta. El resultado en SellerCloud lo loguea aparte la Edge Function
+  // (source sellercloud_customers, con el mismo client_id).
+  const logClientCreated = (row, extra) => {
+    const v = vendedoresList.find((x) => x.id === row.vendedora_id)
+    logEvent('info', 'clients', 'client_created', `${row.name} · ${row.phone}`, {
+      client_id: row.id,
+      name: row.name,
+      phone: row.phone,
+      email: row.email ?? null,
+      price_list: priceLists.find((l) => l.id === row.price_list_id)?.label ?? null,
+      vendedora: v?.name ?? null,
+      business_name: row.business_name ?? null,
+      group: row.sc_customer_group_name ?? row.sc_customer_group_id ?? null,
+      account_manager: accountManagerName(row.sc_account_manager_id) ?? row.sc_account_manager_id ?? null,
+      salesman: row.sc_salesman ?? null,
+      comments: row.sc_comments ?? null,
+      created_by: userEmail,
+      ...extra,
+    })
+  }
+  // El comentario se re-propone al cambiar la lista SOLO si el que hay es
+  // vacío o una de las sugerencias (un texto propio tipeado a mano no se pisa).
+  const autoComments = (current, listId) =>
+    !String(current ?? '').trim() || COMMENT_SUGGESTIONS.includes(String(current).trim())
+      ? { sc_comments: commentsForListCode(listCode(listId)) }
+      : {}
+
+  // Guardar la ficha por su RPC (permisos + auditoría server-side) y, si el
+  // cliente ya está vinculado, empujarla a SellerCloud — mejor-esfuerzo: lo
+  // local ya quedó. Devuelve el aviso para el banner (o null si nada cambió).
+  const saveProfile = async (client, form, sellercloudId) => {
+    const profile = profilePayload(form)
+    if (!profileChanged(profile, profilePayload(profileForm(client)))) return { changed: false, notice: null }
+    const { data, error } = await supabase.rpc('update_client_sc_profile', {
+      p_client_id: client.id,
+      p_business_name: profile.business_name,
+      p_customer_group_id: profile.sc_customer_group_id,
+      p_customer_group_name: profile.sc_customer_group_id ? groupName(profile.sc_customer_group_id) : null,
+      p_account_manager_id: profile.sc_account_manager_id,
+      p_salesman: profile.sc_salesman,
+      p_comments: profile.sc_comments,
+    })
+    if (error) throw error
+    const patch = {
+      ...profile,
+      sc_customer_group_name: profile.sc_customer_group_id
+        ? groupName(profile.sc_customer_group_id) ?? client.sc_customer_group_name ?? null
+        : null,
+    }
+    setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, ...patch } : c)))
+    if (!data?.changed) return { changed: false, notice: null }
+    if (!sellercloudId) return { changed: true, notice: { kind: 'warn', text: t('scProfileNotLinked') } }
+    try {
+      const res = await invokeSc({ action: 'update', client_id: client.id })
+      return {
+        changed: true,
+        notice: res.warning
+          ? { kind: 'warn', text: res.warning }
+          : { kind: 'ok', text: t('scProfileSynced', { id: sellercloudId }) },
+      }
+    } catch (e) {
+      return { changed: true, notice: { kind: 'warn', text: t('scProfileSyncFailed', { msg: e.message }) } }
+    }
+  }
+
   // Panel SellerCloud (2026-09-02): buscar/vincular/crear el customer de un
   // cliente, vía la Edge Function sellercloud-customers (las credenciales de
   // la API nunca tocan el navegador; el permiso real vive en la RPC
@@ -267,6 +474,62 @@ export default function ClientsAdmin() {
   //   'creating' | 'linking' | 'createForm' | 'done' | 'failed',
   //   candidates, message, afterCreate, first, last }
   const [scPanel, setScPanel] = useState(null)
+
+  // Vista completa (2026-09-09, a pedido del usuario: "un botón de expandir
+  // que cambie a una vista tipo tabla donde se puedan ver todas las columnas
+  // con todos los campos registrados"). La compacta es la de siempre; la
+  // completa suma Empresa, Correo, Grupo, Account manager, Salesman,
+  // Comentarios y Alta. Se recuerda por navegador.
+  const [fullView, setFullView] = useState(() => {
+    try {
+      return localStorage.getItem('zimaxx_clients_view') === 'full'
+    } catch {
+      return false
+    }
+  })
+  const toggleView = () =>
+    setFullView((v) => {
+      const next = !v
+      try {
+        localStorage.setItem('zimaxx_clients_view', next ? 'full' : 'compact')
+      } catch {
+        /* sin storage: solo esta sesión */
+      }
+      return next
+    })
+
+  // Aviso tras guardar la ficha: 'ok' (SellerCloud actualizado) o 'warn'
+  // (guardado acá, pero allá no — el detalle dice qué cargar a mano).
+  const [actionNotice, setActionNotice] = useState(null)
+
+  // Cuadro scrolleable de la tabla (2026-09-09, ajuste a pedido del usuario:
+  // "cuando se expande la tabla no hay manera de scrollear a los lados"). Con
+  // 13 columnas la tabla es más ancha que el main (max-w-6xl) y la barra
+  // horizontal del overflow-x-auto quedaba al PIE de una tabla de cientos de
+  // filas: fuera de pantalla, y la rueda del mouse no desplaza a los lados.
+  // En vista completa el cuadro tiene alto acotado con su propio scroll
+  // vertical (las dos barras quedan a la vista), el encabezado y la columna
+  // Nombre son sticky, y hay botones ◀ ▶ que lo desplazan de a 320 px.
+  const scrollBoxRef = useRef(null)
+  const scrollTable = (dir) => scrollBoxRef.current?.scrollBy({ left: dir * 320, behavior: 'smooth' })
+  // Alto del cuadro = desde donde empieza hasta el fondo de la ventana (menos
+  // el pie con el conteo). Un `100vh - Xrem` fijo no sirve: lo que hay arriba
+  // (form de alta abierto, carga por Excel, avisos) cambia y el borde inferior
+  // — con la barra horizontal — caía debajo del pliegue. Se mide en cada
+  // render (un getBoundingClientRect) y solo se re-renderiza si cambió.
+  const [boxTop, setBoxTop] = useState(0)
+  useEffect(() => {
+    if (!fullView) return
+    const measure = () => {
+      const el = scrollBoxRef.current
+      if (!el) return
+      const top = Math.round(el.getBoundingClientRect().top + window.scrollY)
+      setBoxTop((prev) => (Math.abs(prev - top) > 1 ? top : prev))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  })
 
   // supabase.functions.invoke devuelve un mensaje genérico ante un no-2xx: el
   // motivo real que arma la función viene en el cuerpo (mismo caso que
@@ -437,7 +700,18 @@ export default function ClientsAdmin() {
       // SellerCloud en la búsqueda por dígitos — así "¿de quién es la orden
       // del cliente 51234 en SellerCloud?" se responde desde acá.
       return (
-        matchesTerms(terms, c.name, c.vendedores?.name, c.email) ||
+        matchesTerms(
+          terms,
+          c.name,
+          c.vendedores?.name,
+          c.email,
+          // Ficha SellerCloud (2026-09-09): empresa, grupo, salesman y
+          // comentarios también se buscan ("¿quiénes son Zimaxx Box?").
+          c.business_name,
+          c.sc_customer_group_name,
+          c.sc_salesman,
+          c.sc_comments,
+        ) ||
         (qDigits &&
           (cleanPhone(c.phone).includes(qDigits) ||
             String(c.sellercloud_id ?? '').includes(qDigits)))
@@ -593,7 +867,17 @@ export default function ClientsAdmin() {
           // Registrar el alta recién hecha: si el archivo repite este
           // mismo teléfono más adelante (con o sin código de país), esa
           // fila actualiza en vez de crear un duplicado.
-          if (insertedRows?.[0]) byPhone.set(phoneKey(phone), insertedRows[0])
+          if (insertedRows?.[0]) {
+            byPhone.set(phoneKey(phone), insertedRows[0])
+            // Mismo rastro que el alta individual (via 'excel'): el Excel de
+            // clientes no carga ficha SellerCloud, así que esos campos van
+            // vacíos. Uno por cliente CREADO (los actualizados no).
+            logClientCreated(insertedRows[0], {
+              via: 'excel',
+              sellercloud_requested: false,
+              file: file.name,
+            })
+          }
         }
       }
 
@@ -643,6 +927,13 @@ export default function ClientsAdmin() {
     const chosen = isAdmin ? newClientForm.vendedora_id || null : myVendedoraId
     const forced = ownerFor(newClientForm.price_list_id, chosen)
     const vendedoraId = forced !== undefined ? forced : chosen
+    // Ficha SellerCloud (2026-09-09): va en el mismo insert (RLS: admin
+    // cualquiera, vendedora la suya); la Edge Function la lee de la fila.
+    const profile = profilePayload(newClientForm)
+    const profileRow = {
+      ...profile,
+      sc_customer_group_name: profile.sc_customer_group_id ? groupName(profile.sc_customer_group_id) : null,
+    }
     // .select('id'): el alta en SellerCloud necesita el id local recién
     // creado. Si el insert falla, nada viaja a SellerCloud.
     const { data: created, error } = await supabase
@@ -654,6 +945,7 @@ export default function ClientsAdmin() {
         token: generateToken(),
         price_list_id: newClientForm.price_list_id,
         vendedora_id: vendedoraId ?? null,
+        ...profileRow,
       })
       .select('id')
       .single()
@@ -662,6 +954,18 @@ export default function ClientsAdmin() {
       setNewClientBusy(false)
       return
     }
+    logClientCreated(
+      {
+        id: created.id,
+        name,
+        phone,
+        email: email || null,
+        price_list_id: newClientForm.price_list_id,
+        vendedora_id: vendedoraId ?? null,
+        ...profileRow,
+      },
+      { via: 'panel', sellercloud_requested: scOn },
+    )
     setNewClientForm(null)
     await load()
     setNewClientBusy(false)
@@ -670,7 +974,7 @@ export default function ClientsAdmin() {
     // crear — si el cliente parece existir allá, el panel muestra los
     // candidatos y la decisión (vincular / crear igual) es humana.
     if (scOn) {
-      const clientRow = { id: created.id, name, phone, email: email || null }
+      const clientRow = { id: created.id, name, phone, email: email || null, ...profileRow }
       setScPanel({
         client: clientRow,
         status: 'creating',
@@ -795,12 +1099,16 @@ export default function ClientsAdmin() {
 
   const startEdit = (client) => {
     setActionError('')
+    setActionNotice(null)
     setEditForm({
       clientId: client.id,
       name: client.name,
       phone: client.phone,
       email: client.email ?? '',
       scid: client.sellercloud_id == null ? '' : String(client.sellercloud_id),
+      // Ficha SellerCloud (2026-09-09): se edita en una fila desplegada bajo
+      // el cliente, en las dos vistas.
+      ...profileForm(client),
     })
   }
 
@@ -873,7 +1181,6 @@ export default function ClientsAdmin() {
         return
       }
     }
-    setEditBusy(false)
     // Reflejar el cambio sin recargar todo (mismo criterio que updateList):
     // las RPC guardan exactamente esto (nombre trimmeado, teléfono en
     // dígitos).
@@ -890,6 +1197,19 @@ export default function ClientsAdmin() {
           : c
       )
     )
+    // Ficha SellerCloud (2026-09-09): su propia RPC (audita solo lo que
+    // cambió) y, si el cliente está vinculado, la Edge Function la empuja a
+    // SellerCloud. Si la RPC falla, nombre/teléfono/correo ya quedaron
+    // guardados (reflejados arriba) y la edición sigue abierta con el error.
+    try {
+      const { notice } = await saveProfile(client, editForm, scidChanged ? scid : client.sellercloud_id)
+      setActionNotice(notice)
+    } catch (e) {
+      setEditBusy(false)
+      setActionError(e.message)
+      return
+    }
+    setEditBusy(false)
     setEditForm(null)
   }
 
@@ -936,6 +1256,120 @@ export default function ClientsAdmin() {
     const targetCode = tier === 'special' ? 'special' : `${currentCode.startsWith('ve_') ? 've' : 'us'}_${tier}`
     const target = priceLists.find((l) => l.code === targetCode)
     if (target && target.id !== client.price_list_id) updateList(client, target.id)
+  }
+
+  // Columnas de la tabla según la vista (los colSpan de las filas
+  // desplegadas — correo, panel SellerCloud, edición de la ficha — usan esto).
+  const colCount = fullView ? 13 : 6
+  // Vista completa: la columna Nombre queda fija al desplazar a los lados
+  // (fondo sólido para tapar lo que pasa por debajo) y el contenido de las
+  // filas desplegadas (ficha en edición, panel SellerCloud) se queda a la
+  // vista en vez de irse con el scroll: sticky a la izquierda y acotado al
+  // ancho del cuadro (el main es max-w-6xl = 72rem con padding).
+  const stickyCol = fullView ? 'sticky left-0 z-10 bg-surface' : ''
+  const expandedCls = fullView ? 'sticky left-0 max-w-[calc(min(100vw,72rem)-2.5rem)]' : ''
+
+  const fmtDate = (iso) => {
+    if (!iso) return '—'
+    const d = new Date(iso)
+    return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString(lang === 'en' ? 'en-US' : 'es-VE')
+  }
+
+  // Los cinco inputs de la ficha SellerCloud, compartidos por el alta, la
+  // fila de edición y el form "Crear en SellerCloud" del panel. `form` trae
+  // las PROFILE_KEYS como strings; `onChange(patch)` recibe el cambio; `row`
+  // es la fila del cliente (para conservar un grupo/account manager que ya
+  // no esté en ninguna vendedora); `onKeyDown` solo en la edición (Enter
+  // guarda, Escape cancela — dentro de un <form> Enter ya envía).
+  const profileFields = (form, onChange, row, onKeyDown) => {
+    const amCur = String(form.sc_account_manager_id ?? '')
+    const amOptions =
+      !amCur || accountManagerOptions.some((a) => String(a.id) === amCur)
+        ? accountManagerOptions
+        : [...accountManagerOptions, { id: Number(amCur), name: `#${amCur}` }]
+    return (
+      <div className="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-5" data-testid="sc-profile-fields">
+        <label className="min-w-0 text-[11px] text-primary/50">
+          {t('businessName')}
+          <input
+            value={form.business_name}
+            onChange={(e) => onChange({ business_name: e.target.value })}
+            onKeyDown={onKeyDown}
+            placeholder={t('businessNameOptional')}
+            className={`${profileInputCls} mt-0.5`}
+          />
+        </label>
+        <label className="min-w-0 text-[11px] text-primary/50">
+          {t('scGroup')}
+          <select
+            value={form.sc_customer_group_id}
+            onChange={(e) => onChange({ sc_customer_group_id: e.target.value })}
+            onKeyDown={onKeyDown}
+            className={`${profileInputCls} mt-0.5`}
+          >
+            <option value="">{t('scGroupNone')}</option>
+            {groupOptionsFor(form, row).map((g) => (
+              <option key={g.id} value={String(g.id)}>
+                {g.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="min-w-0 text-[11px] text-primary/50">
+          {t('scAccountManager')}
+          <select
+            value={form.sc_account_manager_id}
+            onChange={(e) => onChange({ sc_account_manager_id: e.target.value })}
+            onKeyDown={onKeyDown}
+            className={`${profileInputCls} mt-0.5`}
+          >
+            <option value="">{t('scAccountManagerNone')}</option>
+            {amOptions.map((a) => (
+              <option key={a.id} value={String(a.id)}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="min-w-0 text-[11px] text-primary/50">
+          {t('scSalesman')}
+          <input
+            list="sc-salesman-options"
+            value={form.sc_salesman}
+            onChange={(e) => onChange({ sc_salesman: e.target.value })}
+            onKeyDown={onKeyDown}
+            placeholder={t('scSalesman')}
+            className={`${profileInputCls} mt-0.5`}
+          />
+        </label>
+        <label className="min-w-0 text-[11px] text-primary/50">
+          {t('scComments')}
+          <input
+            list="sc-comments-options"
+            value={form.sc_comments}
+            onChange={(e) => onChange({ sc_comments: e.target.value })}
+            onKeyDown={onKeyDown}
+            placeholder={t('scComments')}
+            className={`${profileInputCls} mt-0.5`}
+          />
+        </label>
+      </div>
+    )
+  }
+
+  // Ficha propuesta para un cliente EXISTENTE que se va a crear en SellerCloud
+  // desde su fila: lo guardado, y donde no haya nada, lo de su vendedora y su
+  // lista (mismo prellenado que el alta).
+  const profileWithDefaults = (row) => {
+    const base = profileForm(row)
+    const fromV = profileFromVendedora(row.vendedora_id)
+    return {
+      business_name: base.business_name,
+      sc_customer_group_id: base.sc_customer_group_id || fromV.sc_customer_group_id,
+      sc_account_manager_id: base.sc_account_manager_id || fromV.sc_account_manager_id,
+      sc_salesman: base.sc_salesman || fromV.sc_salesman,
+      sc_comments: base.sc_comments || commentsForListCode(listCode(row.price_list_id)),
+    }
   }
 
   // Panel SellerCloud (2026-09-02; inline desde 2026-09-03 a pedido del
@@ -1034,6 +1468,9 @@ export default function ClientsAdmin() {
                   first: parts.length > 1 ? parts.slice(0, -1).join(' ') : parts[0] ?? '',
                   last: parts.length > 1 ? parts[parts.length - 1] : '',
                   emailField: p.client.email ?? '',
+                  // Ficha (2026-09-09): lo guardado, y si no hay nada, lo de
+                  // su vendedora y su lista — igual que el alta.
+                  profile: profileWithDefaults(p.client),
                 }))
               }}
               className="rounded-lg border border-indigo-400 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
@@ -1046,7 +1483,7 @@ export default function ClientsAdmin() {
 
       {scPanel.status === 'createForm' && (
         <form
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault()
             const first = scPanel.first.trim()
             const last = scPanel.last.trim()
@@ -1056,11 +1493,32 @@ export default function ClientsAdmin() {
               setScPanel((p) => ({ ...p, message: t('invalidEmail') }))
               return
             }
+            // La ficha se guarda en la fila ANTES de crear (la Edge Function
+            // la lee de ahí); sin vínculo todavía, saveProfile no empuja nada
+            // — el create lo hace. Si la RPC falla, no se crea nada allá.
+            if (scPanel.profile) {
+              try {
+                await saveProfile(scPanel.client, scPanel.profile, null)
+              } catch (err) {
+                setScPanel((p) => ({ ...p, message: err.message }))
+                return
+              }
+            }
             createSc(scPanel.client, { first, last, email: email || null, force: true })
           }}
-          className="flex flex-wrap items-center gap-2"
+          className="space-y-2"
           title={t('scLastNameHint')}
         >
+          {scPanel.profile && (
+            <div className="rounded-xl border border-indigo-200 bg-surface/60 p-2.5 dark:border-indigo-900">
+              <p className="mb-1.5 text-[11px] font-bold text-indigo-800 dark:text-indigo-300">
+                📦 {t('scProfileTitle')}
+              </p>
+              {profileFields(scPanel.profile, (patch) =>
+                setScPanel((p) => ({ ...p, profile: { ...p.profile, ...patch } })), scPanel.client)}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
           <input
             required
             placeholder={t('firstNameLabel')}
@@ -1093,6 +1551,7 @@ export default function ClientsAdmin() {
           {scPanel.message && (
             <span className="w-full text-xs font-medium text-red-600 dark:text-red-400">{scPanel.message}</span>
           )}
+          </div>
         </form>
       )}
     </div>
@@ -1100,26 +1559,65 @@ export default function ClientsAdmin() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      {/* Sugerencias de los inputs de la ficha (datalist: texto libre con
+          opciones). Salesman = nombres de las vendedoras; Comentarios = los
+          valores que usa el negocio. */}
+      <datalist id="sc-salesman-options">
+        {vendedoresList.map((v) => (
+          <option key={v.id} value={v.name} />
+        ))}
+      </datalist>
+      <datalist id="sc-comments-options">
+        {COMMENT_SUGGESTIONS.map((s) => (
+          <option key={s} value={s} />
+        ))}
+      </datalist>
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-brand text-2xl font-semibold">
           {t('clients')}
           <span className="ml-2 text-base font-normal text-primary/40">{clients.length}</span>
         </h2>
-        <button
-          onClick={() => {
-            setNewClientError('')
-            setNewClientForm({ ...EMPTY_CLIENT })
-          }}
-          className="rounded-full bg-ink px-5 py-2 text-sm font-semibold text-secondary transition-colors hover:bg-ink-soft"
-        >
-          + {t('newClient')}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Vista compacta ↔ completa (2026-09-09): la completa muestra
+              todas las columnas registradas de cada cliente. */}
+          <button
+            onClick={toggleView}
+            aria-pressed={fullView}
+            title={t('viewFullHint')}
+            className={`rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${
+              fullView
+                ? 'border-secondary/60 bg-gold-pale/40 text-primary'
+                : 'border-line text-primary/70 hover:border-primary/40'
+            }`}
+          >
+            {fullView ? `⤡ ${t('viewCompact')}` : `⤢ ${t('viewFull')}`}
+          </button>
+          <button
+            onClick={() => {
+              setNewClientError('')
+              // La vendedora arranca con su propia ficha (grupo, ella como
+              // account manager, su nombre); el admin la ve al elegir vendedora.
+              setNewClientForm({
+                ...EMPTY_CLIENT,
+                ...(isAdmin ? {} : profileFromVendedora(myVendedoraId)),
+              })
+            }}
+            className="rounded-full bg-ink px-5 py-2 text-sm font-semibold text-secondary transition-colors hover:bg-ink-soft"
+          >
+            + {t('newClient')}
+          </button>
+        </div>
       </div>
 
       {newClientForm && (
         <form
           onSubmit={createClient}
-          className="grid animate-fade-up gap-3 rounded-2xl border border-secondary/40 bg-surface p-5 shadow-sm md:grid-cols-2"
+          // grid-cols-1 explícito (2026-09-09): sin él la columna única de
+          // móvil se dimensiona al min-content del hijo más ancho (la etiqueta
+          // del toggle con su pista) y el form empujaba la página a scroll
+          // horizontal a 390 px — pescado por Playwright, existía desde antes.
+          className="grid grid-cols-1 animate-fade-up gap-3 rounded-2xl border border-secondary/40 bg-surface p-5 shadow-sm md:grid-cols-2"
         >
           {newClientForm.scCreate ? (
             // Con el alta en SellerCloud, el nombre va PARTIDO: allá el
@@ -1180,6 +1678,13 @@ export default function ClientsAdmin() {
                 ...newClientForm,
                 price_list_id: listId,
                 ...(forced !== undefined ? { vendedora_id: forced } : {}),
+                // Si la lista impuso otra vendedora, la ficha la sigue; y el
+                // comentario se propone por la lista (Mayorista/Minorista/…)
+                // salvo que haya un texto propio tipeado a mano.
+                ...(forced !== undefined && forced !== newClientForm.vendedora_id
+                  ? profileFromVendedora(forced)
+                  : {}),
+                ...autoComments(newClientForm.sc_comments, listId),
                 ...(isQuote ? { scCreate: false } : {}),
               })
             }}
@@ -1210,7 +1715,14 @@ export default function ClientsAdmin() {
                   {t('sharedListOwners')}
                   <select
                     value={newClientForm.vendedora_id}
-                    onChange={(e) => setNewClientForm({ ...newClientForm, vendedora_id: e.target.value })}
+                    onChange={(e) =>
+                      setNewClientForm({
+                        ...newClientForm,
+                        vendedora_id: e.target.value,
+                        // La ficha se re-propone con la vendedora elegida.
+                        ...profileFromVendedora(e.target.value),
+                      })
+                    }
                     className={`${inputCls} mt-1 w-full`}
                   >
                     {vendedoresList
@@ -1229,7 +1741,14 @@ export default function ClientsAdmin() {
             return isAdmin ? (
               <select
                 value={newClientForm.vendedora_id}
-                onChange={(e) => setNewClientForm({ ...newClientForm, vendedora_id: e.target.value })}
+                onChange={(e) =>
+                      setNewClientForm({
+                        ...newClientForm,
+                        vendedora_id: e.target.value,
+                        // La ficha se re-propone con la vendedora elegida.
+                        ...profileFromVendedora(e.target.value),
+                      })
+                    }
                 className={inputCls}
               >
                 <option value="">{t('unassigned')}</option>
@@ -1243,7 +1762,18 @@ export default function ClientsAdmin() {
               <p className="flex items-center text-xs text-primary/50">{t('assignedToYou')}</p>
             )
           })()}
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-primary/70 md:col-span-2">
+          {/* Ficha SellerCloud (2026-09-09): con esto se registra el cliente
+              allá. Prellenada por la vendedora y la lista; editable. Se
+              guarda en la fila local aunque el toggle de SellerCloud esté
+              apagado (queda lista para cuando se cree/vincule). */}
+          <fieldset className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 dark:border-indigo-900 dark:bg-indigo-950/20 md:col-span-2">
+            <legend className="px-1 text-xs font-bold text-indigo-800 dark:text-indigo-300">
+              📦 {t('scProfileTitle')}
+            </legend>
+            <p className="mb-2 text-[11px] text-primary/50">{t('scProfileHint')}</p>
+            {profileFields(newClientForm, (patch) => setNewClientForm((f) => ({ ...f, ...patch })))}
+          </fieldset>
+          <label className="flex min-w-0 cursor-pointer flex-wrap items-center gap-2 text-sm text-primary/70 md:col-span-2">
             <input
               type="checkbox"
               checked={newClientForm.scCreate}
@@ -1373,16 +1903,85 @@ export default function ClientsAdmin() {
           {actionError}
         </div>
       )}
+      {/* Resultado de sincronizar la ficha con SellerCloud tras Guardar
+          (2026-09-09): verde si entró, ámbar si quedó solo acá. */}
+      {actionNotice && (
+        <div
+          role="status"
+          className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-2.5 text-sm ${
+            actionNotice.kind === 'ok'
+              ? 'border-green-300 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-900/30 dark:text-green-300'
+              : 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-200'
+          }`}
+        >
+          <span className="whitespace-pre-wrap break-words">
+            {actionNotice.kind === 'ok' ? '✓ ' : '⚠️ '}
+            {actionNotice.text}
+          </span>
+          <button
+            onClick={() => setActionNotice(null)}
+            aria-label={t('scCloseBtn')}
+            className="shrink-0 rounded-md px-1.5 text-xs opacity-60 hover:opacity-100"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
-      <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-sm">
+      {fullView && (
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-primary/50">
+          <span>{t('scrollSidewaysHint')}</span>
+          <span className="flex gap-1">
+            <button
+              type="button"
+              onClick={() => scrollTable(-1)}
+              aria-label={t('scrollLeft')}
+              title={t('scrollLeft')}
+              className="rounded-lg border border-line px-3 py-1 font-bold text-primary/70 transition-colors hover:border-primary/40 hover:bg-gold-pale/40"
+            >
+              ◀
+            </button>
+            <button
+              type="button"
+              onClick={() => scrollTable(1)}
+              aria-label={t('scrollRight')}
+              title={t('scrollRight')}
+              className="rounded-lg border border-line px-3 py-1 font-bold text-primary/70 transition-colors hover:border-primary/40 hover:bg-gold-pale/40"
+            >
+              ▶
+            </button>
+          </span>
+        </div>
+      )}
+      <div className="rounded-2xl border border-line bg-surface shadow-sm">
+        {/* El cuadro que scrollea (ver scrollBoxRef). En compacta solo a los
+            lados, como siempre; en completa también alto acotado. El pie con
+            el conteo queda AFUERA para verse siempre. */}
+        <div
+          ref={scrollBoxRef}
+          data-testid="clients-scroll-box"
+          className={`overflow-x-auto rounded-t-2xl ${fullView ? 'overflow-y-auto' : ''}`}
+          // 56 px = el pie con el conteo + margen; mínimo 240 px para que en
+          // una ventana chica siga habiendo tabla que ver.
+          style={fullView ? { maxHeight: `max(240px, calc(100vh - ${boxTop + 56}px))` } : undefined}
+        >
         <table className="w-full text-sm">
-          <thead>
+          {/* Sticky top en completa: con border-collapse el borde inferior no
+              acompaña al thead, se dibuja con una sombra de 1 px. */}
+          <thead className={fullView ? 'sticky top-0 z-20 bg-surface shadow-[0_1px_0_0_var(--color-line)]' : ''}>
             <tr className="border-b border-line text-left text-[11px] uppercase tracking-wider text-primary/45">
-              <th className="p-3">{t('name')}</th>
+              <th className={`p-3 ${stickyCol}`}>{t('name')}</th>
+              {fullView && <th className="p-3">{t('businessName')}</th>}
               <th className="p-3">Tel</th>
+              {fullView && <th className="p-3">{t('email')}</th>}
               <th className="p-3">SellerCloud</th>
+              {fullView && <th className="p-3">{t('scGroup')}</th>}
+              {fullView && <th className="p-3">{t('scAccountManager')}</th>}
+              {fullView && <th className="p-3">{t('scSalesman')}</th>}
+              {fullView && <th className="p-3">{t('scComments')}</th>}
               <th className="p-3">Lista</th>
               <th className="p-3">Vendedora</th>
+              {fullView && <th className="p-3">{t('createdAtCol')}</th>}
               <th className="p-3" />
             </tr>
           </thead>
@@ -1390,7 +1989,7 @@ export default function ClientsAdmin() {
             {filtered.slice(0, visibleRows).map((c) => (
               <Fragment key={c.id}>
               <tr className="border-b border-line/60 transition-colors hover:bg-gold-pale/20">
-                <td className="p-3 font-medium">
+                <td className={`p-3 font-medium ${stickyCol}`}>
                   {editForm?.clientId === c.id ? (
                     <input
                       autoFocus
@@ -1403,6 +2002,11 @@ export default function ClientsAdmin() {
                     c.name
                   )}
                 </td>
+                {fullView && (
+                  <td className="p-3 text-xs text-primary/70">
+                    {c.business_name || <span className="text-primary/30">—</span>}
+                  </td>
+                )}
                 {/* Tel + correo (2026-09-08): el correo vuelve a verse, pero
                     NO en línea (ensanchaba la columna y cortaba "Eliminar"):
                     una flechita junto al teléfono, solo si hay correo, abre
@@ -1430,7 +2034,9 @@ export default function ClientsAdmin() {
                   ) : (
                     <span className="flex items-center gap-1.5 whitespace-nowrap">
                       {c.phone}
-                      {c.email && (
+                      {/* En la vista completa el correo tiene columna propia:
+                          la flechita solo va en la compacta. */}
+                      {c.email && !fullView && (
                         <button
                           onClick={() => toggleEmail(c.id)}
                           aria-expanded={emailOpen.has(c.id)}
@@ -1444,6 +2050,15 @@ export default function ClientsAdmin() {
                     </span>
                   )}
                 </td>
+                {fullView && (
+                  <td className="p-3 font-mono text-xs text-primary/60">
+                    {c.email ? (
+                      <span className="select-all">{c.email}</span>
+                    ) : (
+                      <span className="text-primary/30">—</span>
+                    )}
+                  </td>
+                )}
                 {/* Vínculo SellerCloud con columna propia (2026-09-01,
                     reemplazó a la de Email, que nunca tuvo datos): un cliente
                     sin ID no puede mandar pedidos allá. Editable solo por
@@ -1483,6 +2098,41 @@ export default function ClientsAdmin() {
                     )
                   )}
                 </td>
+                {/* Ficha SellerCloud en la vista completa (2026-09-09). Solo
+                    texto: se edita en la fila desplegada al tocar Editar. */}
+                {fullView && (
+                  <td className="p-3 text-xs text-primary/70">
+                    {c.sc_customer_group_id != null ? (
+                      <span title={`#${c.sc_customer_group_id}`}>
+                        {c.sc_customer_group_name || `#${c.sc_customer_group_id}`}
+                      </span>
+                    ) : (
+                      <span className="text-primary/30">—</span>
+                    )}
+                  </td>
+                )}
+                {fullView && (
+                  <td className="p-3 text-xs text-primary/70">
+                    {c.sc_account_manager_id != null ? (
+                      <span className="whitespace-nowrap">
+                        {accountManagerName(c.sc_account_manager_id) ?? ''}
+                        <span className="ml-1 font-mono text-[10px] text-primary/40">#{c.sc_account_manager_id}</span>
+                      </span>
+                    ) : (
+                      <span className="text-primary/30">—</span>
+                    )}
+                  </td>
+                )}
+                {fullView && (
+                  <td className="p-3 text-xs text-primary/70">
+                    {c.sc_salesman || <span className="text-primary/30">—</span>}
+                  </td>
+                )}
+                {fullView && (
+                  <td className="p-3 text-xs text-primary/70">
+                    {c.sc_comments || <span className="text-primary/30">—</span>}
+                  </td>
+                )}
                 <td className="p-3">
                   {isAdmin ? (
                     <div className="flex flex-col gap-1.5">
@@ -1556,6 +2206,9 @@ export default function ClientsAdmin() {
                     c.vendedores?.name || (isAdmin ? t('unassigned') : '')
                   )}
                 </td>
+                {fullView && (
+                  <td className="whitespace-nowrap p-3 font-mono text-xs text-primary/50">{fmtDate(c.created_at)}</td>
+                )}
                 {/* whitespace-nowrap (2026-09-08): que los botones nunca se
                     partan en dos líneas ni se recorten; si no entra, la tabla
                     scrollea (overflow-x-auto del contenedor). */}
@@ -1635,12 +2288,32 @@ export default function ClientsAdmin() {
                   </div>
                 </td>
               </tr>
+              {/* Ficha SellerCloud en edición (2026-09-09): fila desplegada
+                  bajo el cliente con los cinco campos, en las dos vistas.
+                  Nombre/teléfono/correo/ID siguen en línea como siempre;
+                  Guardar/Cancelar son los de la fila. */}
+              {editForm?.clientId === c.id && (
+                <tr className="border-b border-line/60 bg-indigo-50/30 dark:bg-indigo-950/20" data-testid="sc-profile-edit-row">
+                  <td colSpan={colCount} className="px-3 py-2.5">
+                    <div className={expandedCls}>
+                      <div className="mb-1.5 flex flex-wrap items-baseline gap-2">
+                        <span className="text-xs font-bold text-indigo-800 dark:text-indigo-300">
+                          📦 {t('scProfileTitle')}
+                        </span>
+                        <span className="text-[11px] text-primary/45">{t('scGroupChangeHint')}</span>
+                      </div>
+                      {profileFields(editForm, (patch) => setEditForm((f) => ({ ...f, ...patch })), c, editKeys)}
+                    </div>
+                  </td>
+                </tr>
+              )}
               {/* Correo desplegado (2026-09-08): fila propia debajo del
                   cliente, mismo gesto que el panel SellerCloud. Solo existe
-                  si el cliente tiene correo (sin correo no hay flechita). */}
-              {c.email && emailOpen.has(c.id) && (
+                  si el cliente tiene correo (sin correo no hay flechita). En
+                  la vista completa el correo ya tiene columna. */}
+              {!fullView && c.email && emailOpen.has(c.id) && (
                 <tr className="border-b border-line/60 bg-gold-pale/15">
-                  <td colSpan={6} className="px-3 py-2">
+                  <td colSpan={colCount} className="px-3 py-2">
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <span className="text-primary/50">✉️ {t('email')}:</span>
                       <span className="select-all font-mono text-primary/80">{c.email}</span>
@@ -1664,8 +2337,8 @@ export default function ClientsAdmin() {
                   bandeja. */}
               {scPanel?.client.id === c.id && (
                 <tr className="border-b border-line/60 bg-indigo-50/30 dark:bg-indigo-950/20">
-                  <td colSpan={6} className="p-3">
-                    {scPanelBox}
+                  <td colSpan={colCount} className="p-3">
+                    <div className={expandedCls}>{scPanelBox}</div>
                   </td>
                 </tr>
               )}
@@ -1678,6 +2351,7 @@ export default function ClientsAdmin() {
             {t('loading')}
           </div>
         )}
+        </div>
         <div className="border-t border-line px-4 py-2.5 text-xs text-primary/50">
           {filtered.length} {t('results')}
         </div>

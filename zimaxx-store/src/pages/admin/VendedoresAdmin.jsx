@@ -24,6 +24,13 @@ export default function VendedoresAdmin() {
   // la vendedora, no del pedido.
   const [editingRepId, setEditingRepId] = useState(null)
   const [editRep, setEditRep] = useState('')
+  // Grupo de clientes en SellerCloud (2026-09-09): ID + nombre. Se propone
+  // como grupo al crear un cliente de esta vendedora (ficha SellerCloud). La
+  // API no lista grupos, así que el mapeo vive acá y se carga a mano
+  // (Customers → Groups en SellerCloud muestra el ID).
+  const [editingGroupId, setEditingGroupId] = useState(null)
+  const [editGroup, setEditGroup] = useState({ id: '', name: '' })
+  const [groupError, setGroupError] = useState('')
   const [linkEmail, setLinkEmail] = useState({}) // id -> valor del input de email
   const [linkBusyId, setLinkBusyId] = useState(null)
   const [linkError, setLinkError] = useState({}) // id -> mensaje de error
@@ -124,6 +131,42 @@ export default function VendedoresAdmin() {
       setVendedoras((prev) => prev.map((v) => (v.id === id ? { ...v, sellercloud_rep_id: parsed } : v)))
     }
     setEditingRepId(null)
+  }
+
+  const startEditGroup = (v) => {
+    setEditingGroupId(v.id)
+    setEditGroup({
+      id: v.sellercloud_group_id != null ? String(v.sellercloud_group_id) : '',
+      name: v.sellercloud_group_name ?? '',
+    })
+    setGroupError('')
+  }
+
+  // ID vacío = sin grupo (y el nombre se borra con él). Con ID hace falta el
+  // nombre: es lo que muestran la ficha del cliente y la vista completa de
+  // Clientes — la API de SellerCloud no permite resolverlo después. Un ID que
+  // no sea entero positivo no se guarda (un grupo inventado haría fallar el
+  // POST al grupo en cada alta).
+  const saveGroup = async (id) => {
+    const rawId = editGroup.id.trim()
+    const name = editGroup.name.trim()
+    const parsed = rawId === '' ? null : Number(rawId)
+    if (parsed !== null && (!Number.isInteger(parsed) || parsed <= 0)) {
+      setEditingGroupId(null)
+      return
+    }
+    if (parsed !== null && !name) {
+      setGroupError(t('scGroupNeedsName'))
+      return
+    }
+    const patch = { sellercloud_group_id: parsed, sellercloud_group_name: parsed === null ? null : name }
+    const { error } = await supabase.from('vendedores').update(patch).eq('id', id)
+    if (error) {
+      setGroupError(error.message)
+      return
+    }
+    setVendedoras((prev) => prev.map((v) => (v.id === id ? { ...v, ...patch } : v)))
+    setEditingGroupId(null)
   }
 
   const remove = async (id) => {
@@ -271,6 +314,9 @@ export default function VendedoresAdmin() {
               <th className="p-3" title={t('scRepIdHint')}>
                 {t('scRepId')}
               </th>
+              <th className="p-3" title={t('scGroupColHint')}>
+                {t('scGroupCol')}
+              </th>
               <th className="p-3">{t('assignedClients')}</th>
               <th className="p-3">{t('access')}</th>
               <th className="p-3" />
@@ -335,6 +381,64 @@ export default function VendedoresAdmin() {
                     >
                       {v.sellercloud_rep_id ?? (
                         <span className="italic text-primary/35">{t('scRepIdMissing')}</span>
+                      )}
+                    </button>
+                  )}
+                </td>
+                {/* Grupo SellerCloud (2026-09-09): ID + nombre, editables
+                    juntos. Enter guarda, Escape cancela. */}
+                <td className="p-3 text-xs">
+                  {editingGroupId === v.id ? (
+                    <div className="w-56">
+                      <div className="flex gap-1.5">
+                        <input
+                          autoFocus
+                          value={editGroup.id}
+                          onChange={(e) => setEditGroup((g) => ({ ...g, id: e.target.value.replace(/\D/g, '') }))}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveGroup(v.id)
+                            if (e.key === 'Escape') setEditingGroupId(null)
+                          }}
+                          placeholder={t('scGroupIdPlaceholder')}
+                          inputMode="numeric"
+                          aria-label={t('scGroupIdPlaceholder')}
+                          className="w-14 rounded-lg border border-line bg-surface px-2 py-1 font-mono text-xs outline-none transition-colors focus:border-secondary"
+                        />
+                        <input
+                          value={editGroup.name}
+                          onChange={(e) => setEditGroup((g) => ({ ...g, name: e.target.value }))}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveGroup(v.id)
+                            if (e.key === 'Escape') setEditingGroupId(null)
+                          }}
+                          placeholder={t('scGroupNamePlaceholder')}
+                          aria-label={t('scGroupNamePlaceholder')}
+                          className="min-w-0 flex-1 rounded-lg border border-line bg-surface px-2 py-1 text-xs outline-none transition-colors focus:border-secondary"
+                        />
+                        <button
+                          onClick={() => saveGroup(v.id)}
+                          className="rounded-lg bg-secondary px-2 py-1 text-xs font-bold text-ink transition-colors hover:bg-secondary-dark"
+                        >
+                          ✓
+                        </button>
+                      </div>
+                      {groupError && (
+                        <p className="mt-1 whitespace-normal text-[11px] text-red-600 dark:text-red-400">{groupError}</p>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => startEditGroup(v)}
+                      title={t('scGroupColHint')}
+                      className="inline-flex items-center gap-1.5 text-left text-primary/70 hover:text-secondary-dark hover:underline"
+                    >
+                      {v.sellercloud_group_id != null ? (
+                        <>
+                          <span className="font-mono text-primary/50">#{v.sellercloud_group_id}</span>
+                          <span>{v.sellercloud_group_name || '—'}</span>
+                        </>
+                      ) : (
+                        <span className="italic text-primary/35">{t('scGroupMissing')}</span>
                       )}
                     </button>
                   )}

@@ -18,6 +18,20 @@
 //     y recién ahí guarda, vía la RPC link_sellercloud_customer con el JWT de
 //     quien llama: el PERMISO vive en la RPC (admin cualquiera, vendedora sus
 //     clientes) y la vinculación queda auditada sí o sí.
+//   * action: 'update' (2026-09-09) — manda la FICHA del cliente ya vinculado
+//     a SellerCloud: PUT /Customers/{id} con BusinessName / AccountManager1Id
+//     / Salesman / Comments (+ Phone1) y POST al grupo de clientes. La ficha
+//     se lee de la fila local (clients.business_name, sc_*), que el panel
+//     guarda ANTES vía la RPC update_client_sc_profile (auditada). Lo usa
+//     "Guardar" de la edición cuando el cliente tiene sellercloud_id.
+//
+// Ficha SellerCloud (2026-09-09, a pedido del usuario: "el cliente se debe
+// crear con business name, customer group, account manager, salesmen y
+// comments"): el create manda BusinessName; el resto NO lo acepta el
+// CreateCustomerRequest, así que va en el mismo PUT que el teléfono (un solo
+// segundo paso) y el grupo en un POST aparte. Los tres pasos posteriores al
+// create son mejor-esfuerzo: el customer YA existe, se vincula igual y lo que
+// no entró se devuelve como `warning` para que la persona lo cargue allá.
 //
 // Mismos principios que sellercloud-push-order: la lógica de la API vive en
 // sellercloud.ts (sin nada de Deno, testeable desde Node), esta función nunca
@@ -31,13 +45,15 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4'
 import {
+  addCustomerToGroup,
   createCustomer,
   getCustomer,
   getToken,
   normalizeBaseUrl,
   searchCustomers,
-  setCustomerPhone,
+  updateCustomer,
   type Config,
+  type CustomerFields,
   type CustomerSummary,
 } from '../sellercloud-push-order/sellercloud.ts'
 
@@ -98,6 +114,89 @@ async function logCustomers(
 }
 
 const digits = (v: unknown) => String(v ?? '').replace(/\D/g, '')
+
+// La fila local del cliente con su ficha SellerCloud. Las columnas de la
+// ficha existen desde migration-2026-09-09-client-sellercloud-profile.sql; si
+// la función se despliega antes de correrla, el select cae al shape viejo
+// (42703 = columna inexistente) y la ficha queda vacía en vez de romper el
+// alta — la migración manda, la función no puede exigirla.
+type ClientRow = {
+  id: string
+  name: string
+  phone: string | null
+  email: string | null
+  sellercloud_id: number | null
+  business_name?: string | null
+  sc_customer_group_id?: number | null
+  sc_customer_group_name?: string | null
+  sc_account_manager_id?: number | null
+  sc_salesman?: string | null
+  sc_comments?: string | null
+}
+
+const CLIENT_COLS_FULL =
+  'id, name, phone, email, sellercloud_id, business_name, sc_customer_group_id, sc_customer_group_name, sc_account_manager_id, sc_salesman, sc_comments'
+const CLIENT_COLS_LEGACY = 'id, name, phone, email, sellercloud_id'
+
+async function loadClient(
+  caller: ReturnType<typeof createClient>,
+  clientId: string,
+): Promise<{ client: ClientRow | null; error: string | null }> {
+  let res = await caller.from('clients').select(CLIENT_COLS_FULL).eq('id', clientId).maybeSingle()
+  if (res.error?.code === '42703') {
+    res = await caller.from('clients').select(CLIENT_COLS_LEGACY).eq('id', clientId).maybeSingle()
+  }
+  if (res.error) return { client: null, error: res.error.message }
+  return { client: (res.data as ClientRow | null) ?? null, error: null }
+}
+
+// La ficha que viaja a SellerCloud, desde la fila local. El teléfono entra
+// acá también (Phone1 va en el mismo PUT). El grupo se maneja aparte (es otro
+// endpoint).
+function profileFields(client: ClientRow, phone?: string | null): CustomerFields {
+  return {
+    phone: phone || digits(client.phone) || null,
+    businessName: client.business_name ?? null,
+    accountManagerId: client.sc_account_manager_id ?? null,
+    salesman: client.sc_salesman ?? null,
+    comments: client.sc_comments ?? null,
+  }
+}
+
+// PUT de la ficha + POST al grupo, mejor-esfuerzo: devuelve qué entró y los
+// avisos de lo que no. Nunca lanza — el llamador decide qué hacer con los
+// warnings (tras un create el customer ya existe; en 'update' es todo lo que
+// hay que reportar).
+async function pushProfile(
+  cfg: Config,
+  token: string,
+  scId: number,
+  client: ClientRow,
+  phone?: string | null,
+): Promise<{ applied: string[]; group: number | null; warnings: string[] }> {
+  const warnings: string[] = []
+  let applied: string[] = []
+  try {
+    applied = await updateCustomer(cfg, token, scId, profileFields(client, phone))
+  } catch (e) {
+    warnings.push(
+      `El cliente está en SellerCloud (#${scId}) pero no se pudo cargar su ficha (teléfono/empresa/account manager/salesman/comentarios): ${(e as Error).message}. Cargala allá.`,
+    )
+  }
+  let group: number | null = null
+  const gid = Number(client.sc_customer_group_id)
+  if (client.sc_customer_group_id != null && Number.isInteger(gid) && gid > 0) {
+    try {
+      await addCustomerToGroup(cfg, token, gid, scId)
+      group = gid
+    } catch (e) {
+      warnings.push(
+        `No se pudo agregar al grupo ${client.sc_customer_group_name ?? gid} en SellerCloud: ${(e as Error).message}. Agregalo allá.`,
+      )
+    }
+  }
+  return { applied, group, warnings }
+}
 
 // Un candidato como lo consume el panel. El teléfono no viene en el DTO del
 // listado — se completa (mejor-esfuerzo) leyendo el detalle de cada candidato,
@@ -298,19 +397,26 @@ Deno.serve(async (req) => {
     if (!firstName || !lastName) return json({ error: 'hacen falta nombre y apellido' }, 400)
 
     // El cliente local, leído con el JWT del caller: RLS ya recorta a una
-    // vendedora a los suyos — un cliente ajeno simplemente "no existe".
-    const { data: client, error: clientError } = await caller
-      .from('clients')
-      .select('id, name, phone, email, sellercloud_id')
-      .eq('id', clientId)
-      .maybeSingle()
-    if (clientError) return json({ error: clientError.message }, 400)
+    // vendedora a los suyos — un cliente ajeno simplemente "no existe". Trae
+    // la ficha SellerCloud (empresa/grupo/account manager/salesman/
+    // comentarios) que el panel ya guardó en la fila.
+    const { client, error: clientError } = await loadClient(caller, clientId)
+    if (clientError) return json({ error: clientError }, 400)
     if (!client) return json({ error: 'cliente no encontrado' }, 404)
     if (client.sellercloud_id) {
       return json({ ok: true, already_linked: true, sellercloud_id: client.sellercloud_id })
     }
 
-    const logContext = { client_id: clientId, client: client.name, email: email || null }
+    const logContext = {
+      client_id: clientId,
+      client: client.name,
+      email: email || null,
+      business: client.business_name ?? null,
+      group_id: client.sc_customer_group_id ?? null,
+      account_manager_id: client.sc_account_manager_id ?? null,
+      salesman: client.sc_salesman ?? null,
+      comments: client.sc_comments ?? null,
+    }
 
     let cfg: Config
     let token: string
@@ -337,24 +443,24 @@ Deno.serve(async (req) => {
 
     let scId: number
     try {
-      scId = await createCustomer(cfg, token, { firstName, lastName, email: email || null })
+      // BusinessName es lo único de la ficha que el create acepta.
+      scId = await createCustomer(cfg, token, {
+        firstName,
+        lastName,
+        email: email || null,
+        business: client.business_name ?? null,
+      })
     } catch (e) {
       const message = (e as Error).message ?? 'error desconocido'
       await logCustomers(caller, 'error', 'create_failed', message, logContext)
       return json({ error: message }, 502)
     }
 
-    // Teléfono en segundo paso (el create no lo acepta): mejor-esfuerzo — el
-    // customer YA existe, así que esto se degrada a warning, nunca a error.
-    let warning: string | null = null
-    const phoneToSet = phone || digits(client.phone)
-    if (phoneToSet) {
-      try {
-        await setCustomerPhone(cfg, token, scId, phoneToSet)
-      } catch (e) {
-        warning = `El cliente entró en SellerCloud (#${scId}) pero sin teléfono: ${(e as Error).message}. Cargáselo allá.`
-      }
-    }
+    // Segundo paso: teléfono + ficha en UN PUT (el create no los acepta) y el
+    // grupo en su POST. Mejor-esfuerzo — el customer YA existe, así que lo que
+    // falle se degrada a warning, nunca a error, y se vincula igual.
+    const pushed = await pushProfile(cfg, token, scId, client, phone)
+    const warning = pushed.warnings.length ? pushed.warnings.join(' ') : null
 
     // Vincular acá, auditado por la RPC. Si ESTO falla, el customer ya existe
     // allá y no quedó anotado — mismo estado peligroso que push_annotate_failed:
@@ -390,9 +496,73 @@ Deno.serve(async (req) => {
     await logCustomers(caller, 'info', 'create_ok', `Cliente creado en SellerCloud (#${scId})`, {
       ...logContext,
       sellercloud_id: scId,
+      applied: pushed.applied,
+      group: pushed.group,
       warning,
     })
-    return json({ ok: true, created: true, sellercloud_id: scId, warning })
+    return json({
+      ok: true,
+      created: true,
+      sellercloud_id: scId,
+      applied: pushed.applied,
+      group: pushed.group,
+      warning,
+    })
+  }
+
+  // ---------- update (2026-09-09) ----------
+  // Ficha → SellerCloud para un cliente YA vinculado. La fila local ya tiene
+  // la ficha nueva (el panel la guardó con update_client_sc_profile, que es
+  // quien valida permisos y audita); acá solo se empuja. Sin vínculo no hay
+  // a quién actualizar: 409, el panel ofrece "Buscar en SellerCloud".
+  if (action === 'update') {
+    const clientId = String(body.client_id ?? '')
+    if (!clientId) return json({ error: 'falta client_id' }, 400)
+    const { client, error: clientError } = await loadClient(caller, clientId)
+    if (clientError) return json({ error: clientError }, 400)
+    if (!client) return json({ error: 'cliente no encontrado' }, 404)
+    const scId = Number(client.sellercloud_id)
+    if (!Number.isFinite(scId) || scId <= 0) {
+      return json({ error: 'este cliente todavía no está vinculado a SellerCloud' }, 409)
+    }
+    const logContext = {
+      client_id: clientId,
+      client: client.name,
+      sellercloud_id: scId,
+      business: client.business_name ?? null,
+      group_id: client.sc_customer_group_id ?? null,
+      account_manager_id: client.sc_account_manager_id ?? null,
+      salesman: client.sc_salesman ?? null,
+      comments: client.sc_comments ?? null,
+    }
+    let cfg: Config
+    let token: string
+    try {
+      cfg = config()
+      token = await getToken(cfg)
+    } catch (e) {
+      const message = (e as Error).message ?? 'error desconocido'
+      await logCustomers(caller, 'error', 'update_failed', message, logContext)
+      return json({ error: message }, 502)
+    }
+    const pushed = await pushProfile(cfg, token, scId, client)
+    const warning = pushed.warnings.length ? pushed.warnings.join(' ') : null
+    if (pushed.applied.length === 0 && pushed.group == null) {
+      // Nada entró: o la ficha está vacía (nada que mandar) o todo falló.
+      if (warning) {
+        await logCustomers(caller, 'error', 'update_failed', warning, logContext)
+        return json({ error: warning }, 502)
+      }
+      return json({ ok: true, sellercloud_id: scId, applied: [], group: null, warning: null })
+    }
+    await logCustomers(
+      caller,
+      warning ? 'warning' : 'info',
+      'update_ok',
+      `Ficha actualizada en SellerCloud (#${scId})`,
+      { ...logContext, applied: pushed.applied, group: pushed.group, warning },
+    )
+    return json({ ok: true, sellercloud_id: scId, applied: pushed.applied, group: pushed.group, warning })
   }
 
   return json({ error: `acción desconocida: ${action}` }, 400)
