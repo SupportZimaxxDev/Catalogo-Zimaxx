@@ -132,6 +132,8 @@ const dict = {
     scCreating: 'Creando en SellerCloud…',
     scCreatedMsg: 'Creado y vinculado en SellerCloud (#{id}).',
     scCreateFailed: 'Cliente creado; no se pudo dar de alta en SellerCloud.',
+    scCreateDisabled: 'El alta en SellerCloud está temporalmente desactivada.',
+    scPickToLinkOnly: 'Elegí el correcto para vincularlo.',
     scCloseBtn: 'Cerrar',
     // Ficha SellerCloud del cliente (2026-09-09): empresa, grupo, account
     // manager, salesman y comentarios — con esto se registra el customer.
@@ -799,6 +801,8 @@ const dict = {
     scCreating: 'Creating in SellerCloud…',
     scCreatedMsg: 'Created and linked in SellerCloud (#{id}).',
     scCreateFailed: 'Client created; it could not be added to SellerCloud.',
+    scCreateDisabled: 'Creating customers in SellerCloud is temporarily disabled.',
+    scPickToLinkOnly: 'Pick the right one to link it.',
     scCloseBtn: 'Close',
     businessName: 'Business name',
     businessNameOptional: 'Business name (optional)',
