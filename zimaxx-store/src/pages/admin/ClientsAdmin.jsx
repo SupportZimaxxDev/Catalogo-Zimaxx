@@ -130,8 +130,18 @@ const LIST_CODE_ALIASES = {
   special: 'special',
 }
 
+// Alta en SellerCloud DESACTIVADA (hotfix 2026-09-09): la creación de
+// customers se está reparando en otra rama. Con el flag en false, el toggle
+// del alta se muestra apagado y deshabilitado, el panel SellerCloud no ofrece
+// "Crear en SellerCloud" (buscar y vincular siguen andando) y createSc corta
+// antes de llamar a la Edge Function. Para reactivar: true acá y
+// CREATE_ENABLED en supabase/functions/sellercloud-customers/index.ts
+// (+ redeploy de la función).
+const SC_CREATE_ENABLED = false
+
 // scCreate (2026-09-02): "Crear también en SellerCloud" — prendido por
-// defecto; al elegir la lista 'quote' (cliente de cotización) se apaga solo.
+// defecto (mientras SC_CREATE_ENABLED lo permita); al elegir la lista 'quote'
+// (cliente de cotización) se apaga solo.
 // Con el toggle ON el nombre se pide PARTIDO (nombre + apellido): SellerCloud
 // valida Last Name al crear órdenes ("Customer's last name is not valid") y
 // un customer creado sin apellido nace inválido para lo único que lo creamos.
@@ -143,7 +153,7 @@ const EMPTY_CLIENT = {
   email: '',
   price_list_id: '',
   vendedora_id: '',
-  scCreate: true,
+  scCreate: SC_CREATE_ENABLED,
 }
 
 // Chequeo laxo de email (algo@algo.algo): atajar el typo obvio sin rechazar
@@ -337,6 +347,12 @@ export default function ClientsAdmin() {
   // (2026-09-03): el form del panel tiene su propio campo de correo — si no
   // viene, se usa el guardado del cliente.
   const createSc = async (client, { first, last, email, force }) => {
+    if (!SC_CREATE_ENABLED) {
+      // Candado del hotfix 2026-09-09: la UI ya no ofrece crear; esto es por
+      // si algún camino viejo llega igual. El cliente local no se toca.
+      setScPanel((p) => ({ ...p, status: 'failed', message: t('scCreateDisabled') }))
+      return
+    }
     setScPanel((p) => ({ ...p, status: 'creating', message: null }))
     try {
       const data = await invokeSc({
@@ -595,7 +611,7 @@ export default function ClientsAdmin() {
     setNewClientError('')
     // Con "Crear también en SellerCloud" el nombre viene PARTIDO (SellerCloud
     // exige apellido para las órdenes) y el name local se compone de ambos.
-    const scOn = !!newClientForm.scCreate
+    const scOn = SC_CREATE_ENABLED && !!newClientForm.scCreate
     const first = newClientForm.firstName.trim()
     const last = newClientForm.lastName.trim()
     const name = scOn ? `${first} ${last}`.trim() : newClientForm.name.trim()
@@ -938,7 +954,8 @@ export default function ClientsAdmin() {
           <p className="text-sm text-primary/70">
             {scPanel.candidates.length > 0 ? (
               <>
-                <span className="font-semibold">{t('scLooksExisting')}</span> {t('scPickToLink')}
+                <span className="font-semibold">{t('scLooksExisting')}</span>{' '}
+                {SC_CREATE_ENABLED ? t('scPickToLink') : t('scPickToLinkOnly')}
               </>
             ) : (
               t('scNoCandidates')
@@ -968,7 +985,10 @@ export default function ClientsAdmin() {
               ))}
             </ul>
           )}
-          {scPanel.afterCreate ? (
+          {!SC_CREATE_ENABLED ? (
+            // Hotfix 2026-09-09: sin alta, el panel solo busca y vincula.
+            <p className="text-xs text-primary/50">{t('scCreateDisabled')}</p>
+          ) : scPanel.afterCreate ? (
             // Vino del alta: nombre y apellido ya están — crear igual es un
             // solo click, explícito.
             <button
@@ -1198,10 +1218,16 @@ export default function ClientsAdmin() {
               <p className="flex items-center text-xs text-primary/50">{t('assignedToYou')}</p>
             )
           })()}
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-primary/70 md:col-span-2">
+          <label
+            className={`flex items-center gap-2 text-sm md:col-span-2 ${
+              SC_CREATE_ENABLED ? 'cursor-pointer text-primary/70' : 'cursor-not-allowed text-primary/40'
+            }`}
+            title={SC_CREATE_ENABLED ? undefined : t('scCreateDisabled')}
+          >
             <input
               type="checkbox"
-              checked={newClientForm.scCreate}
+              checked={SC_CREATE_ENABLED && newClientForm.scCreate}
+              disabled={!SC_CREATE_ENABLED}
               onChange={(e) => {
                 const on = e.target.checked
                 // Al prender con un nombre ya tipeado, se parte para no
@@ -1217,7 +1243,9 @@ export default function ClientsAdmin() {
               className="h-4 w-4 accent-secondary"
             />
             📦 {t('scCreateToggle')}
-            <span className="text-xs text-primary/40">— {t('scCreateToggleHint')}</span>
+            <span className="text-xs text-primary/40">
+              — {SC_CREATE_ENABLED ? t('scCreateToggleHint') : t('scCreateDisabled')}
+            </span>
           </label>
           {newClientError && (
             <p className="text-sm text-red-600 dark:text-red-400 md:col-span-2">{newClientError}</p>

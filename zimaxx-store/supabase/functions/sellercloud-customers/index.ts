@@ -41,6 +41,13 @@ import {
   type CustomerSummary,
 } from '../sellercloud-push-order/sellercloud.ts'
 
+// Alta DESACTIVADA (hotfix 2026-09-09): la creación de customers se está
+// reparando en otra rama. El candado va también acá porque un bundle viejo
+// abierto en un navegador seguiría mandando action:'create'. 'search' y
+// 'link' siguen funcionando. Para reactivar: true + redeploy de esta función
+// (y SC_CREATE_ENABLED en src/pages/admin/ClientsAdmin.jsx).
+const CREATE_ENABLED = false
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')
 
@@ -286,6 +293,9 @@ Deno.serve(async (req) => {
 
   // ---------- create ----------
   if (action === 'create') {
+    if (!CREATE_ENABLED) {
+      return json({ error: 'El alta de clientes en SellerCloud está temporalmente desactivada.' }, 503)
+    }
     const clientId = String(body.client_id ?? '')
     const firstName = String(body.first_name ?? '').trim()
     const lastName = String(body.last_name ?? '').trim()
