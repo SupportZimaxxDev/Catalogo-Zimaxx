@@ -57,12 +57,19 @@ import {
   type CustomerSummary,
 } from '../sellercloud-push-order/sellercloud.ts'
 
-// Alta DESACTIVADA (hotfix 2026-09-09): la creación de customers se está
-// reparando en otra rama. El candado va también acá porque un bundle viejo
-// abierto en un navegador seguiría mandando action:'create'. 'search' y
-// 'link' siguen funcionando. Para reactivar: true + redeploy de esta función
-// (y SC_CREATE_ENABLED en src/pages/admin/ClientsAdmin.jsx).
-const CREATE_ENABLED = false
+// Candado del alta (hotfix 2026-09-09): con false, action:'create' responde
+// 503 antes de leer nada — va también acá porque un bundle viejo abierto en un
+// navegador seguiría mandando create. 'search', 'link' y 'update' no se tocan.
+// Pareja de SC_CREATE_ENABLED en src/pages/admin/ClientsAdmin.jsx.
+//
+// VALOR POR RAMA (decisión del usuario, 2026-09-10):
+//   * main / producción → false (la versión viva v4 lo tiene en false).
+//   * dev → true: es la rama donde se repara la creación de clientes y para
+//     probarla la función tiene que aceptar create.
+// Al redesplegar desde dev, el candado del servidor se abre para TODOS los
+// frontends; la protección que queda en producción es el flag del frontend de
+// main (toggle deshabilitado + guard en createSc).
+const CREATE_ENABLED = true
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')

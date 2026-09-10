@@ -131,8 +131,26 @@ const LIST_CODE_ALIASES = {
   special: 'special',
 }
 
+// Candado del alta en SellerCloud (hotfix 2026-09-09). Con el flag en false,
+// el toggle del alta se muestra apagado y deshabilitado, el panel SellerCloud
+// no ofrece "Crear en SellerCloud" (buscar y vincular siguen andando) y
+// createSc corta antes de llamar a la Edge Function. Va en pareja con
+// CREATE_ENABLED en supabase/functions/sellercloud-customers/index.ts.
+//
+// VALOR POR RAMA (decisión del usuario, 2026-09-10):
+//   * main / producción → false: el alta quedó apagada el 09-09 mientras se
+//     repara, y así sigue desplegada.
+//   * dev → true: ES la rama donde se repara la creación de clientes, así que
+//     acá no puede estar bloqueada.
+// Antes de deployar dev a producción, decidir a conciencia este valor (con
+// true, el alta se reactiva para todas las vendedoras). En un conflicto de
+// merge sobre esta zona, conservar el bloque completo del flag y elegir el
+// valor según la rama destino.
+const SC_CREATE_ENABLED = true
+
 // scCreate (2026-09-02): "Crear también en SellerCloud" — prendido por
-// defecto; al elegir la lista 'quote' (cliente de cotización) se apaga solo.
+// defecto (mientras SC_CREATE_ENABLED lo permita); al elegir la lista 'quote'
+// (cliente de cotización) se apaga solo.
 // Con el toggle ON el nombre se pide PARTIDO (nombre + apellido): SellerCloud
 // valida Last Name al crear órdenes ("Customer's last name is not valid") y
 // un customer creado sin apellido nace inválido para lo único que lo creamos.
@@ -144,7 +162,7 @@ const EMPTY_CLIENT = {
   email: '',
   price_list_id: '',
   vendedora_id: '',
-  scCreate: true,
+  scCreate: SC_CREATE_ENABLED,
   // Ficha SellerCloud (2026-09-09), ver PROFILE_KEYS.
   business_name: '',
   sc_customer_group_id: '',
@@ -602,6 +620,12 @@ export default function ClientsAdmin() {
   // (2026-09-03): el form del panel tiene su propio campo de correo — si no
   // viene, se usa el guardado del cliente.
   const createSc = async (client, { first, last, email, force }) => {
+    if (!SC_CREATE_ENABLED) {
+      // Candado del hotfix 2026-09-09: la UI ya no ofrece crear; esto es por
+      // si algún camino viejo llega igual. El cliente local no se toca.
+      setScPanel((p) => ({ ...p, status: 'failed', message: t('scCreateDisabled') }))
+      return
+    }
     setScPanel((p) => ({ ...p, status: 'creating', message: null }))
     try {
       const data = await invokeSc({
@@ -901,7 +925,7 @@ export default function ClientsAdmin() {
     setNewClientError('')
     // Con "Crear también en SellerCloud" el nombre viene PARTIDO (SellerCloud
     // exige apellido para las órdenes) y el name local se compone de ambos.
-    const scOn = !!newClientForm.scCreate
+    const scOn = SC_CREATE_ENABLED && !!newClientForm.scCreate
     const first = newClientForm.firstName.trim()
     const last = newClientForm.lastName.trim()
     const name = scOn ? `${first} ${last}`.trim() : newClientForm.name.trim()
@@ -1260,7 +1284,9 @@ export default function ClientsAdmin() {
 
   // Columnas de la tabla según la vista (los colSpan de las filas
   // desplegadas — correo, panel SellerCloud, edición de la ficha — usan esto).
-  const colCount = fullView ? 13 : 6
+  // Desde 2026-09-10 el teléfono va DEBAJO del nombre en la misma celda (a
+  // pedido del usuario), así que la columna Tel ya no existe: 5 / 12.
+  const colCount = fullView ? 12 : 5
   // Vista completa: la columna Nombre queda fija al desplazar a los lados
   // (fondo sólido para tapar lo que pasa por debajo) y el contenido de las
   // filas desplegadas (ficha en edición, panel SellerCloud) se queda a la
@@ -1417,7 +1443,8 @@ export default function ClientsAdmin() {
           <p className="text-sm text-primary/70">
             {scPanel.candidates.length > 0 ? (
               <>
-                <span className="font-semibold">{t('scLooksExisting')}</span> {t('scPickToLink')}
+                <span className="font-semibold">{t('scLooksExisting')}</span>{' '}
+                {SC_CREATE_ENABLED ? t('scPickToLink') : t('scPickToLinkOnly')}
               </>
             ) : (
               t('scNoCandidates')
@@ -1447,7 +1474,10 @@ export default function ClientsAdmin() {
               ))}
             </ul>
           )}
-          {scPanel.afterCreate ? (
+          {!SC_CREATE_ENABLED ? (
+            // Hotfix 2026-09-09: sin alta, el panel solo busca y vincula.
+            <p className="text-xs text-primary/50">{t('scCreateDisabled')}</p>
+          ) : scPanel.afterCreate ? (
             // Vino del alta: nombre y apellido ya están — crear igual es un
             // solo click, explícito.
             <button
@@ -1773,10 +1803,16 @@ export default function ClientsAdmin() {
             <p className="mb-2 text-[11px] text-primary/50">{t('scProfileHint')}</p>
             {profileFields(newClientForm, (patch) => setNewClientForm((f) => ({ ...f, ...patch })))}
           </fieldset>
-          <label className="flex min-w-0 cursor-pointer flex-wrap items-center gap-2 text-sm text-primary/70 md:col-span-2">
+          <label
+            className={`flex min-w-0 flex-wrap items-center gap-2 text-sm md:col-span-2 ${
+              SC_CREATE_ENABLED ? 'cursor-pointer text-primary/70' : 'cursor-not-allowed text-primary/40'
+            }`}
+            title={SC_CREATE_ENABLED ? undefined : t('scCreateDisabled')}
+          >
             <input
               type="checkbox"
-              checked={newClientForm.scCreate}
+              checked={SC_CREATE_ENABLED && newClientForm.scCreate}
+              disabled={!SC_CREATE_ENABLED}
               onChange={(e) => {
                 const on = e.target.checked
                 // Al prender con un nombre ya tipeado, se parte para no
@@ -1792,7 +1828,9 @@ export default function ClientsAdmin() {
               className="h-4 w-4 accent-secondary"
             />
             📦 {t('scCreateToggle')}
-            <span className="text-xs text-primary/40">— {t('scCreateToggleHint')}</span>
+            <span className="text-xs text-primary/40">
+              — {SC_CREATE_ENABLED ? t('scCreateToggleHint') : t('scCreateDisabled')}
+            </span>
           </label>
           {newClientError && (
             <p className="text-sm text-red-600 dark:text-red-400 md:col-span-2">{newClientError}</p>
@@ -1972,7 +2010,6 @@ export default function ClientsAdmin() {
             <tr className="border-b border-line text-left text-[11px] uppercase tracking-wider text-primary/45">
               <th className={`p-3 ${stickyCol}`}>{t('name')}</th>
               {fullView && <th className="p-3">{t('businessName')}</th>}
-              <th className="p-3">Tel</th>
               {fullView && <th className="p-3">{t('email')}</th>}
               <th className="p-3">SellerCloud</th>
               {fullView && <th className="p-3">{t('scGroup')}</th>}
@@ -1989,38 +2026,30 @@ export default function ClientsAdmin() {
             {filtered.slice(0, visibleRows).map((c) => (
               <Fragment key={c.id}>
               <tr className="border-b border-line/60 transition-colors hover:bg-gold-pale/20">
+                {/* Nombre + teléfono en UNA celda (2026-09-10, a pedido del
+                    usuario: "quita la columna de teléfono y haz que salga
+                    debajo del nombre"). El teléfono va en mono chico bajo el
+                    nombre. La flechita ✉️ del correo (2026-09-08) sigue
+                    pegada al teléfono y solo en la compacta — en la completa
+                    el correo tiene columna propia. Al editar, los tres inputs
+                    (nombre, teléfono, correo) van apilados acá mismo; vacío en
+                    correo = sin correo. */}
                 <td className={`p-3 font-medium ${stickyCol}`}>
                   {editForm?.clientId === c.id ? (
-                    <input
-                      autoFocus
-                      value={editForm.name}
-                      onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-                      onKeyDown={editKeys}
-                      className="w-40 rounded-lg border border-secondary/60 bg-surface px-2 py-1 text-xs font-normal outline-none transition-colors focus:border-secondary"
-                    />
-                  ) : (
-                    c.name
-                  )}
-                </td>
-                {fullView && (
-                  <td className="p-3 text-xs text-primary/70">
-                    {c.business_name || <span className="text-primary/30">—</span>}
-                  </td>
-                )}
-                {/* Tel + correo (2026-09-08): el correo vuelve a verse, pero
-                    NO en línea (ensanchaba la columna y cortaba "Eliminar"):
-                    una flechita junto al teléfono, solo si hay correo, abre
-                    una fila debajo con el correo y Copiar. Al editar, el input
-                    de correo va bajo el del teléfono; vacío = sin correo. */}
-                <td className="p-3 font-mono text-xs text-primary/60">
-                  {editForm?.clientId === c.id ? (
                     <div className="flex flex-col gap-1">
+                      <input
+                        autoFocus
+                        value={editForm.name}
+                        onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                        onKeyDown={editKeys}
+                        className="w-44 rounded-lg border border-secondary/60 bg-surface px-2 py-1 text-xs font-normal outline-none transition-colors focus:border-secondary"
+                      />
                       <input
                         inputMode="tel"
                         value={editForm.phone}
                         onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
                         onKeyDown={editKeys}
-                        className="w-32 rounded-lg border border-secondary/60 bg-surface px-2 py-1 font-mono text-xs outline-none transition-colors focus:border-secondary"
+                        className="w-44 rounded-lg border border-secondary/60 bg-surface px-2 py-1 font-mono text-xs font-normal outline-none transition-colors focus:border-secondary"
                       />
                       <input
                         type="email"
@@ -2028,28 +2057,34 @@ export default function ClientsAdmin() {
                         value={editForm.email}
                         onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
                         onKeyDown={editKeys}
-                        className="w-44 rounded-lg border border-secondary/60 bg-surface px-2 py-1 font-mono text-xs outline-none transition-colors focus:border-secondary"
+                        className="w-44 rounded-lg border border-secondary/60 bg-surface px-2 py-1 font-mono text-xs font-normal outline-none transition-colors focus:border-secondary"
                       />
                     </div>
                   ) : (
-                    <span className="flex items-center gap-1.5 whitespace-nowrap">
-                      {c.phone}
-                      {/* En la vista completa el correo tiene columna propia:
-                          la flechita solo va en la compacta. */}
-                      {c.email && !fullView && (
-                        <button
-                          onClick={() => toggleEmail(c.id)}
-                          aria-expanded={emailOpen.has(c.id)}
-                          aria-label={t(emailOpen.has(c.id) ? 'hideEmail' : 'showEmail')}
-                          title={t(emailOpen.has(c.id) ? 'hideEmail' : 'showEmail')}
-                          className="rounded-md px-1 text-[11px] leading-none text-primary/50 transition-colors hover:bg-gold-pale/60 hover:text-primary"
-                        >
-                          ✉️ {emailOpen.has(c.id) ? '▴' : '▾'}
-                        </button>
-                      )}
-                    </span>
+                    <div className="flex flex-col gap-0.5">
+                      <span>{c.name}</span>
+                      <span className="flex items-center gap-1.5 whitespace-nowrap font-mono text-xs font-normal text-primary/60">
+                        {c.phone}
+                        {c.email && !fullView && (
+                          <button
+                            onClick={() => toggleEmail(c.id)}
+                            aria-expanded={emailOpen.has(c.id)}
+                            aria-label={t(emailOpen.has(c.id) ? 'hideEmail' : 'showEmail')}
+                            title={t(emailOpen.has(c.id) ? 'hideEmail' : 'showEmail')}
+                            className="rounded-md px-1 text-[11px] leading-none text-primary/50 transition-colors hover:bg-gold-pale/60 hover:text-primary"
+                          >
+                            ✉️ {emailOpen.has(c.id) ? '▴' : '▾'}
+                          </button>
+                        )}
+                      </span>
+                    </div>
                   )}
                 </td>
+                {fullView && (
+                  <td className="p-3 text-xs text-primary/70">
+                    {c.business_name || <span className="text-primary/30">—</span>}
+                  </td>
+                )}
                 {fullView && (
                   <td className="p-3 font-mono text-xs text-primary/60">
                     {c.email ? (
