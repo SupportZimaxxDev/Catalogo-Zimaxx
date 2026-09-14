@@ -23,6 +23,8 @@ const ACTION_STYLES = {
   update_client_info: 'bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300',
   set_client_sellercloud_id: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
   update_client_sc_profile: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
+  update_client_address: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
+  sync_client_address: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
   reassign_client: 'bg-gold-pale text-secondary-dark',
   edit_order_items: 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
   update_order_status: 'bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300',
@@ -51,6 +53,8 @@ const ACTION_LABELS = {
   update_client_info: 'actionUpdateClientInfo',
   set_client_sellercloud_id: 'actionSetSellercloudId',
   update_client_sc_profile: 'actionUpdateClientScProfile',
+  update_client_address: 'actionUpdateClientAddress',
+  sync_client_address: 'actionSyncClientAddress',
   edit_order_items: 'actionEditOrder',
   update_order_status: 'actionUpdateOrderStatus',
   convert_quote_to_order: 'actionConvertQuote',
@@ -79,6 +83,7 @@ const ACTION_FILTERS = [
   ['update_client_info', 'actionUpdateClientInfo'],
   ['set_client_sellercloud_id', 'actionSetSellercloudId'],
   ['update_client_sc_profile', 'actionUpdateClientScProfile'],
+  ['update_client_address,sync_client_address', 'actionUpdateClientAddress'],
   ['edit_order_items', 'actionEditOrder'],
   ['update_order_status', 'actionUpdateOrderStatus'],
   ['convert_quote_to_order', 'actionConvertQuote'],
@@ -186,6 +191,32 @@ export default function AuditLogAdmin() {
       if ('to_salesman' in d) parts.push(`${t('scSalesman')}: ${arrow(d.from_salesman, d.to_salesman)}`)
       if ('to_comments' in d) parts.push(`${t('scComments')}: ${arrow(d.from_comments, d.to_comments)}`)
       return parts.join(' · ')
+    }
+    // Dirección del cliente (2026-09-14): la RPC guarda from_x/to_x solo de
+    // lo que cambió; el sync a SellerCloud guarda la dirección completa + el
+    // ID de la dirección allá.
+    if (a.action === 'update_client_address') {
+      const d = a.detail ?? {}
+      const arrow = (from, to) => `${from ?? '—'} → ${to ?? '—'}`
+      const parts = []
+      if ('to_line1' in d) parts.push(`${t('addressLine1')}: ${arrow(d.from_line1, d.to_line1)}`)
+      if ('to_line2' in d) parts.push(`${t('addressLine2')}: ${arrow(d.from_line2, d.to_line2)}`)
+      if ('to_city' in d) parts.push(`${t('addressCity')}: ${arrow(d.from_city, d.to_city)}`)
+      if ('to_state' in d) parts.push(`${t('addressState')}: ${arrow(d.from_state, d.to_state)}`)
+      if ('to_zip' in d) parts.push(`${t('addressZip')}: ${arrow(d.from_zip, d.to_zip)}`)
+      if ('to_country' in d) parts.push(`${t('addressCountry')}: ${arrow(d.from_country, d.to_country)}`)
+      return parts.join(' · ')
+    }
+    if (a.action === 'sync_client_address') {
+      const d = a.detail ?? {}
+      const addr = [
+        [d.line1, d.line2].filter(Boolean).join(', '),
+        [d.city, [d.state, d.zip].filter(Boolean).join(' ')].filter(Boolean).join(', '),
+        d.country,
+      ]
+        .filter(Boolean)
+        .join(', ')
+      return `SC #${d.sellercloud_id ?? '—'} · ${addr}${d.sc_address_id ? ` · #${d.sc_address_id}` : ''}`
     }
     if (a.action === 'edit_order_items') {
       const before = a.detail?.before_items?.length ?? 0

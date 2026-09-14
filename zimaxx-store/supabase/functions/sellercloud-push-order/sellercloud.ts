@@ -785,6 +785,173 @@ export async function addCustomerToGroup(
   }
 }
 
+// ---------- Dirección del customer (2026-09-14) ----------
+// El create NO acepta dirección: va aparte con PUT /Customers/{id}/Addresses
+// {Addresses: UserAddressDto[]} (Swagger real). Cada dirección exige ID (0 =
+// nueva), AddressSource, AddressStatus, IsShippingAddress, IsBillingAddress,
+// Country, City, ZipCode y Address; el resto es opcional. El Swagger no dice
+// si el PUT reemplaza la lista entera o la mezcla, así que se manda la lista
+// COMPLETA leída del customer (GET) con la nuestra adelante: si reemplaza,
+// nada se pierde; si mezcla, las existentes viajan con su ID y quedan igual.
+// Después se relee el customer y se busca la nuestra — si no aparece, es
+// error, porque la orden rebotaría igual por "sin dirección". UNA sola
+// dirección por cliente, marcada como envío Y facturación (decisión del
+// usuario); el estado es obligatorio para todos los países (ídem).
+export type CustomerAddress = {
+  line1: string
+  line2?: string | null
+  city: string
+  state?: string | null
+  zip: string
+  country: string
+  contactName?: string | null
+  companyName?: string | null
+  phone?: string | null
+  id?: number | null // UserAddressDto.ID ya conocido (clients.sc_address_id)
+}
+
+// Enums del UserAddressDto (Swagger): AddressSource 0 = LocalSite;
+// AddressStatus 2 = Confirmed (la carga la vendedora hablando con el cliente).
+export const ADDRESS_SOURCE_LOCAL_SITE = 0
+export const ADDRESS_STATUS_CONFIRMED = 2
+
+// Qué falta para que la dirección sea válida para SellerCloud Y para el
+// negocio. Vacío = completa.
+export function addressMissing(a: Partial<CustomerAddress> | null | undefined): string[] {
+  const s = (v: unknown) => String(v ?? '').trim()
+  const missing: string[] = []
+  if (!s(a?.line1)) missing.push('calle')
+  if (!s(a?.city)) missing.push('ciudad')
+  if (!s(a?.state)) missing.push('estado')
+  if (!s(a?.zip)) missing.push('código postal')
+  if (!s(a?.country)) missing.push('país')
+  return missing
+}
+
+const addrKey = (v: unknown) => String(v ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
+// La dirección del negocio → UserAddressDto.
+export function addressDto(a: CustomerAddress, id = 0): Record<string, unknown> {
+  const s = (v: unknown) => String(v ?? '').trim()
+  return {
+    ID: id,
+    AddressSource: ADDRESS_SOURCE_LOCAL_SITE,
+    AddressStatus: ADDRESS_STATUS_CONFIRMED,
+    IsShippingAddress: true,
+    IsBillingAddress: true,
+    ContactName: s(a.contactName),
+    CompanyName: s(a.companyName),
+    Address: s(a.line1),
+    Address2: s(a.line2),
+    City: s(a.city),
+    State: s(a.state),
+    Region: '',
+    ZipCode: s(a.zip),
+    Country: s(a.country).toUpperCase(),
+    Phone: s(a.phone),
+    Fax: '',
+  }
+}
+
+// Busca en la lista Addresses del customer la entrada que es "la nuestra":
+// por ID si lo sabemos; si no, por calle + código postal normalizados (así
+// un reintento después de un PUT que sí entró no la duplica).
+export function findAddress(
+  list: unknown,
+  a: { id?: number | null; line1: string; zip: string },
+): Record<string, unknown> | null {
+  if (!Array.isArray(list)) return null
+  const rows = list.filter((x) => x && typeof x === 'object') as Record<string, unknown>[]
+  if (a.id) {
+    const byId = rows.find((r) => Number(pick(r, 'ID', 'Id', 'id')) === Number(a.id))
+    if (byId) return byId
+  }
+  const k1 = addrKey(a.line1)
+  const kz = addrKey(a.zip)
+  if (!k1) return null
+  return (
+    rows.find(
+      (r) =>
+        addrKey(pick(r, 'Address', 'Address1', 'StreetLine1')) === k1 &&
+        addrKey(pick(r, 'ZipCode', 'PostalCode')) === kz,
+    ) ?? null
+  )
+}
+
+export function addressIdOf(row: Record<string, unknown> | null): number | null {
+  if (!row) return null
+  const n = Number(pick(row, 'ID', 'Id', 'id'))
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
+// Body del PUT: la lista existente del customer con la nuestra adelante. Si
+// la nuestra ya está (por ID o por contenido) se actualiza EN SU LUGAR con su
+// ID; si no, va con ID 0 (nueva). Las demás viajan tal cual vinieron.
+export function customerAddressesBody(
+  existing: unknown,
+  a: CustomerAddress,
+): { Addresses: Record<string, unknown>[] } {
+  const rows = (Array.isArray(existing) ? existing : []).filter(
+    (x) => x && typeof x === 'object',
+  ) as Record<string, unknown>[]
+  const mine = findAddress(rows, a)
+  const mineId = addressIdOf(mine) ?? 0
+  const others = rows.filter((r) => r !== mine)
+  const ours = mine ? { ...mine, ...addressDto(a, mineId) } : addressDto(a, 0)
+  return { Addresses: [ours, ...others] }
+}
+
+// PUT + relectura. Devuelve el ID de la dirección en SellerCloud una vez
+// verificada. Lanza si la dirección está incompleta, si el PUT falla o si al
+// releer no aparece: las tres cosas son ERROR para el llamador (no warning),
+// porque un customer sin dirección no puede recibir órdenes.
+export async function setCustomerAddress(
+  cfg: Config,
+  token: string,
+  customerId: number,
+  a: CustomerAddress,
+  f: Fetcher = fetch,
+): Promise<{ id: number; replaced: boolean; sent: number }> {
+  const missing = addressMissing(a)
+  if (missing.length) {
+    throw new Error(`dirección incompleta para SellerCloud: falta ${missing.join(', ')}`)
+  }
+  const before = await getCustomer(cfg, token, customerId, f)
+  const list = pick(before, 'Addresses', 'addresses', 'General.Addresses')
+  const body = customerAddressesBody(list, a)
+  const ourId = Number(body.Addresses[0].ID)
+  const replaced = ourId > 0
+  const url = `${cfg.baseUrl}/rest/api/Customers/${customerId}/Addresses`
+  const res = await f(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  const text = await readBody(res)
+  if (!res.ok) {
+    throw failure(`No se pudo cargar la dirección del cliente ${customerId} en SellerCloud`, url, res, text)
+  }
+
+  const after = await getCustomer(cfg, token, customerId, f)
+  const found = findAddress(pick(after, 'Addresses', 'addresses', 'General.Addresses'), {
+    id: replaced ? ourId : null,
+    line1: a.line1,
+    zip: a.zip,
+  })
+  const id = addressIdOf(found)
+  if (!id) {
+    throw new Error(
+      `SellerCloud aceptó la dirección del cliente ${customerId} pero al releer el customer no aparece` +
+        ` (${String(a.line1).trim()}, ${String(a.zip).trim()}). Revisala allá antes de mandar órdenes.`,
+    )
+  }
+  return { id, replaced, sent: body.Addresses.length }
+}
+
 export function customerDetails(customer: Record<string, unknown>) {
   const email = pick(customer, 'Email', 'email', 'UserName', 'Username', 'General.Email')
   const first = pick(customer, 'FirstName', 'firstName', 'General.FirstName', 'BillingAddress.FirstName')
@@ -876,10 +1043,14 @@ export function addressesOf(customer: Record<string, unknown>) {
     // Lista presente pero vacía = el cliente de verdad no tiene dirección
     // cargada: eso se arregla en SellerCloud, no acá.
     if (Array.isArray(list)) {
-      throw new Error(
+      // code (2026-09-14): el panel de Pedidos lo usa para ofrecer "Cargar
+      // dirección y reenviar" en vez de mandar a la vendedora a SellerCloud.
+      const err = new Error(
         'El cliente en SellerCloud no tiene ninguna dirección cargada (la lista' +
           ' Addresses vino vacía): cargásela allá y volvé a intentar',
-      )
+      ) as Error & { code?: string }
+      err.code = 'customer_no_address'
+      throw err
     }
     // Si SÍ la hay pero bajo una clave que no mapeamos, las claves recibidas
     // dicen dónde está para ajustar el pick de una.

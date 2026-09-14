@@ -46,13 +46,16 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4'
 import {
   addCustomerToGroup,
+  addressMissing,
   createCustomer,
   getCustomer,
   getToken,
   normalizeBaseUrl,
   searchCustomers,
+  setCustomerAddress,
   updateCustomer,
   type Config,
+  type CustomerAddress,
   type CustomerFields,
   type CustomerSummary,
 } from '../sellercloud-push-order/sellercloud.ts'
@@ -62,14 +65,17 @@ import {
 // navegador seguiría mandando create. 'search', 'link' y 'update' no se tocan.
 // Pareja de SC_CREATE_ENABLED en src/pages/admin/ClientsAdmin.jsx.
 //
-// VALOR (decisión del usuario, 2026-09-14): false en las DOS ramas. El 09-10
-// dev había quedado en true para reparar la creación de clientes, y la v6
-// desplegada desde dev el 09-11 dejó este candado ABIERTO en producción; el
-// 09-14 el usuario pidió volver a bloquear el alta y la función se redespliega
-// con false. Este valor rige para TODOS los frontends que la llamen: si alguna
-// vez vuelve a true, un bundle con SC_CREATE_ENABLED = false queda protegido
-// solo por su propio flag.
-const CREATE_ENABLED = false
+// VALOR POR RAMA (decisión del usuario, 2026-09-14):
+//   * main / producción → false: la v7 viva (09-14) lo tiene en false.
+//   * dev → true: es la rama donde se repara la creación de clientes y para
+//     probarla la función tiene que aceptar create.
+// OJO: `functions deploy` sube el ÁRBOL DE TRABAJO, no la rama main — la v6
+// del 09-11 se desplegó desde dev con true y dejó este candado ABIERTO en
+// producción hasta la v7. Antes de redesplegar esta función, poner false acá
+// (salvo que se esté reactivando el alta a conciencia). Este valor rige para
+// TODOS los frontends que la llamen; un bundle con SC_CREATE_ENABLED = false
+// queda protegido solo por su propio flag.
+const CREATE_ENABLED = true
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')
@@ -146,23 +152,70 @@ type ClientRow = {
   sc_account_manager_id?: number | null
   sc_salesman?: string | null
   sc_comments?: string | null
+  // Dirección (2026-09-14, migration-2026-09-14-client-address.sql): una
+  // sola, envío = facturación; obligatoria para crear el customer.
+  address_line1?: string | null
+  address_line2?: string | null
+  address_city?: string | null
+  address_state?: string | null
+  address_zip?: string | null
+  address_country?: string | null
+  sc_address_id?: number | null
 }
 
-const CLIENT_COLS_FULL =
+const CLIENT_COLS_PROFILE =
   'id, name, phone, email, sellercloud_id, business_name, sc_customer_group_id, sc_customer_group_name, sc_account_manager_id, sc_salesman, sc_comments'
+const CLIENT_COLS_FULL =
+  CLIENT_COLS_PROFILE +
+  ', address_line1, address_line2, address_city, address_state, address_zip, address_country, sc_address_id'
 const CLIENT_COLS_LEGACY = 'id, name, phone, email, sellercloud_id'
 
+// Tres shapes, del más nuevo al más viejo: con dirección (09-14), con ficha
+// (09-09) y el original. 42703 = columna inexistente = esa migración todavía
+// no corrió; se cae al anterior en vez de romper. Sin la 09-14, `create`
+// responde 400 "falta la dirección" — correcto: sin la migración no hay
+// dónde cargarla, y sin dirección no se crea.
 async function loadClient(
   caller: ReturnType<typeof createClient>,
   clientId: string,
 ): Promise<{ client: ClientRow | null; error: string | null }> {
   let res = await caller.from('clients').select(CLIENT_COLS_FULL).eq('id', clientId).maybeSingle()
   if (res.error?.code === '42703') {
+    res = await caller.from('clients').select(CLIENT_COLS_PROFILE).eq('id', clientId).maybeSingle()
+  }
+  if (res.error?.code === '42703') {
     res = await caller.from('clients').select(CLIENT_COLS_LEGACY).eq('id', clientId).maybeSingle()
   }
   if (res.error) return { client: null, error: res.error.message }
   return { client: (res.data as ClientRow | null) ?? null, error: null }
 }
+
+// La dirección de la fila local como la espera setCustomerAddress. El
+// contacto es el nombre completo (el push la parte en nombre/apellido por la
+// primera palabra al armar la orden — toOrderAddress), la empresa es la de la
+// ficha y el teléfono el del cliente.
+function addressOf(client: ClientRow, contactName?: string | null, phone?: string | null): CustomerAddress {
+  return {
+    line1: client.address_line1 ?? '',
+    line2: client.address_line2 ?? null,
+    city: client.address_city ?? '',
+    state: client.address_state ?? null,
+    zip: client.address_zip ?? '',
+    country: client.address_country ?? '',
+    contactName: contactName || client.name,
+    companyName: client.business_name ?? null,
+    phone: phone || digits(client.phone) || null,
+    id: client.sc_address_id ?? null,
+  }
+}
+
+// ¿Hay algo cargado? Para 'update': sin dirección local no hay nada que
+// mandar; con una a medias, es error — nunca viaja incompleta.
+const hasAnyAddress = (c: ClientRow) =>
+  !!(c.address_line1 || c.address_city || c.address_state || c.address_zip || c.address_country)
+
+const addressText = (a: CustomerAddress) =>
+  `${a.line1}, ${a.city}, ${a.state ?? ''} ${a.zip}, ${a.country}`.replace(/\s+/g, ' ').trim()
 
 // La ficha que viaja a SellerCloud, desde la fila local. El teléfono entra
 // acá también (Phone1 va en el mismo PUT). El grupo se maneja aparte (es otro
@@ -221,6 +274,55 @@ async function pushProfile(
     }
   }
   return { applied, group, warnings }
+}
+
+// PUT /Customers/{id}/Addresses + relectura + anotación local
+// (mark_client_sc_address, con el JWT del caller). A diferencia de la ficha,
+// un fallo acá NO es un warning: sin dirección el customer no puede recibir
+// órdenes (el push las rechaza), así que el resultado viaja aparte en la
+// respuesta (address_status / address_error) y la fila queda marcada en rojo
+// con "Reintentar". Nunca lanza: el customer ya existe y se vincula igual.
+async function pushAddress(
+  caller: ReturnType<typeof createClient>,
+  cfg: Config,
+  token: string,
+  scId: number,
+  client: ClientRow,
+  opts: { contactName?: string | null; phone?: string | null; logContext: Record<string, unknown> },
+): Promise<{ ok: boolean; id: number | null; error: string | null }> {
+  const addr = addressOf(client, opts.contactName, opts.phone)
+  const ctx = { ...opts.logContext, sellercloud_id: scId, address: addressText(addr) }
+  try {
+    const { id, replaced } = await setCustomerAddress(cfg, token, scId, addr)
+    const { error: markError } = await caller.rpc('mark_client_sc_address', {
+      p_client_id: client.id,
+      p_sc_address_id: id,
+      p_error: null,
+    })
+    if (markError) {
+      // La dirección SÍ está allá; solo falló anotarlo acá (o la migración
+      // 09-14 no corrió). Se deja rastro, pero no es "sin dirección".
+      await logCustomers(caller, 'warning', 'address_annotate_failed', markError.message, {
+        ...ctx,
+        sc_address_id: id,
+      })
+    }
+    await logCustomers(
+      caller,
+      'info',
+      'address_ok',
+      `Dirección ${replaced ? 'actualizada' : 'cargada'} en SellerCloud (#${scId}, dirección ${id})`,
+      { ...ctx, sc_address_id: id, replaced },
+    )
+    return { ok: true, id, error: null }
+  } catch (e) {
+    const message = (e as Error).message ?? 'error desconocido'
+    // Mejor-esfuerzo: si la RPC no existe (migración sin correr) el error
+    // igual vuelve en la respuesta y queda en system_logs.
+    await caller.rpc('mark_client_sc_address', { p_client_id: client.id, p_sc_address_id: null, p_error: message })
+    await logCustomers(caller, 'error', 'address_failed', message, ctx)
+    return { ok: false, id: null, error: message }
+  }
 }
 
 // Un candidato como lo consume el panel. El teléfono no viene en el DTO del
@@ -435,6 +537,25 @@ Deno.serve(async (req) => {
       return json({ ok: true, already_linked: true, sellercloud_id: client.sellercloud_id })
     }
 
+    // Dirección obligatoria para crear (2026-09-14, decisión del usuario):
+    // sin calle/ciudad/estado/código postal/país completos NO se crea nada —
+    // un customer sin dirección no puede recibir órdenes (el push rebota con
+    // "Addresses vino vacía": 6 de 9 fallos en septiembre). Se valida ACÁ y
+    // no solo en el panel: un bundle viejo o un llamador ajeno no la saltea.
+    const missingAddress = addressMissing(addressOf(client))
+    if (missingAddress.length) {
+      return json(
+        {
+          error:
+            `falta la dirección del cliente para crearlo en SellerCloud (${missingAddress.join(', ')}). ` +
+            'Cargala en Clientes → Editar → Dirección.',
+          code: 'address_required',
+          missing: missingAddress,
+        },
+        400,
+      )
+    }
+
     const logContext = {
       client_id: clientId,
       client: client.name,
@@ -521,12 +642,31 @@ Deno.serve(async (req) => {
       )
     }
 
+    // Dirección (2026-09-14): PUT + relectura + anotación local, DESPUÉS del
+    // link para que el audit 'sync_client_address' lleve el sellercloud_id
+    // (mark_client_sc_address lo lee de la fila). Su resultado viaja aparte
+    // (address_status / address_error), no dentro de `warning`, porque sin
+    // ella el customer no sirve para órdenes. Si el link falló arriba, la
+    // dirección queda local y completa: al vincular a mano, la fila muestra
+    // "Enviar dirección".
+    const address = await pushAddress(caller, cfg, token, scId, client, {
+      contactName: `${firstName} ${lastName}`,
+      phone,
+      logContext,
+    })
+    const addressOut = {
+      address_status: address.ok ? 'ok' : 'failed',
+      sc_address_id: address.id,
+      address_error: address.error,
+    }
+
     await logCustomers(caller, 'info', 'create_ok', `Cliente creado en SellerCloud (#${scId})`, {
       ...logContext,
       sellercloud_id: scId,
       applied: pushed.applied,
       group: pushed.group,
       warning,
+      ...addressOut,
     })
     return json({
       ok: true,
@@ -535,6 +675,7 @@ Deno.serve(async (req) => {
       applied: pushed.applied,
       group: pushed.group,
       warning,
+      ...addressOut,
     })
   }
 
@@ -575,22 +716,36 @@ Deno.serve(async (req) => {
     }
     const pushed = await pushProfile(cfg, token, scId, client)
     const warning = pushed.warnings.length ? pushed.warnings.join(' ') : null
-    if (pushed.applied.length === 0 && pushed.group == null) {
-      // Nada entró: o la ficha está vacía (nada que mandar) o todo falló.
-      if (warning) {
-        await logCustomers(caller, 'error', 'update_failed', warning, logContext)
-        return json({ error: warning }, 502)
+    // Dirección (2026-09-14): si hay una cargada acá, va también (PUT +
+    // relectura). Una a medias es error (nunca viaja incompleta); sin nada
+    // cargado no se manda ni se marca — 'skipped'.
+    let address: { status: 'ok' | 'failed' | 'skipped'; id: number | null; error: string | null } = {
+      status: 'skipped',
+      id: null,
+      error: null,
+    }
+    if (hasAnyAddress(client)) {
+      const r = await pushAddress(caller, cfg, token, scId, client, { logContext })
+      address = { status: r.ok ? 'ok' : 'failed', id: r.id, error: r.error }
+    }
+    const addressOut = { address_status: address.status, sc_address_id: address.id, address_error: address.error }
+    if (pushed.applied.length === 0 && pushed.group == null && address.status !== 'ok') {
+      // Nada entró: o no había nada que mandar o todo falló.
+      const errText = [warning, address.error].filter(Boolean).join(' ')
+      if (errText) {
+        await logCustomers(caller, 'error', 'update_failed', errText, { ...logContext, ...addressOut })
+        return json({ error: errText, ...addressOut }, 502)
       }
-      return json({ ok: true, sellercloud_id: scId, applied: [], group: null, warning: null })
+      return json({ ok: true, sellercloud_id: scId, applied: [], group: null, warning: null, ...addressOut })
     }
     await logCustomers(
       caller,
-      warning ? 'warning' : 'info',
+      warning || address.status === 'failed' ? 'warning' : 'info',
       'update_ok',
       `Ficha actualizada en SellerCloud (#${scId})`,
-      { ...logContext, applied: pushed.applied, group: pushed.group, warning },
+      { ...logContext, applied: pushed.applied, group: pushed.group, warning, ...addressOut },
     )
-    return json({ ok: true, sellercloud_id: scId, applied: pushed.applied, group: pushed.group, warning })
+    return json({ ok: true, sellercloud_id: scId, applied: pushed.applied, group: pushed.group, warning, ...addressOut })
   }
 
   return json({ error: `acción desconocida: ${action}` }, 400)

@@ -21,13 +21,18 @@ const mod = await import(
 )
 const {
   addCustomerToGroup,
+  addressDto,
+  addressMissing,
   createCustomer,
+  customerAddressesBody,
   customerSummary,
   customerUpdateBody,
+  findAddress,
   getToken,
   listAllCustomers,
   resetTokenCache,
   searchCustomers,
+  setCustomerAddress,
   setCustomerPhone,
   updateCustomer,
 } = mod
@@ -52,6 +57,11 @@ const state = {
   createReturnsObject: false, // el POST contesta {Id: n} en vez del int pelado
   failPut: false,
   htmlOnSearch: false, // el GET contesta una página web (base URL mal cargada)
+  // Direcciones del customer (2026-09-14)
+  addresses: [],
+  nextAddressId: 9000,
+  failAddressPut: false,
+  addressPutIgnored: false,
 }
 
 const server = createServer((req, res) => {
@@ -110,6 +120,38 @@ const server = createServer((req, res) => {
       if (state.failPut) {
         res.writeHead(500, { 'Content-Type': 'application/json' })
         return res.end(JSON.stringify({ Message: 'boom' }))
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      return res.end('true')
+    }
+    // Detalle del customer (CustomerDetailsDto real: General/Personal/... +
+    // Addresses[]). La lista de direcciones vive en state.addresses.
+    if (/^\/rest\/api\/Customers\/\d+$/.test(url.pathname) && req.method === 'GET') {
+      const id = Number(url.pathname.split('/').pop())
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      return res.end(
+        JSON.stringify({
+          General: { ID: id, FirstName: 'Nombre', LastName: 'Apellido', Email: `c${id}@x.com` },
+          Personal: { Phone1: '3055550000' },
+          Addresses: state.addresses.map((a) => ({ ...a })),
+          NotesCount: 0,
+        }),
+      )
+    }
+    // PUT /Customers/{id}/Addresses (2026-09-14): reemplaza la lista; a las
+    // direcciones nuevas (ID 0) les asigna un ID. failAddressPut simula el
+    // rechazo; addressPutIgnored simula un server que contesta 200 pero no
+    // guarda nada (la relectura tiene que pescarlo).
+    if (/^\/rest\/api\/Customers\/\d+\/Addresses$/.test(url.pathname) && req.method === 'PUT') {
+      if (state.failAddressPut) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        return res.end(JSON.stringify({ Message: 'ZipCode is required' }))
+      }
+      if (!state.addressPutIgnored) {
+        state.addresses = (body?.Addresses ?? []).map((a) => ({
+          ...a,
+          ID: Number(a.ID) > 0 ? Number(a.ID) : ++state.nextAddressId,
+        }))
       }
       res.writeHead(200, { 'Content-Type': 'application/json' })
       return res.end('true')
@@ -377,6 +419,124 @@ console.log('addCustomerToGroup: POST al grupo')
   }
   ok(/agregar el cliente 777 al grupo 99/.test(threw ?? ''), 'grupo inexistente lanza con contexto')
   state.failGroup = false
+}
+
+console.log('dirección del customer (2026-09-14): PUT /Customers/{id}/Addresses + relectura')
+{
+  const A = {
+    line1: ' 8323 NW 12th St ',
+    line2: 'Suite 4',
+    city: 'Doral',
+    state: 'FL',
+    zip: '33126',
+    country: 'us',
+    contactName: 'María Pérez',
+    companyName: 'ACME',
+    phone: '3055550001',
+  }
+  ok(addressMissing(A).length === 0, 'completa → nada falta')
+  ok(
+    JSON.stringify(addressMissing({ line1: 'x', city: '', state: null, zip: '1', country: 'US' })) ===
+      JSON.stringify(['ciudad', 'estado']),
+    'lista lo que falta (ciudad, estado) — el estado es obligatorio para todos los países',
+  )
+  ok(addressMissing(null).length === 5, 'sin nada faltan los 5')
+
+  const dto = addressDto(A)
+  ok(dto.ID === 0 && dto.AddressSource === 0 && dto.AddressStatus === 2, 'DTO nuevo: ID 0, LocalSite, Confirmed')
+  ok(dto.IsShippingAddress === true && dto.IsBillingAddress === true, 'UNA dirección: envío Y facturación')
+  ok(
+    dto.Address === '8323 NW 12th St' && dto.Address2 === 'Suite 4' && dto.City === 'Doral' && dto.State === 'FL' && dto.ZipCode === '33126',
+    'campos trimmeados',
+  )
+  ok(dto.Country === 'US', 'país en mayúsculas')
+  ok(dto.ContactName === 'María Pérez' && dto.CompanyName === 'ACME' && dto.Phone === '3055550001', 'contacto, empresa y teléfono')
+  const required = ['ID', 'AddressSource', 'AddressStatus', 'IsShippingAddress', 'IsBillingAddress', 'Country', 'City', 'ZipCode', 'Address']
+  ok(required.every((k) => k in dto), 'las 9 claves requeridas por el Swagger están presentes')
+
+  // Body: lista vacía → solo la nuestra; con existentes → la nuestra adelante y las otras intactas.
+  const b0 = customerAddressesBody([], A)
+  ok(b0.Addresses.length === 1 && b0.Addresses[0].ID === 0, 'sin direcciones previas: una sola, nueva')
+  const existing = [
+    { ID: 11, Address: '1 Old Rd', City: 'Miami', ZipCode: '33101', Country: 'US', IsShippingAddress: true, IsBillingAddress: false, AddressSource: 0, AddressStatus: 0 },
+    { ID: 12, Address: '8323 NW 12TH ST.', City: 'Doral', ZipCode: '33126', Country: 'US', IsShippingAddress: false, IsBillingAddress: true, AddressSource: 0, AddressStatus: 0, Phone: '999' },
+  ]
+  const b1 = customerAddressesBody(existing, A)
+  ok(b1.Addresses.length === 2, 'con existentes: se conserva la lista completa')
+  ok(
+    b1.Addresses[0].ID === 12 && b1.Addresses[0].Address === '8323 NW 12th St' && b1.Addresses[0].Phone === '3055550001',
+    'la que coincide por calle+zip se actualiza EN SU LUGAR con su ID (y va adelante)',
+  )
+  ok(b1.Addresses[1].ID === 11 && b1.Addresses[1].Address === '1 Old Rd', 'la otra viaja tal cual')
+  const b2 = customerAddressesBody(existing, { ...A, id: 11 })
+  ok(b2.Addresses[0].ID === 11 && b2.Addresses[0].Address === '8323 NW 12th St', 'con id conocido gana el ID aunque el contenido no coincida')
+  ok(findAddress(existing, { line1: 'nada', zip: '0' }) === null, 'sin coincidencia → null')
+  ok(findAddress('no es lista', { line1: 'x', zip: '1' }) === null, 'lista inválida → null')
+
+  // setCustomerAddress contra el servidor falso: GET → PUT → GET.
+  state.requests = []
+  state.addresses = []
+  const r1 = await setCustomerAddress(cfg, token, 777, A)
+  const seq = state.requests
+    .filter((r) => r.path.startsWith('/rest/api/Customers/777'))
+    .map((r) => `${r.method} ${r.path.split('/').slice(4).join('/')}`)
+  ok(JSON.stringify(seq) === JSON.stringify(['GET 777', 'PUT 777/Addresses', 'GET 777']), `secuencia GET → PUT → GET (${seq.join(' · ')})`)
+  ok(r1.id === 9001 && r1.replaced === false && r1.sent === 1, 'devuelve el ID que SellerCloud le dio a la dirección nueva')
+  const put = state.requests.find((r) => r.method === 'PUT' && /Addresses$/.test(r.path))
+  ok(put.body.Addresses.length === 1 && put.body.Addresses[0].ID === 0 && put.body.Addresses[0].Country === 'US', 'el PUT lleva {Addresses: [la nuestra]} con ID 0')
+
+  // Reintento con la misma dirección: actualiza la existente (ID 9001), no duplica.
+  state.requests = []
+  const r2 = await setCustomerAddress(cfg, token, 777, { ...A, line2: 'Suite 5' })
+  ok(
+    r2.id === 9001 && r2.replaced === true && state.addresses.length === 1 && state.addresses[0].Address2 === 'Suite 5',
+    'reintento: actualiza en su lugar, sin duplicar',
+  )
+
+  // Con id conocido y otras direcciones allá: las ajenas se conservan.
+  state.addresses = [
+    { ID: 5, Address: 'Other 1', City: 'X', ZipCode: '1', Country: 'US', IsShippingAddress: true, IsBillingAddress: true, AddressSource: 0, AddressStatus: 0 },
+    ...state.addresses,
+  ]
+  const r3 = await setCustomerAddress(cfg, token, 777, { ...A, id: 9001 })
+  ok(r3.id === 9001 && state.addresses.length === 2 && state.addresses.some((a) => a.ID === 5), 'las direcciones ajenas del customer sobreviven al PUT')
+  ok(state.addresses[0].ID === 9001, 'la nuestra queda primera (el push elige la primera marcada)')
+
+  // Incompleta: corta ANTES de llamar.
+  state.requests = []
+  let threw = null
+  try {
+    await setCustomerAddress(cfg, token, 777, { ...A, state: '' })
+  } catch (e) {
+    threw = e.message
+  }
+  ok(/dirección incompleta.*estado/.test(threw ?? '') && state.requests.length === 0, 'sin estado corta antes de tocar la API')
+
+  // PUT rechazado → lanza con contexto (paso, status y cuerpo).
+  state.failAddressPut = true
+  threw = null
+  try {
+    await setCustomerAddress(cfg, token, 777, A)
+  } catch (e) {
+    threw = e.message
+  }
+  ok(
+    /cargar la dirección del cliente 777/.test(threw ?? '') && /400/.test(threw ?? '') && /ZipCode is required/.test(threw ?? ''),
+    'PUT rechazado lanza con paso, status y cuerpo',
+  )
+  state.failAddressPut = false
+
+  // Server que dice 200 pero no guarda: la relectura lo pesca.
+  state.addresses = []
+  state.addressPutIgnored = true
+  threw = null
+  try {
+    await setCustomerAddress(cfg, token, 777, A)
+  } catch (e) {
+    threw = e.message
+  }
+  ok(/aceptó la dirección.*no aparece/.test(threw ?? ''), 'PUT "ok" sin efecto → error por relectura (no se da por cargada)')
+  state.addressPutIgnored = false
 }
 
 console.log('errores endurecidos')

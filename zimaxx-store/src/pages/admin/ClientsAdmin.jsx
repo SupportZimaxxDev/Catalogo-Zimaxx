@@ -8,6 +8,17 @@ import { cleanPhone, hasCountryCode } from '../../utils/format'
 import { searchTerms, matchesTerms } from '../../utils/search'
 import { logEvent } from '../../utils/systemLog'
 import { SearchIcon, UploadZone, inputCls, useInfiniteRows } from './ui'
+import {
+  AddressFields,
+  addressChanged,
+  addressFieldLabels,
+  addressForm,
+  addressIsEmpty,
+  addressMissing,
+  addressPayload,
+  addressSummary,
+} from './address'
+import { defaultCountryForList } from '../../utils/countries'
 
 // Alias aceptados en el Excel de clientes (es/en, con o sin acentos).
 const COLS = {
@@ -137,15 +148,18 @@ const LIST_CODE_ALIASES = {
 // createSc corta antes de llamar a la Edge Function. Va en pareja con
 // CREATE_ENABLED en supabase/functions/sellercloud-customers/index.ts.
 //
-// VALOR (decisión del usuario, 2026-09-14): false en las DOS ramas. El 09-10
-// dev había quedado en true para reparar la creación de clientes; el 09-14,
-// al deployar dev a producción, el usuario pidió volver a bloquear el alta,
-// así que main y dev van iguales (false) y no queda ningún valor "por rama"
-// que un merge pueda perder. Para retomar la reparación en dev: los dos flags
-// en true SIN deployar. Para reactivar el alta en producción: los dos en true
-// + deploy del frontend + redeploy de sellercloud-customers. En un conflicto
-// de merge sobre esta zona, conservar el bloque completo del flag.
-const SC_CREATE_ENABLED = false
+// VALOR POR RAMA (decisión del usuario, 2026-09-14):
+//   * main / producción → false: el deploy del 09-14 (7924120) salió con el
+//     alta bloqueada, y así tiene que seguir hasta que la reparación termine.
+//   * dev → true: ES la rama donde se repara la creación de clientes ("sigamos
+//     trabajando el dev con la función en true"), así que acá está prendida.
+// main es ancestro de dev y el merge es fast-forward: ANTES de cada deploy
+// desde dev, poner los dos flags en false (este y CREATE_ENABLED en la Edge
+// Function), deployar, y volver a true en dev. Con true deployado el alta se
+// reactiva para todas las vendedoras. En un conflicto de merge sobre esta
+// zona, conservar el bloque completo del flag y elegir el valor según la rama
+// destino.
+const SC_CREATE_ENABLED = true
 
 // scCreate (2026-09-02): "Crear también en SellerCloud" — prendido por
 // defecto (mientras SC_CREATE_ENABLED lo permita); al elegir la lista 'quote'
@@ -168,6 +182,14 @@ const EMPTY_CLIENT = {
   sc_account_manager_id: '',
   sc_salesman: '',
   sc_comments: '',
+  // Dirección (2026-09-14), ver address.jsx. El país se propone al elegir la
+  // lista (ve_* → VE, el resto → US).
+  address_line1: '',
+  address_line2: '',
+  address_city: '',
+  address_state: '',
+  address_zip: '',
+  address_country: '',
 }
 
 // Ficha SellerCloud del cliente (2026-09-09, a pedido del usuario: "el
@@ -449,7 +471,7 @@ export default function ClientsAdmin() {
   // local ya quedó. Devuelve el aviso para el banner (o null si nada cambió).
   const saveProfile = async (client, form, sellercloudId) => {
     const profile = profilePayload(form)
-    if (!profileChanged(profile, profilePayload(profileForm(client)))) return { changed: false, notice: null }
+    if (!profileChanged(profile, profilePayload(profileForm(client)))) return { changed: false, notice: null, pushed: false }
     const { data, error } = await supabase.rpc('update_client_sc_profile', {
       p_client_id: client.id,
       p_business_name: profile.business_name,
@@ -467,18 +489,80 @@ export default function ClientsAdmin() {
         : null,
     }
     setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, ...patch } : c)))
-    if (!data?.changed) return { changed: false, notice: null }
-    if (!sellercloudId) return { changed: true, notice: { kind: 'warn', text: t('scProfileNotLinked') } }
+    if (!data?.changed) return { changed: false, notice: null, pushed: false }
+    if (!sellercloudId) return { changed: true, notice: { kind: 'warn', text: t('scProfileNotLinked') }, pushed: false }
     try {
       const res = await invokeSc({ action: 'update', client_id: client.id })
+      // El mismo 'update' empuja la dirección (2026-09-14): se refleja en la
+      // fila y, si falló, se suma al aviso — `pushed` le dice a saveEdit que
+      // no hace falta mandarla aparte.
+      applyAddressResult(client.id, res)
+      const addrFail =
+        res.address_status === 'failed' ? ` ${t('addressSyncFailed', { msg: res.address_error ?? '' })}` : ''
       return {
         changed: true,
-        notice: res.warning
-          ? { kind: 'warn', text: res.warning }
-          : { kind: 'ok', text: t('scProfileSynced', { id: sellercloudId }) },
+        pushed: true,
+        notice:
+          res.warning || addrFail
+            ? { kind: 'warn', text: `${res.warning ?? ''}${addrFail}`.trim() }
+            : { kind: 'ok', text: t('scProfileSynced', { id: sellercloudId }) },
       }
     } catch (e) {
-      return { changed: true, notice: { kind: 'warn', text: t('scProfileSyncFailed', { msg: e.message }) } }
+      return { changed: true, pushed: true, notice: { kind: 'warn', text: t('scProfileSyncFailed', { msg: e.message }) } }
+    }
+  }
+
+  // Dirección (2026-09-14): su propia RPC (permisos + auditoría + la regla
+  // "completa o vacía", y no se borra si ya está en SellerCloud). Devuelve si
+  // cambió. Mandarla a SellerCloud es cosa del llamador: en la edición la
+  // ficha y la dirección viajan juntas en UN 'update' (pushAddressSc si la
+  // ficha no cambió).
+  const saveAddress = async (client, form) => {
+    const address = addressPayload(form)
+    if (!addressChanged(address, addressPayload(addressForm(client)))) return { changed: false, address }
+    const { data, error } = await supabase.rpc('update_client_address', {
+      p_client_id: client.id,
+      p_line1: address.address_line1,
+      p_line2: address.address_line2,
+      p_city: address.address_city,
+      p_state: address.address_state,
+      p_zip: address.address_zip,
+      p_country: address.address_country,
+    })
+    if (error) throw error
+    // Cambió lo local: lo de SellerCloud (si hay) quedó viejo hasta mandarla.
+    setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, ...address, sc_address_synced_at: null } : c)))
+    return { changed: !!data?.changed, address }
+  }
+
+  // Resultado de la dirección en una respuesta de la Edge Function ('create'
+  // o 'update') → la fila: ok = ID + hora + sin error; failed = error (y sin
+  // hora); skipped/ausente = no se toca.
+  const applyAddressResult = (clientId, res) => {
+    if (!res || res.address_status !== 'ok' && res.address_status !== 'failed') return
+    const patch =
+      res.address_status === 'ok'
+        ? { sc_address_id: res.sc_address_id ?? null, sc_address_synced_at: new Date().toISOString(), sc_address_error: null }
+        : { sc_address_synced_at: null, sc_address_error: res.address_error ?? null }
+    setClients((prev) => prev.map((c) => (c.id === clientId ? { ...c, ...patch } : c)))
+  }
+
+  // Manda (o reintenta) la dirección de un cliente YA vinculado vía 'update'
+  // de la Edge Function (PUT + relectura allá) y refleja el resultado en la
+  // fila. Devuelve el aviso para el banner (null si no había nada que mandar).
+  const [addressBusyId, setAddressBusyId] = useState(null)
+  const pushAddressSc = async (client) => {
+    setAddressBusyId(client.id)
+    try {
+      const res = await invokeSc({ action: 'update', client_id: client.id })
+      applyAddressResult(client.id, res)
+      if (res.address_status === 'ok') return { kind: 'ok', text: t('addressSynced', { id: client.sellercloud_id }) }
+      if (res.address_status === 'failed') return { kind: 'warn', text: t('addressSyncFailed', { msg: res.address_error ?? '' }) }
+      return null
+    } catch (e) {
+      return { kind: 'warn', text: t('addressSyncFailed', { msg: e.message }) }
+    } finally {
+      setAddressBusyId(null)
     }
   }
 
@@ -648,11 +732,23 @@ export default function ClientsAdmin() {
         return
       }
       const scId = data.sellercloud_id
-      setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, sellercloud_id: scId } : c)))
+      // Dirección (2026-09-14): la función la manda tras el create y la
+      // verifica releyendo; su resultado viene aparte (address_status). Un
+      // fallo NO es un warning más: queda en rojo con "Reintentar" — el
+      // customer existe y está vinculado, pero no puede recibir órdenes.
+      const addrPatch =
+        data.address_status === 'ok'
+          ? { sc_address_id: data.sc_address_id ?? null, sc_address_synced_at: new Date().toISOString(), sc_address_error: null }
+          : data.address_status === 'failed'
+            ? { sc_address_synced_at: null, sc_address_error: data.address_error ?? null }
+            : {}
+      setClients((prev) => prev.map((c) => (c.id === client.id ? { ...c, sellercloud_id: scId, ...addrPatch } : c)))
       setScPanel((p) => ({
         ...p,
         status: 'done',
         message: `${t('scCreatedMsg', { id: scId })}${data.warning ? ` ${data.warning}` : ''}`,
+        addressError:
+          data.address_status === 'failed' ? t('addressCreateFailed', { id: scId, msg: data.address_error ?? '' }) : null,
       }))
     } catch (e) {
       // El cliente LOCAL ya existe y no se toca: SellerCloud nunca bloquea lo
@@ -936,6 +1032,16 @@ export default function ClientsAdmin() {
       setNewClientError(t('invalidEmail'))
       return
     }
+    // Dirección (2026-09-14): obligatoria y completa solo cuando se crea en
+    // SellerCloud (decisión del usuario); con el toggle apagado puede ir
+    // vacía o completa, nunca a medias (la RPC y la función la rechazan igual).
+    const address = addressPayload(newClientForm)
+    const missingAddr = addressMissing(address)
+    if ((scOn || !addressIsEmpty(address)) && missingAddr.length) {
+      const labels = addressFieldLabels(t)
+      setNewClientError(t('addressIncomplete', { fields: missingAddr.map((k) => labels[k]).join(', ') }))
+      return
+    }
     // El unique constraint de la base compara el string completo: no
     // pesca un duplicado si el existente está guardado con código de
     // país y este nuevo no (o viceversa). Se chequea acá antes de
@@ -969,6 +1075,7 @@ export default function ClientsAdmin() {
         price_list_id: newClientForm.price_list_id,
         vendedora_id: vendedoraId ?? null,
         ...profileRow,
+        ...address,
       })
       .select('id')
       .single()
@@ -986,8 +1093,9 @@ export default function ClientsAdmin() {
         price_list_id: newClientForm.price_list_id,
         vendedora_id: vendedoraId ?? null,
         ...profileRow,
+        ...address,
       },
-      { via: 'panel', sellercloud_requested: scOn },
+      { via: 'panel', sellercloud_requested: scOn, address: addressSummary(address) || null },
     )
     setNewClientForm(null)
     await load()
@@ -997,7 +1105,7 @@ export default function ClientsAdmin() {
     // crear — si el cliente parece existir allá, el panel muestra los
     // candidatos y la decisión (vincular / crear igual) es humana.
     if (scOn) {
-      const clientRow = { id: created.id, name, phone, email: email || null, ...profileRow }
+      const clientRow = { id: created.id, name, phone, email: email || null, ...profileRow, ...address }
       setScPanel({
         client: clientRow,
         status: 'creating',
@@ -1130,8 +1238,9 @@ export default function ClientsAdmin() {
       email: client.email ?? '',
       scid: client.sellercloud_id == null ? '' : String(client.sellercloud_id),
       // Ficha SellerCloud (2026-09-09): se edita en una fila desplegada bajo
-      // el cliente, en las dos vistas.
+      // el cliente, en las dos vistas. Dirección (2026-09-14): ídem.
       ...profileForm(client),
+      ...addressForm(client),
     })
   }
 
@@ -1166,6 +1275,15 @@ export default function ClientsAdmin() {
     const email = editForm.email.trim().toLowerCase()
     if (email && !EMAIL_RE.test(email)) {
       setActionError(t('invalidEmail'))
+      return
+    }
+    // Dirección (2026-09-14): completa o vacía, nunca a medias (la RPC
+    // repite la regla; acá va el mensaje amigable en el idioma del panel).
+    const addressNew = addressPayload(editForm)
+    const missingAddr = addressMissing(addressNew)
+    if (!addressIsEmpty(addressNew) && missingAddr.length) {
+      const labels = addressFieldLabels(t)
+      setActionError(t('addressIncomplete', { fields: missingAddr.map((k) => labels[k]).join(', ') }))
       return
     }
     // Vínculo SellerCloud: solo admin (la vendedora ni ve el input, así que
@@ -1225,8 +1343,18 @@ export default function ClientsAdmin() {
     // SellerCloud. Si la RPC falla, nombre/teléfono/correo ya quedaron
     // guardados (reflejados arriba) y la edición sigue abierta con el error.
     try {
-      const { notice } = await saveProfile(client, editForm, scidChanged ? scid : client.sellercloud_id)
-      setActionNotice(notice)
+      const scIdNow = scidChanged ? scid : client.sellercloud_id
+      // Dirección primero (2026-09-14): si la RPC la rechaza (incompleta,
+      // borrar una que ya está en SellerCloud) no se toca la ficha.
+      const addr = await saveAddress(client, editForm)
+      const { notice, pushed } = await saveProfile(client, editForm, scIdNow)
+      let finalNotice = notice
+      if (addr.changed && !pushed && scIdNow && !addressIsEmpty(addr.address)) {
+        // La ficha no cambió, así que nadie empujó nada: la dirección viaja
+        // sola en su propio 'update'.
+        finalNotice = (await pushAddressSc({ ...client, sellercloud_id: scIdNow })) ?? finalNotice
+      }
+      setActionNotice(finalNotice)
     } catch (e) {
       setEditBusy(false)
       setActionError(e.message)
@@ -1284,8 +1412,9 @@ export default function ClientsAdmin() {
   // Columnas de la tabla según la vista (los colSpan de las filas
   // desplegadas — correo, panel SellerCloud, edición de la ficha — usan esto).
   // Desde 2026-09-10 el teléfono va DEBAJO del nombre en la misma celda (a
-  // pedido del usuario), así que la columna Tel ya no existe: 5 / 12.
-  const colCount = fullView ? 12 : 5
+  // pedido del usuario), así que la columna Tel ya no existe. Desde
+  // 2026-09-14 la completa suma Dirección y Dir. SellerCloud: 5 / 14.
+  const colCount = fullView ? 14 : 5
   // Vista completa: la columna Nombre queda fija al desplazar a los lados
   // (fondo sólido para tapar lo que pasa por debajo) y el contenido de las
   // filas desplegadas (ficha en edición, panel SellerCloud) se queda a la
@@ -1298,6 +1427,76 @@ export default function ClientsAdmin() {
     if (!iso) return '—'
     const d = new Date(iso)
     return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString(lang === 'en' ? 'en-US' : 'es-VE')
+  }
+
+  // Estado de la dirección en SellerCloud de un cliente VINCULADO
+  // (2026-09-14). Cuatro casos: cargada y verificada (✓); sin sincronizar
+  // (hay dirección local completa pero no se mandó, o cambió después →
+  // "Enviar dirección"); falló ("Reintentar", con el motivo en el tooltip); y
+  // sin dirección local (aviso: Editar → Dirección — sus órdenes rebotan si
+  // tampoco la tiene allá). Quien ve la fila puede mandarla (la RPC valida).
+  const addressBadge = (c) => {
+    const complete = addressMissing(addressPayload(c)).length === 0
+    const busy = addressBusyId === c.id
+    const send = async (e) => {
+      e.stopPropagation()
+      setActionError('')
+      setActionNotice(await pushAddressSc(c))
+    }
+    const btnCls = (color) =>
+      `rounded-lg border px-2 py-0.5 text-[11px] font-semibold transition-colors disabled:opacity-50 border-${color}-400 text-${color}-700 hover:bg-${color}-50 dark:text-${color}-400 dark:hover:bg-${color}-950/40`
+    if (c.sc_address_error) {
+      return (
+        <span className="flex flex-wrap items-center gap-1" data-testid="address-badge-failed">
+          <span
+            title={t('addressScFailedHint', { msg: c.sc_address_error })}
+            className="whitespace-nowrap text-[11px] font-semibold text-red-700 dark:text-red-400"
+          >
+            ⚠️ {t('addressScFailed')}
+          </span>
+          {complete && (
+            <button onClick={send} disabled={busy} className={btnCls('red')}>
+              {busy ? t('addressSending') : t('addressRetryBtn')}
+            </button>
+          )}
+        </span>
+      )
+    }
+    if (c.sc_address_synced_at) {
+      return (
+        <span
+          title={t('addressScSyncedHint', { id: c.sc_address_id ?? '—' })}
+          className="whitespace-nowrap text-[11px] font-semibold text-green-700 dark:text-green-400"
+          data-testid="address-badge-synced"
+        >
+          {t('addressScSynced')}
+        </span>
+      )
+    }
+    if (complete) {
+      return (
+        <span className="flex flex-wrap items-center gap-1" data-testid="address-badge-pending">
+          <span
+            title={t('addressScPendingHint')}
+            className="whitespace-nowrap text-[11px] font-semibold text-amber-700 dark:text-amber-400"
+          >
+            ⏳ {t('addressScPending')}
+          </span>
+          <button onClick={send} disabled={busy} className={btnCls('amber')}>
+            {busy ? t('addressSending') : t('addressSendBtn')}
+          </button>
+        </span>
+      )
+    }
+    return (
+      <span
+        title={t('addressScNoneHint')}
+        className="whitespace-nowrap text-[11px] text-primary/40"
+        data-testid="address-badge-none"
+      >
+        📍 {t('addressScNone')}
+      </span>
+    )
   }
 
   // Los cinco inputs de la ficha SellerCloud, compartidos por el alta, la
@@ -1431,6 +1630,30 @@ export default function ClientsAdmin() {
           ✓ {scPanel.message}
         </p>
       )}
+      {/* Dirección que no entró tras el create (2026-09-14): en rojo y con
+          reintento, aparte del ✓ — el customer existe pero no sirve para
+          órdenes hasta que la dirección esté allá. */}
+      {scPanel.status === 'done' && scPanel.addressError && (
+        <div
+          className="flex flex-wrap items-center gap-2 rounded-xl bg-red-100 p-3 text-sm font-medium text-red-800 dark:bg-red-900/40 dark:text-red-200"
+          data-testid="sc-address-error"
+        >
+          <span className="min-w-0 flex-1 select-text break-words">⚠️ {scPanel.addressError}</span>
+          <button
+            onClick={async () => {
+              const row = clients.find((x) => x.id === scPanel.client.id) ?? scPanel.client
+              const notice = await pushAddressSc(row)
+              setScPanel((p) =>
+                p ? { ...p, addressError: notice?.kind === 'ok' ? null : (notice?.text ?? p.addressError) } : p,
+              )
+            }}
+            disabled={addressBusyId === scPanel.client.id}
+            className="rounded-lg border border-red-400 px-3 py-1 text-xs font-semibold text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50 dark:text-red-300 dark:hover:bg-red-950/40"
+          >
+            {addressBusyId === scPanel.client.id ? t('addressSending') : t('addressRetryBtn')}
+          </button>
+        </div>
+      )}
       {scPanel.status === 'failed' && (
         <p className="max-h-32 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-xl bg-amber-100 p-3 text-sm font-medium text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
           ⚠️ {scPanel.message}
@@ -1500,6 +1723,13 @@ export default function ClientsAdmin() {
                   // Ficha (2026-09-09): lo guardado, y si no hay nada, lo de
                   // su vendedora y su lista — igual que el alta.
                   profile: profileWithDefaults(p.client),
+                  // Dirección (2026-09-14): lo guardado, y el país por la
+                  // lista si no hay. Obligatoria para crear.
+                  address: {
+                    ...addressForm(p.client),
+                    address_country:
+                      p.client.address_country || defaultCountryForList(listCode(p.client.price_list_id)),
+                  },
                 }))
               }}
               className="rounded-lg border border-indigo-400 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
@@ -1520,6 +1750,25 @@ export default function ClientsAdmin() {
             if (!first || !last) return
             if (email && !EMAIL_RE.test(email)) {
               setScPanel((p) => ({ ...p, message: t('invalidEmail') }))
+              return
+            }
+            // Dirección (2026-09-14): obligatoria para crear; se guarda en la
+            // fila ANTES (la Edge Function la lee de ahí y la exige completa
+            // — sin ella responde 400 y no crea nada).
+            const addr = addressPayload(scPanel.address ?? {})
+            const missingAddr = addressMissing(addr)
+            if (missingAddr.length) {
+              const labels = addressFieldLabels(t)
+              setScPanel((p) => ({
+                ...p,
+                message: t('addressIncomplete', { fields: missingAddr.map((k) => labels[k]).join(', ') }),
+              }))
+              return
+            }
+            try {
+              await saveAddress(scPanel.client, scPanel.address)
+            } catch (err) {
+              setScPanel((p) => ({ ...p, message: err.message }))
               return
             }
             // La ficha se guarda en la fila ANTES de crear (la Edge Function
@@ -1545,6 +1794,18 @@ export default function ClientsAdmin() {
               </p>
               {profileFields(scPanel.profile, (patch) =>
                 setScPanel((p) => ({ ...p, profile: { ...p.profile, ...patch } })), scPanel.client)}
+            </div>
+          )}
+          {scPanel.address && (
+            <div className="rounded-xl border border-indigo-200 bg-surface/60 p-2.5 dark:border-indigo-900">
+              <p className="mb-1 text-[11px] font-bold text-indigo-800 dark:text-indigo-300">📍 {t('addressTitle')}</p>
+              <p className="mb-1.5 text-[11px] text-primary/50">{t('addressRequiredHint')}</p>
+              <AddressFields
+                form={scPanel.address}
+                onChange={(patch) => setScPanel((p) => ({ ...p, address: { ...p.address, ...patch } }))}
+                required
+                idPrefix="panel"
+              />
             </div>
           )}
           <div className="flex flex-wrap items-center gap-2">
@@ -1715,6 +1976,11 @@ export default function ClientsAdmin() {
                   : {}),
                 ...autoComments(newClientForm.sc_comments, listId),
                 ...(isQuote ? { scCreate: false } : {}),
+                // País de la dirección propuesto por la lista (2026-09-14:
+                // ve_* → VE, el resto → US) mientras no se haya elegido uno.
+                ...(newClientForm.address_country
+                  ? {}
+                  : { address_country: defaultCountryForList(listCode(listId)) }),
               })
             }}
             className={inputCls}
@@ -1801,6 +2067,27 @@ export default function ClientsAdmin() {
             </legend>
             <p className="mb-2 text-[11px] text-primary/50">{t('scProfileHint')}</p>
             {profileFields(newClientForm, (patch) => setNewClientForm((f) => ({ ...f, ...patch })))}
+          </fieldset>
+          {/* Dirección (2026-09-14): UNA, envío = facturación. Obligatoria
+              solo con "Crear también en SellerCloud" prendido (decisión del
+              usuario); si no, puede quedar vacía — nunca a medias. El país se
+              propone por la lista elegida. */}
+          <fieldset
+            className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 dark:border-indigo-900 dark:bg-indigo-950/20 md:col-span-2"
+            data-testid="new-client-address"
+          >
+            <legend className="px-1 text-xs font-bold text-indigo-800 dark:text-indigo-300">
+              📍 {t('addressTitle')}
+            </legend>
+            <p className="mb-2 text-[11px] text-primary/50">
+              {SC_CREATE_ENABLED && newClientForm.scCreate ? t('addressRequiredHint') : t('addressOptionalHint')}
+            </p>
+            <AddressFields
+              form={newClientForm}
+              onChange={(patch) => setNewClientForm((f) => ({ ...f, ...patch }))}
+              required={SC_CREATE_ENABLED && !!newClientForm.scCreate}
+              idPrefix="new"
+            />
           </fieldset>
           <label
             className={`flex min-w-0 flex-wrap items-center gap-2 text-sm md:col-span-2 ${
@@ -2015,6 +2302,8 @@ export default function ClientsAdmin() {
               {fullView && <th className="p-3">{t('scAccountManager')}</th>}
               {fullView && <th className="p-3">{t('scSalesman')}</th>}
               {fullView && <th className="p-3">{t('scComments')}</th>}
+              {fullView && <th className="p-3">{t('addressCol')}</th>}
+              {fullView && <th className="p-3">{t('addressScCol')}</th>}
               <th className="p-3">Lista</th>
               <th className="p-3">Vendedora</th>
               {fullView && <th className="p-3">{t('createdAtCol')}</th>}
@@ -2110,8 +2399,16 @@ export default function ClientsAdmin() {
                       onKeyDown={editKeys}
                       className="w-32 rounded-lg border border-secondary/60 bg-surface px-2 py-1 font-mono text-xs outline-none transition-colors focus:border-secondary"
                     />
+                  ) : c.sellercloud_id ? (
+                    // Vinculado: el ID y, debajo, el estado de su dirección
+                    // en SellerCloud (2026-09-14) — sin dirección allá el
+                    // push de sus órdenes rebota.
+                    <div className="flex flex-col items-start gap-1">
+                      <span>{c.sellercloud_id}</span>
+                      {addressBadge(c)}
+                    </div>
                   ) : (
-                    c.sellercloud_id ?? (
+                    (
                       // Pieza 3 (2026-09-02): sin vínculo no se pueden enviar
                       // órdenes — aviso + búsqueda guiada. Lo ven admin Y
                       // vendedora (el permiso real vive en la RPC de link).
@@ -2165,6 +2462,18 @@ export default function ClientsAdmin() {
                 {fullView && (
                   <td className="p-3 text-xs text-primary/70">
                     {c.sc_comments || <span className="text-primary/30">—</span>}
+                  </td>
+                )}
+                {/* Dirección (2026-09-14) y su estado en SellerCloud, solo
+                    en la completa; se edita en la fila desplegada. */}
+                {fullView && (
+                  <td className="p-3 text-xs text-primary/70" data-testid="address-cell">
+                    {addressSummary(c) || <span className="text-primary/30">—</span>}
+                  </td>
+                )}
+                {fullView && (
+                  <td className="p-3 text-xs text-primary/70">
+                    {c.sellercloud_id ? addressBadge(c) : <span className="text-primary/30">—</span>}
                   </td>
                 )}
                 <td className="p-3">
@@ -2337,6 +2646,23 @@ export default function ClientsAdmin() {
                         <span className="text-[11px] text-primary/45">{t('scGroupChangeHint')}</span>
                       </div>
                       {profileFields(editForm, (patch) => setEditForm((f) => ({ ...f, ...patch })), c, editKeys)}
+                      {/* Dirección (2026-09-14): completa o vacía; si el
+                          cliente ya está vinculado, al guardar viaja a
+                          SellerCloud en el mismo 'update' de la ficha. */}
+                      <div className="mt-2.5 mb-1.5 flex flex-wrap items-baseline gap-2">
+                        <span className="text-xs font-bold text-indigo-800 dark:text-indigo-300">
+                          📍 {t('addressTitle')}
+                        </span>
+                        <span className="text-[11px] text-primary/45">
+                          {c.sellercloud_id ? t('addressRequiredHint') : t('addressOptionalHint')}
+                        </span>
+                      </div>
+                      <AddressFields
+                        form={editForm}
+                        onChange={(patch) => setEditForm((f) => ({ ...f, ...patch }))}
+                        onKeyDown={editKeys}
+                        idPrefix={`edit-${c.id}`}
+                      />
                     </div>
                   </td>
                 </tr>

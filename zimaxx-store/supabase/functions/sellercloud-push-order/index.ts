@@ -321,7 +321,10 @@ Deno.serve(async (req) => {
     // filtra de un vistazo.
     const isHtml = /página web, no la API/i.test(message)
     await logPush(caller, 'error', isHtml ? 'push_html_response' : 'push_failed', message, logContext)
-    return json({ error: message }, 502)
+    // code (2026-09-14): 'customer_no_address' cuando el customer no tiene
+    // dirección en SellerCloud — el panel ofrece cargarla y reenviar.
+    const code = (e as { code?: string }).code ?? null
+    return json({ error: message, ...(code ? { code } : {}) }, 502)
   }
 
   // Datos que faltaron y se corrigen para la próxima orden, no para esta —

@@ -9,6 +9,8 @@ import { downloadOrderPdf } from '../../utils/pdf'
 import { SearchIcon, inputCls, useInfiniteRows } from './ui'
 import ManualOrderModal from './ManualOrderModal'
 import { formatAgo } from '../../hooks/useInventoryFreshness'
+import { AddressFields, addressFieldLabels, addressForm, addressMissing, addressPayload } from './address'
+import { defaultCountryForList } from '../../utils/countries'
 
 // Estilos de badge por estado (2026-07-15 agrega 'cancelled': un pedido
 // se arma y confirma, pero a veces el cliente lo cancela después).
@@ -161,7 +163,11 @@ export default function OrdersAdmin() {
   const [recoverError, setRecoverError] = useState(null) // { id, message }
   const [manualOpen, setManualOpen] = useState(false)
   const [pushing, setPushing] = useState(null) // id del pedido que se está mandando
-  const [pushError, setPushError] = useState(null) // { id, message }
+  const [pushError, setPushError] = useState(null) // { id, message, code }
+  // Cliente sin dirección en SellerCloud (2026-09-14): el push devuelve code
+  // 'customer_no_address' y acá se ofrece cargarla y reenviar sin ir a
+  // SellerCloud. { order, client, form, step: 'loading'|'form'|'saving'|'syncing', error }
+  const [addrModal, setAddrModal] = useState(null)
   // Un fallo sin cliente (token inválido) o sin ítems no tiene a quién
   // asignárselo — "Recuperar" ni aparece — y antes se quedaba en el banner
   // para siempre sin ninguna acción posible (2026-08-13, reportado por el
@@ -450,6 +456,93 @@ export default function OrdersAdmin() {
     // Se recargan los pedidos igual que después de cualquier otra acción: si
     // salió bien, la fila pasa a mostrar el número de orden de SellerCloud.
     loadOrders().catch(() => {})
+  }
+
+  // ¿El rechazo fue "cliente sin dirección en SellerCloud"? Por code cuando
+  // acaba de pasar, o por el texto guardado en el pedido de un intento
+  // anterior (los 6 fallos de septiembre están así).
+  const isNoAddressError = (o) =>
+    (pushError?.id === o.id && pushError.code === 'customer_no_address') ||
+    /no tiene ninguna direcci[oó]n cargada|Addresses vino vac[ií]a/i.test(
+      pushError?.id === o.id ? (pushError.message ?? '') : (o.sellercloud_error ?? ''),
+    )
+
+  // Abre el modal con la dirección local del cliente (si la hay) — la fila
+  // del pedido no la trae. País propuesto por la lista si no hay.
+  const openAddressModal = async (order) => {
+    setAddrModal({ order, client: null, form: null, step: 'loading', error: null })
+    const { data, error } = await supabase
+      .from('clients')
+      .select(
+        'id, name, phone, business_name, sellercloud_id, price_list_id, price_lists(code), ' +
+          'address_line1, address_line2, address_city, address_state, address_zip, address_country',
+      )
+      .eq('id', order.client_id)
+      .maybeSingle()
+    if (error || !data) {
+      setAddrModal((m) => (m ? { ...m, step: 'form', error: error?.message ?? t('unknownClient') } : m))
+      return
+    }
+    const form = addressForm(data)
+    if (!form.address_country) form.address_country = defaultCountryForList(data.price_lists?.code)
+    setAddrModal((m) => (m ? { ...m, client: data, form, step: 'form' } : m))
+  }
+
+  // Guardar (RPC auditada update_client_address) → cargar en SellerCloud
+  // ('update' de sellercloud-customers: PUT + relectura) → reenviar la orden.
+  // Cada paso que falla deja el modal abierto con el motivo.
+  const saveAddressAndResend = async () => {
+    const m = addrModal
+    if (!m?.client || !m.form) return
+    const address = addressPayload(m.form)
+    const missing = addressMissing(address)
+    if (missing.length) {
+      const labels = addressFieldLabels(t)
+      setAddrModal({ ...m, error: t('addressIncomplete', { fields: missing.map((k) => labels[k]).join(', ') }) })
+      return
+    }
+    if (!m.client.sellercloud_id) {
+      setAddrModal({ ...m, error: t('pushNoAddressNotLinked') })
+      return
+    }
+    setAddrModal({ ...m, step: 'saving', error: null })
+    const { error: rpcError } = await supabase.rpc('update_client_address', {
+      p_client_id: m.client.id,
+      p_line1: address.address_line1,
+      p_line2: address.address_line2,
+      p_city: address.address_city,
+      p_state: address.address_state,
+      p_zip: address.address_zip,
+      p_country: address.address_country,
+    })
+    if (rpcError) {
+      setAddrModal((x) => (x ? { ...x, step: 'form', error: rpcError.message } : x))
+      return
+    }
+    setAddrModal((x) => (x ? { ...x, step: 'syncing' } : x))
+    const { data, error } = await supabase.functions.invoke('sellercloud-customers', {
+      body: { action: 'update', client_id: m.client.id },
+    })
+    let syncError = null
+    if (error) {
+      syncError = error.message
+      try {
+        const detail = await error.context?.json?.()
+        if (detail?.address_error) syncError = detail.address_error
+        else if (detail?.error) syncError = detail.error
+      } catch {
+        /* se queda el genérico */
+      }
+    } else if (data?.address_status !== 'ok') {
+      syncError = data?.address_error ?? t('addressScFailed')
+    }
+    if (syncError) {
+      setAddrModal((x) => (x ? { ...x, step: 'form', error: t('addressSyncFailed', { msg: syncError }) } : x))
+      return
+    }
+    // La dirección ya está allá y verificada: se cierra y se reenvía.
+    setAddrModal(null)
+    await pushToSellerCloud(m.order)
   }
 
   const loadFailures = () =>
@@ -1461,6 +1554,23 @@ export default function OrdersAdmin() {
                         )}
                       </span>
                     )}
+                    {/* Cliente sin dirección en SellerCloud (2026-09-14): en
+                        vez de "cargásela allá", cargarla desde acá y
+                        reenviar. Vale para el rechazo recién ocurrido (code)
+                        y para el guardado en el pedido de intentos previos. */}
+                    {!o.sellercloud_order_id && o.status === 'done' && isNoAddressError(o) && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openAddressModal(o)
+                        }}
+                        disabled={pushing === o.id}
+                        className="ml-auto whitespace-nowrap rounded-lg border border-red-400 px-2 py-1 text-[11px] font-semibold text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/40"
+                        data-testid="push-no-address-cta"
+                      >
+                        {t('pushNoAddressCta')}
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -1721,6 +1831,67 @@ export default function OrdersAdmin() {
           {filtered.length} {t('results')}
         </div>
       </div>
+      )}
+
+      {/* Dirección del cliente para SellerCloud (2026-09-14): cuando el push
+          rebota por "cliente sin dirección", se completa acá, se guarda en el
+          cliente (RPC auditada), se carga en SellerCloud y se reenvía. */}
+      {addrModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[2px] md:items-center"
+          onClick={() => (addrModal.step === 'form' || addrModal.step === 'loading') && setAddrModal(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-2xl animate-fade-up rounded-t-3xl border-t-4 border-red-500 bg-surface p-6 shadow-2xl md:rounded-3xl"
+            data-testid="push-address-modal"
+          >
+            <h3 className="font-brand text-lg font-semibold">📍 {t('pushNoAddressTitle')}</h3>
+            <p className="mt-1.5 text-sm leading-relaxed text-primary/60">
+              {t('pushNoAddressBody', { client: addrModal.client?.name ?? addrModal.order.clients?.name ?? '' })}
+            </p>
+            {addrModal.step === 'loading' && <p className="mt-4 text-sm text-primary/60">{t('loading')}</p>}
+            {addrModal.form && (
+              <div className="mt-4">
+                <AddressFields
+                  form={addrModal.form}
+                  onChange={(patch) => setAddrModal((m) => (m ? { ...m, form: { ...m.form, ...patch } } : m))}
+                  required
+                  idPrefix="push"
+                />
+              </div>
+            )}
+            {addrModal.error && (
+              <p
+                className="mt-3 max-h-32 select-text overflow-y-auto whitespace-pre-wrap break-words text-sm font-medium text-red-600 dark:text-red-400"
+                data-testid="push-address-error"
+              >
+                {addrModal.error}
+              </p>
+            )}
+            <div className="mt-5 flex gap-2">
+              <button
+                onClick={() => setAddrModal(null)}
+                disabled={addrModal.step === 'saving' || addrModal.step === 'syncing'}
+                className="flex-1 rounded-xl border border-line py-2.5 text-sm font-semibold transition-colors hover:border-primary/40 disabled:opacity-50"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={saveAddressAndResend}
+                disabled={!addrModal.form || addrModal.step !== 'form'}
+                className="flex-1 rounded-xl bg-ink py-2.5 text-sm font-bold text-secondary transition-opacity hover:opacity-90 disabled:opacity-50"
+                data-testid="push-address-go"
+              >
+                {addrModal.step === 'saving'
+                  ? t('pushNoAddressSaving')
+                  : addrModal.step === 'syncing'
+                    ? t('pushNoAddressSyncing')
+                    : t('pushNoAddressGo')}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {confirmStatus && (
