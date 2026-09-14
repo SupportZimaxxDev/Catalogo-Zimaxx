@@ -36,6 +36,13 @@ const AGE_TICK_MS = 5_000
 
 const RANGES = [7, 14, 30]
 const DEFAULT_DAYS = 14
+// Rango "Histórico" (2026-09-11, a pedido del usuario): desde el primer
+// pedido hasta hoy. Viaja como p_days = 0, que la RPC de
+// migration-2026-09-11-sa-metrics-historic.sql entiende como "sin ventana".
+// La RPC VIEJA clampea el 0 a 1 día y devolvería "el último día" disfrazado
+// de histórico: se detecta por la ausencia de `period.historic` en la
+// respuesta y se muestra que falta la migración, no los números equivocados.
+const HISTORIC = 0
 
 // PostgREST devuelve PGRST202 cuando la función no está en su schema cache:
 // es exactamente el caso "desplegué el frontend pero todavía no corrí la
@@ -167,6 +174,12 @@ export default function MetricsAdmin() {
       // migración todavía sin correr) se sigue mostrando la última foto buena
       // con el aviso arriba, en vez de vaciar la pantalla.
       setError(rpcError)
+    } else if (days === HISTORIC && payload?.period?.historic !== true) {
+      // RPC anterior a la migración del histórico: respondió, pero con la
+      // ventana de 1 día del clamp. Acá sí se vacía la pantalla, porque esos
+      // números dirían "histórico" y serían de ayer.
+      setData(null)
+      setError({ code: 'HISTORIC_MISSING' })
     } else {
       setData(payload)
       setFetchedAt(Date.now())
@@ -202,9 +215,20 @@ export default function MetricsAdmin() {
     ? ''
     : isMissingRpc(error)
       ? t('metricsMigrationMissing')
-      : (error.message ?? String(error))
+      : error.code === 'HISTORIC_MISSING'
+        ? t('metricsHistoricMissing')
+        : (error.message ?? String(error))
 
   const totals = data?.totals
+  // period.historic / period.bucket / period.since los trae la RPC del
+  // 2026-09-11; con la anterior quedan undefined y todo cae en el camino de
+  // siempre (rango de N días, barras por día).
+  const period = data?.period
+  const isHistoric = period?.historic === true
+  const isWeekly = period?.bucket === 'week'
+  const sinceLabel = period?.since
+    ? new Date(period.since).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+    : '—'
   const filas = data?.por_vendedora ?? []
   const serie = data?.serie_diaria ?? []
   const excluidas = data?.excluidas ?? []
@@ -239,7 +263,7 @@ export default function MetricsAdmin() {
         header,
         widths: [30, 10, 16, 16, 14],
         sheetName: t('metricsAdoption').slice(0, 31), // Excel corta los nombres de hoja en 31
-        periodStamp: `${days}d-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`,
+        periodStamp: `${days === HISTORIC ? 'historico' : `${days}d`}-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`,
       })
     } catch (e) {
       setError(e)
@@ -272,6 +296,14 @@ export default function MetricsAdmin() {
               {n} {t('metricsDays')}
             </button>
           ))}
+          <button
+            onClick={() => setDays(HISTORIC)}
+            className={rangeBtn(days === HISTORIC)}
+            data-testid="metrics-range-historic"
+            aria-pressed={days === HISTORIC}
+          >
+            {t('metricsHistoric')}
+          </button>
           <button
             disabled={loading || refreshing}
             onClick={() => load(true)}
@@ -344,15 +376,21 @@ export default function MetricsAdmin() {
             {serie.length === 0 || serie.every((d) => Number(d.monto) === 0) ? (
               <>
                 <p className="text-[11px] uppercase tracking-wider text-primary/45">
-                  {t('metricsTrend')}
+                  {isWeekly ? t('metricsTrendWeek') : t('metricsTrend')}
                 </p>
                 <p className="py-10 text-center text-sm text-primary/50">{t('metricsNoData')}</p>
               </>
             ) : (
-              <TrendChart serie={serie} label={t('metricsTrend')} />
+              <TrendChart serie={serie} label={isWeekly ? t('metricsTrendWeek') : t('metricsTrend')} />
             )}
-            <p className="mt-2 text-[10px] leading-relaxed text-primary/35">
-              {t('metricsPartialFirstDay', { days: data.period?.days ?? days })}
+            {/* En el histórico la ventana arranca a las 00:00 del primer pedido:
+                no hay día parcial, y lo que importa decir es desde cuándo. */}
+            <p className="mt-2 text-[10px] leading-relaxed text-primary/35" data-testid="metrics-period-note">
+              {isHistoric
+                ? `${t('metricsHistoricNote', { date: sinceLabel, days: period?.days ?? '—' })}${
+                    isWeekly ? ` ${t('metricsHistoricWeekly')}` : ''
+                  }`
+                : t('metricsPartialFirstDay', { days: data.period?.days ?? days })}
             </p>
           </div>
 

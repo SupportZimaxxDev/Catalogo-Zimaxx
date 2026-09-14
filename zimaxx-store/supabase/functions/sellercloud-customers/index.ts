@@ -62,14 +62,14 @@ import {
 // navegador seguiría mandando create. 'search', 'link' y 'update' no se tocan.
 // Pareja de SC_CREATE_ENABLED en src/pages/admin/ClientsAdmin.jsx.
 //
-// VALOR POR RAMA (decisión del usuario, 2026-09-10):
-//   * main / producción → false (la versión viva v4 lo tiene en false).
-//   * dev → true: es la rama donde se repara la creación de clientes y para
-//     probarla la función tiene que aceptar create.
-// Al redesplegar desde dev, el candado del servidor se abre para TODOS los
-// frontends; la protección que queda en producción es el flag del frontend de
-// main (toggle deshabilitado + guard en createSc).
-const CREATE_ENABLED = true
+// VALOR (decisión del usuario, 2026-09-14): false en las DOS ramas. El 09-10
+// dev había quedado en true para reparar la creación de clientes, y la v6
+// desplegada desde dev el 09-11 dejó este candado ABIERTO en producción; el
+// 09-14 el usuario pidió volver a bloquear el alta y la función se redespliega
+// con false. Este valor rige para TODOS los frontends que la llamen: si alguna
+// vez vuelve a true, un bundle con SC_CREATE_ENABLED = false queda protegido
+// solo por su propio flag.
+const CREATE_ENABLED = false
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')
@@ -191,10 +191,21 @@ async function pushProfile(
   const warnings: string[] = []
   let applied: string[] = []
   try {
-    applied = await updateCustomer(cfg, token, scId, profileFields(client, phone))
+    // 2026-09-11 (a pedido del usuario): además de la ficha, el mismo PUT
+    // marca al customer como mayorista (IsWholesale: true) y lo cuelga de la
+    // compañía del negocio (CompanyId = SELLERCLOUD_COMPANY_ID, la misma que
+    // llevan las órdenes). Explícito a propósito, aunque el create ya mande
+    // CustomerType y CompanyID: el enum de CustomerType es ambiguo en el
+    // Swagger y así queda fijo sin depender de él. Vale para el alta y para
+    // 'update'.
+    applied = await updateCustomer(cfg, token, scId, {
+      ...profileFields(client, phone),
+      isWholesale: true,
+      companyId: cfg.companyId,
+    })
   } catch (e) {
     warnings.push(
-      `El cliente está en SellerCloud (#${scId}) pero no se pudo cargar su ficha (teléfono/empresa/account manager/salesman/comentarios): ${(e as Error).message}. Cargala allá.`,
+      `El cliente está en SellerCloud (#${scId}) pero no se pudo cargar su ficha (teléfono/empresa/account manager/salesman/comentarios/mayorista/compañía): ${(e as Error).message}. Cargala allá.`,
     )
   }
   let group: number | null = null

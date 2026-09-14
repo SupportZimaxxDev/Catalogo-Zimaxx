@@ -658,12 +658,24 @@ export async function createCustomer(
 // mismo `sellercloud_rep_id` que viaja como Sales Rep en las órdenes),
 // SalesMan es el nombre de la vendedora en texto, y Comment es el tipo de
 // cliente del negocio ("Mayorista"/"Minorista"/"Distribuidor"/...).
+//
+// 2026-09-11 (a pedido del usuario): el mismo PUT marca al customer como
+// mayorista y lo cuelga de la compañía del negocio de forma EXPLÍCITA —
+// `IsWholesale: true` y `CompanyId` (los dos existen en el
+// UpdateCustomerRequest del Swagger real). El create ya manda CustomerType y
+// CompanyID, pero el enum de CustomerType es ambiguo (el Swagger dice 0 =
+// WholeSale en el create y 1 = Wholesale en el filtro del GET) y no hay
+// garantía de que el create respete CompanyID: el PUT deja las dos cosas
+// fijas sin depender de eso. Van solo cuando el llamador las pasa
+// (booleano explícito / entero positivo), como el resto de la ficha.
 export type CustomerFields = {
   phone?: string | null
   businessName?: string | null
   accountManagerId?: number | null
   salesman?: string | null
   comments?: string | null
+  isWholesale?: boolean | null
+  companyId?: number | null
 }
 
 export function customerUpdateBody(fields: CustomerFields): Record<string, unknown> {
@@ -675,6 +687,9 @@ export function customerUpdateBody(fields: CustomerFields): Record<string, unkno
   if (fields.accountManagerId != null && Number.isInteger(am) && am > 0) body.AccountManager1Id = am
   if (s(fields.salesman)) body.Salesman = s(fields.salesman)
   if (s(fields.comments)) body.Comments = s(fields.comments)
+  if (typeof fields.isWholesale === 'boolean') body.IsWholesale = fields.isWholesale
+  const co = Number(fields.companyId)
+  if (fields.companyId != null && Number.isInteger(co) && co > 0) body.CompanyId = co
   return body
 }
 

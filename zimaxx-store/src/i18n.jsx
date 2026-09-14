@@ -138,7 +138,6 @@ const dict = {
     // Ficha SellerCloud del cliente (2026-09-09): empresa, grupo, account
     // manager, salesman y comentarios — con esto se registra el customer.
     businessName: 'Empresa',
-    businessNameOptional: 'Empresa (opcional)',
     scGroup: 'Grupo',
     scGroupNone: 'Sin grupo',
     scAccountManager: 'Account manager',
@@ -375,7 +374,7 @@ const dict = {
     // Pedidos que el cliente envió y no entraron (2026-08-05, order_failures)
     failedOrders: 'Pedidos que no se registraron',
     failedOrdersBody:
-      'El cliente los envió por WhatsApp pero no entraron al sistema. "Recuperar" los carga como cotización (precio vigente de su lista) — confirmá con el cliente antes de convertirla en pedido. Los que no tienen cliente o ítems no se pueden recuperar; solo se pueden descartar.',
+      'El cliente los envió por WhatsApp pero no entraron al sistema. "Recuperar" los carga como cotización (precio vigente de su lista) — confirmá con el cliente antes de convertirla en pedido. "Descartar" lo saca de esta lista sin borrarlo (queda en la auditoría), por si no se quiere recuperar. Los que no tienen cliente o ítems solo se pueden descartar.',
     recoverOrder: 'Recuperar',
     recovering: 'Recuperando…',
     recoverFailed: 'No se pudo recuperar el pedido.',
@@ -384,6 +383,25 @@ const dict = {
     dismissFailed: 'No se pudo descartar.',
     failureLines: 'líneas',
     unknownClient: 'Cliente no identificado',
+    // Cuadro expandible de fallos (2026-09-10)
+    quotes: 'Cotizaciones',
+    failedOrdersShow: 'Ver detalle',
+    failedOrdersHide: 'Ocultar detalle',
+    failureItemsShow: 'Ver contenido',
+    failureItemsHide: 'Ocultar contenido',
+    failureItemsNone: 'Este intento no guardó ítems (token inválido): no hay nada que ver ni recuperar.',
+    failureMissingPrice: 'sin precio en la lista',
+    failureUnknownProduct: 'Producto no encontrado',
+    failureUnits: 'unidades',
+    // Fecha visible por fallo + descartar cualquiera (2026-09-11)
+    failedOrdersRange: 'del {from} al {to}',
+    failedOrdersCapped: 'Se muestran los {n} más recientes.',
+    failureAgoToday: 'hoy',
+    failureAgoYesterday: 'ayer',
+    failureAgoDays: 'hace {n} días',
+    dismissConfirmTitle: '¿Descartar este intento?',
+    dismissConfirmBody:
+      'El intento de {client} del {date} dejará de aparecer en esta lista y ya no se podrá recuperar desde el panel. La fila no se borra y la acción queda en la auditoría.',
     actionRecoverOrder: 'Pedido recuperado',
     actionManualOrder: 'Pedido cargado a mano',
     actionPushSellerCloud: 'Orden enviada a SellerCloud',
@@ -599,6 +617,13 @@ const dict = {
     metricsExcluded: 'Fuera del cálculo (cuentas de prueba):',
     metricsMigrationMissing:
       'Falta correr migration-2026-08-06-sa-metrics.sql en la base de datos: la RPC sa_metrics_overview todavía no existe.',
+    // Rango Histórico (2026-09-11)
+    metricsHistoric: 'Histórico',
+    metricsTrendWeek: 'Monto por semana',
+    metricsHistoricNote: 'Histórico: desde el primer pedido ({date}) hasta hoy, {days} días.',
+    metricsHistoricWeekly: 'Con un rango tan largo las barras son por semana.',
+    metricsHistoricMissing:
+      'Falta correr migration-2026-09-11-sa-metrics-historic.sql en la base de datos: la RPC sa_metrics_overview todavía no acepta el rango Histórico.',
     invalidZeroPriceHint:
       'Precio en 0: cuenta como sin precio, así que el producto NO sale en el catálogo. Volvé a cargarlo con el precio real.',
 
@@ -805,7 +830,6 @@ const dict = {
     scPickToLinkOnly: 'Pick the right one to link it.',
     scCloseBtn: 'Close',
     businessName: 'Business name',
-    businessNameOptional: 'Business name (optional)',
     scGroup: 'Group',
     scGroupNone: 'No group',
     scAccountManager: 'Account manager',
@@ -1030,7 +1054,7 @@ const dict = {
     orderNeedsItem: 'The order must have at least one product.',
     failedOrders: 'Orders that were not saved',
     failedOrdersBody:
-      'The client sent these over WhatsApp but they never reached the system. "Recover" loads them as a quote (current list price) — confirm with the client before converting it to an order. Ones with no client or items can\'t be recovered; they can only be dismissed.',
+      'The client sent these over WhatsApp but they never reached the system. "Recover" loads them as a quote (current list price) — confirm with the client before converting it to an order. "Dismiss" removes it from this list without deleting it (it stays in the audit log), in case you don\'t want to recover it. Ones with no client or items can only be dismissed.',
     recoverOrder: 'Recover',
     recovering: 'Recovering…',
     recoverFailed: 'The order could not be recovered.',
@@ -1039,6 +1063,23 @@ const dict = {
     dismissFailed: 'Could not dismiss it.',
     failureLines: 'lines',
     unknownClient: 'Unidentified client',
+    quotes: 'Quotes',
+    failedOrdersShow: 'Show details',
+    failedOrdersHide: 'Hide details',
+    failureItemsShow: 'Show contents',
+    failureItemsHide: 'Hide contents',
+    failureItemsNone: 'This attempt saved no items (invalid token): nothing to see or recover.',
+    failureMissingPrice: 'no price in the list',
+    failureUnknownProduct: 'Product not found',
+    failureUnits: 'units',
+    failedOrdersRange: 'from {from} to {to}',
+    failedOrdersCapped: 'Showing the {n} most recent.',
+    failureAgoToday: 'today',
+    failureAgoYesterday: 'yesterday',
+    failureAgoDays: '{n} days ago',
+    dismissConfirmTitle: 'Dismiss this attempt?',
+    dismissConfirmBody:
+      "{client}'s attempt from {date} will disappear from this list and can no longer be recovered from the panel. The row is not deleted and the action is recorded in the audit log.",
     actionRecoverOrder: 'Order recovered',
     actionManualOrder: 'Order loaded by hand',
     actionPushSellerCloud: 'Order sent to SellerCloud',
@@ -1254,6 +1295,12 @@ const dict = {
     metricsExcluded: 'Left out of the numbers (test accounts):',
     metricsMigrationMissing:
       'migration-2026-08-06-sa-metrics.sql has not been run on the database yet: the sa_metrics_overview RPC does not exist.',
+    metricsHistoric: 'All time',
+    metricsTrendWeek: 'Amount per week',
+    metricsHistoricNote: 'All time: from the first order ({date}) to today, {days} days.',
+    metricsHistoricWeekly: 'Over a range this long the bars are weekly.',
+    metricsHistoricMissing:
+      'migration-2026-09-11-sa-metrics-historic.sql has not been run on the database yet: the sa_metrics_overview RPC does not accept the All time range.',
     invalidZeroPriceHint:
       'Price is 0: that counts as no price, so the product does NOT show in the catalog. Upload it again with the real price.',
 

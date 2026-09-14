@@ -64,11 +64,17 @@ const SC_ORDER_URL = 'https://fc2.delta.sellercloud.com/orders/order-details.asp
 // falla no se muestra ningún precio. En tandas, cada una responde por su
 // cuenta y los precios van apareciendo.
 const LIVE_PRICING_CHUNK = 100
+// Tope de filas del cuadro "Pedidos que no se registraron". Era 50 y en
+// producción había 77 pendientes (2026-09-10): el encabezado decía "50" y el
+// rango de fechas del resumen hubiera mentido. 200 alcanza de sobra para una
+// alarma que se vacía recuperando o descartando; si se llega al tope, el
+// resumen lo dice (failedOrdersCapped).
+const FAILURES_CAP = 200
 
 // Bandeja de pedidos: cada uno se marca atendido para no depender de la
 // memoria del chat de WhatsApp.
 export default function OrdersAdmin() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const { role, isSuper, inventory } = useOutletContext()
   const isAdmin = role === 'admin'
 
@@ -160,8 +166,118 @@ export default function OrdersAdmin() {
   // asignárselo — "Recuperar" ni aparece — y antes se quedaba en el banner
   // para siempre sin ninguna acción posible (2026-08-13, reportado por el
   // usuario). "Descartar" lo saca de la lista sin borrar la fila.
+  // Desde 2026-09-11 (a pedido del usuario) Descartar aparece en TODOS los
+  // fallos, también en los recuperables — "por si no se quiere recuperar" —
+  // y en esos pide confirmación, porque desde el panel no hay vuelta atrás:
+  // el descartado deja de listarse y la RPC de recuperar ya no lo alcanza
+  // desde acá. confirmDismiss guarda el id del fallo esperando confirmación.
   const [dismissing, setDismissing] = useState(null)
   const [dismissError, setDismissError] = useState(null) // { id, message }
+  const [confirmDismiss, setConfirmDismiss] = useState(null)
+
+  // Cuadro expandible + contenido de cada fallo (2026-09-10, a pedido del
+  // usuario). Al correr la migración de `dismissed_at` aparecieron de golpe
+  // los 77 fallos acumulados desde el 08-12 — casi todos "productos sin precio
+  // en la lista del cliente" — y el banner ocupaba media pantalla sin decir qué
+  // había adentro. Ahora: plegado por defecto con el conteo por tipo, y cada
+  // fallo dice si era pedido o cotización y despliega sus líneas.
+  const [failuresOpen, setFailuresOpen] = useState(false)
+  const [failureOpen, setFailureOpen] = useState(() => new Set())
+  const [failureDetail, setFailureDetail] = useState({}) // id → { status, rows, message }
+
+  // Los SKU que nombra el motivo "productos sin precio en la lista del
+  // cliente: A, B" (create_order) — para marcar esas líneas en rojo.
+  const missingSkusOf = (f) => {
+    const reason = String(f.reason ?? '')
+    if (!/sin precio|no price/i.test(reason)) return new Set()
+    const m = /:\s*(.+)$/.exec(reason)
+    if (!m) return new Set()
+    return new Set(m[1].split(',').map((s) => s.trim()).filter(Boolean))
+  }
+
+  // Fecha de cada fallo, visible y en el idioma del panel (2026-09-11, a
+  // pedido del usuario: "que tengan la fecha de cuando son"). Antes iba en
+  // gris chico delante del motivo, con el toLocaleString() del navegador, y
+  // en una lista de 77 filas no se veía. `created_at` es el momento en que
+  // create_order rechazó el intento; para los del outbox expirado es cuando
+  // el teléfono lo reportó (≥24 h después de armarlo), no cuando el cliente
+  // tocó Enviar — report_outbox_expired no viaja con esa hora.
+  const failureLocale = lang === 'en' ? 'en-US' : 'es-VE'
+  const fmtFailureDate = (iso) => {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return '—'
+    return d.toLocaleString(failureLocale, {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  }
+  const fmtFailureDay = (d) => d.toLocaleDateString(failureLocale, { day: 'numeric', month: 'short', year: 'numeric' })
+  // "hoy" / "ayer" / "hace N días", por día calendario local (no por 24 h:
+  // algo de anoche a las 23:00 es "ayer" aunque hayan pasado 9 horas).
+  const failureAgo = (iso) => {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return null
+    const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+    const days = Math.round((dayStart(new Date()) - dayStart(d)) / 86400000)
+    if (days <= 0) return t('failureAgoToday')
+    if (days === 1) return t('failureAgoYesterday')
+    return t('failureAgoDays', { n: days })
+  }
+
+  // Ítems del fallo listos para mostrar. El payload puede venir completo
+  // ({id, sku, name, qty, price} — create_order desde el drawer, o el outbox
+  // expirado) o slim ({id, qty, flash} — el outbox en el wire): para el slim
+  // se resuelven sku/nombre desde products, de a 100 ids por URL (PostgREST
+  // manda el in.(...) en la query string). Nunca recalcula precios: si el
+  // payload no traía, no se inventa — "Recuperar" ya los pone vigentes.
+  const loadFailureDetail = async (f) => {
+    setFailureDetail((p) => ({ ...p, [f.id]: { status: 'loading' } }))
+    try {
+      const items = Array.isArray(f.items) ? f.items : []
+      const lookup = [...new Set(items.filter((it) => it?.id && (!it.name || !it.sku)).map((it) => it.id))]
+      const byId = new Map()
+      for (let i = 0; i < lookup.length; i += 100) {
+        const { data, error } = await supabase
+          .from('products')
+          .select('id, sku, name, upc')
+          .in('id', lookup.slice(i, i + 100))
+        if (error) throw error
+        for (const p of data ?? []) byId.set(p.id, p)
+      }
+      const missing = missingSkusOf(f)
+      const rows = items.map((it) => {
+        const p = it?.id ? byId.get(it.id) : null
+        const sku = it?.sku ?? p?.sku ?? null
+        const price = it?.price != null && Number.isFinite(Number(it.price)) ? Number(it.price) : null
+        return {
+          id: it?.id ?? null,
+          sku,
+          name: it?.name ?? p?.name ?? null,
+          qty: Number(it?.qty) || 0,
+          price,
+          missingPrice: !!sku && missing.has(sku),
+        }
+      })
+      setFailureDetail((p) => ({ ...p, [f.id]: { status: 'ok', rows } }))
+    } catch (e) {
+      setFailureDetail((p) => ({ ...p, [f.id]: { status: 'error', message: e.message ?? String(e) } }))
+    }
+  }
+
+  const toggleFailure = (f) => {
+    const opening = !failureOpen.has(f.id)
+    setFailureOpen((prev) => {
+      const next = new Set(prev)
+      if (next.has(f.id)) next.delete(f.id)
+      else next.add(f.id)
+      return next
+    })
+    if (opening && !failureDetail[f.id]) loadFailureDetail(f)
+  }
 
   const loadLivePricing = async (list) => {
     const quoteIds = list.filter((o) => o.kind === 'quote').map((o) => o.id)
@@ -343,11 +459,11 @@ export default function OrdersAdmin() {
       .is('recovered_order_id', null)
       .is('dismissed_at', null)
       .order('created_at', { ascending: false })
-      .limit(50)
+      .limit(FAILURES_CAP)
       .then(({ data }) => setFailures(data ?? []))
 
   // Recarga al montar Y al cambiar la ventana. Los fallos (order_failures) no
-  // llevan ventana: son una alarma acotada a 50 filas, no un listado.
+  // llevan ventana: son una alarma acotada a FAILURES_CAP filas, no un listado.
   useEffect(() => {
     setLoading(true)
     setLoadError(false)
@@ -378,8 +494,11 @@ export default function OrdersAdmin() {
     loadFailures()
   }
 
-  // Descarta un fallo que nunca se va a poder recuperar (sin cliente o sin
-  // ítems): no borra la fila, solo la saca del banner (dismissed_at).
+  // Descarta un fallo: no borra la fila, solo la saca del banner
+  // (dismissed_at) y queda en admin_audit_log. Nació para los que nunca se
+  // van a poder recuperar (sin cliente o sin ítems); desde 2026-09-11 vale
+  // para cualquiera — los recuperables pasan antes por el modal de
+  // confirmación (confirmDismiss), los otros llegan acá directo.
   const dismiss = async (id) => {
     setDismissError(null)
     setDismissing(id)
@@ -613,62 +732,202 @@ export default function OrdersAdmin() {
   // Va arriba de la bandeja y también cuando todavía no hay ningún pedido: un
   // catálogo nuevo cuyo primer pedido rebotó mostraría "aún no hay pedidos"
   // ocultando justo lo que hay que ver.
+  // Cuadro expandible (2026-09-10): plegado por defecto con el conteo por tipo
+  // — "Ver detalle" abre la lista. Cada fallo lleva el badge Pedido/Cotización
+  // (el mismo de la bandeja) y "Ver contenido" despliega sus líneas, con las
+  // que nombra el motivo ("sin precio en la lista") marcadas en rojo.
+  const failedOrdersCount = failures.filter((f) => f.kind !== 'quote').length
+  const failedQuotesCount = failures.length - failedOrdersCount
+  // Rango de fechas para el resumen plegado ("del 12 ago 2026 al 10 sep
+  // 2026"): así se sabe de cuándo son sin abrir la lista. Un solo día se
+  // muestra suelto.
+  const failureTimes = failures.map((f) => new Date(f.created_at).getTime()).filter(Number.isFinite)
+  const oldestFailure = failureTimes.length ? new Date(Math.min(...failureTimes)) : null
+  const newestFailure = failureTimes.length ? new Date(Math.max(...failureTimes)) : null
+  const failuresRange =
+    oldestFailure && newestFailure
+      ? fmtFailureDay(oldestFailure) === fmtFailureDay(newestFailure)
+        ? fmtFailureDay(newestFailure)
+        : t('failedOrdersRange', { from: fmtFailureDay(oldestFailure), to: fmtFailureDay(newestFailure) })
+      : null
   const failuresNotice = failures.length > 0 && (
-    <div className="rounded-xl border-2 border-red-500 bg-red-50 p-4 dark:bg-red-950/40">
-      <h3 className="text-sm font-bold text-red-700 dark:text-red-300">
-        ⚠️ {t('failedOrders')} ({failures.length})
-      </h3>
-      <p className="mt-1 text-xs leading-relaxed text-red-900/70 dark:text-red-200/70">
-        {t('failedOrdersBody')}
-      </p>
-      <ul className="mt-3 space-y-2">
-        {failures.map((f) => {
-          // Sin cliente (token inválido) o sin ítems: no hay a quién
-          // asignárselo, "Recuperar" no tiene sentido — la única salida es
-          // descartarlo (2026-08-13).
-          const canRecover = !!f.client_id && Array.isArray(f.items) && f.items.length > 0
-          return (
-          <li key={f.id} className="rounded-lg bg-surface p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold">{f.clients?.name ?? t('unknownClient')}</p>
-                <p className="text-xs text-primary/60">
-                  {new Date(f.created_at).toLocaleString()} · {f.reason}
-                  {f.line_count != null && ` · ${f.line_count} ${t('failureLines')}`}
-                </p>
-              </div>
-              {canRecover ? (
-                <button
-                  onClick={() => recover(f.id)}
-                  disabled={recovering === f.id}
-                  className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {recovering === f.id ? t('recovering') : t('recoverOrder')}
-                </button>
-              ) : (
-                <button
-                  onClick={() => dismiss(f.id)}
-                  disabled={dismissing === f.id}
-                  className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-bold text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/40"
-                >
-                  {dismissing === f.id ? t('dismissing') : t('dismissFailure')}
-                </button>
-              )}
-            </div>
-            {recoverError?.id === f.id && (
-              <p className="mt-2 text-xs font-medium text-red-700 dark:text-red-300">
-                {recoverError.message}
-              </p>
+    <div className="rounded-xl border-2 border-red-500 bg-red-50 p-4 dark:bg-red-950/40" data-testid="failures-box">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <h3 className="text-sm font-bold text-red-700 dark:text-red-300">
+            ⚠️ {t('failedOrders')} ({failures.length})
+          </h3>
+          <p className="mt-0.5 text-xs text-red-900/70 dark:text-red-200/70" data-testid="failures-summary">
+            {failedOrdersCount} {failedOrdersCount === 1 ? t('order') : t('orders')} · {failedQuotesCount}{' '}
+            {failedQuotesCount === 1 ? t('quote') : t('quotes')}
+            {failuresRange && (
+              <span data-testid="failures-range">
+                {' '}
+                · 📅 {failuresRange}
+              </span>
             )}
-            {dismissError?.id === f.id && (
-              <p className="mt-2 text-xs font-medium text-red-700 dark:text-red-300">
-                {dismissError.message}
-              </p>
-            )}
-          </li>
-          )
-        })}
-      </ul>
+            {failures.length >= FAILURES_CAP && ` · ${t('failedOrdersCapped', { n: FAILURES_CAP })}`}
+          </p>
+        </div>
+        <button
+          onClick={() => setFailuresOpen((v) => !v)}
+          aria-expanded={failuresOpen}
+          className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-bold text-red-700 transition-colors hover:bg-red-100 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/40"
+        >
+          {failuresOpen ? `${t('failedOrdersHide')} ▴` : `${t('failedOrdersShow')} ▾`}
+        </button>
+      </div>
+      {failuresOpen && (
+        <>
+          <p className="mt-2 text-xs leading-relaxed text-red-900/70 dark:text-red-200/70">
+            {t('failedOrdersBody')}
+          </p>
+          <ul className="mt-3 space-y-2">
+            {failures.map((f) => {
+              // Sin cliente (token inválido) o sin ítems: no hay a quién
+              // asignárselo, "Recuperar" no tiene sentido — la única salida es
+              // descartarlo (2026-08-13). Con cliente e ítems hay las dos
+              // salidas: Recuperar o Descartar con confirmación (2026-09-11).
+              const canRecover = !!f.client_id && Array.isArray(f.items) && f.items.length > 0
+              const isQuote = f.kind === 'quote'
+              const open = failureOpen.has(f.id)
+              const detail = failureDetail[f.id]
+              const rows = detail?.status === 'ok' ? detail.rows : []
+              const hasPrices = rows.some((r) => r.price != null)
+              const units = rows.reduce((s, r) => s + r.qty, 0)
+              const total = hasPrices ? rows.reduce((s, r) => s + (r.price != null ? r.price * r.qty : 0), 0) : null
+              return (
+                <li key={f.id} className="rounded-lg bg-surface p-3" data-testid="failure-row">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            isQuote
+                              ? 'bg-secondary/20 text-secondary-dark'
+                              : 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300'
+                          }`}
+                        >
+                          {isQuote ? t('quote') : t('order')}
+                        </span>
+                        {f.clients?.name ?? t('unknownClient')}
+                      </p>
+                      <p className="mt-0.5 text-xs font-semibold text-primary/80" data-testid="failure-date">
+                        📅 {fmtFailureDate(f.created_at)}
+                        {failureAgo(f.created_at) && (
+                          <>
+                            {' '}
+                            <span className="ml-1 font-normal text-primary/50">· {failureAgo(f.created_at)}</span>
+                          </>
+                        )}
+                      </p>
+                      <p className="text-xs text-primary/60">
+                        {f.reason}
+                        {f.line_count != null && ` · ${f.line_count} ${t('failureLines')}`}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => toggleFailure(f)}
+                        aria-expanded={open}
+                        className="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-primary/70 transition-colors hover:border-primary/40"
+                      >
+                        {open ? `${t('failureItemsHide')} ▴` : `${t('failureItemsShow')} ▾`}
+                      </button>
+                      {canRecover && (
+                        <button
+                          onClick={() => recover(f.id)}
+                          disabled={recovering === f.id}
+                          className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {recovering === f.id ? t('recovering') : t('recoverOrder')}
+                        </button>
+                      )}
+                      {/* Descartar siempre está (2026-09-11). Con algo que
+                          perder (recuperable) pide confirmación; sin cliente
+                          o sin ítems no hay nada que rescatar y va directo. */}
+                      <button
+                        onClick={() => (canRecover ? setConfirmDismiss(f.id) : dismiss(f.id))}
+                        disabled={dismissing === f.id || recovering === f.id}
+                        data-testid="failure-dismiss"
+                        className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-bold text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/40"
+                      >
+                        {dismissing === f.id ? t('dismissing') : t('dismissFailure')}
+                      </button>
+                    </div>
+                  </div>
+                  {open && (
+                    <div className="mt-3 rounded-lg border border-line bg-primary/[0.02] p-2.5" data-testid="failure-items">
+                      {detail?.status === 'loading' && <p className="text-xs text-primary/50">{t('loading')}</p>}
+                      {detail?.status === 'error' && (
+                        <p className="text-xs font-medium text-red-700 dark:text-red-300">{detail.message}</p>
+                      )}
+                      {detail?.status === 'ok' && rows.length === 0 && (
+                        <p className="text-xs text-primary/60">{t('failureItemsNone')}</p>
+                      )}
+                      {detail?.status === 'ok' && rows.length > 0 && (
+                        <>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="text-left uppercase tracking-wide text-primary/45">
+                                  <th className="pb-1.5 pr-4 font-semibold">{t('product')}</th>
+                                  <th className="pb-1.5 pr-4 text-right font-semibold">{t('quantity')}</th>
+                                  {hasPrices && <th className="pb-1.5 pr-4 text-right font-semibold">{t('unitPrice')}</th>}
+                                  {hasPrices && <th className="pb-1.5 text-right font-semibold">{t('subtotal')}</th>}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {rows.map((r, n) => (
+                                  <tr
+                                    key={n}
+                                    className={`border-t border-line/60 ${r.missingPrice ? 'text-red-700 dark:text-red-300' : ''}`}
+                                  >
+                                    <td className="py-1.5 pr-4">
+                                      {r.sku && <span className="font-mono text-primary/40">[{r.sku}]</span>}{' '}
+                                      {r.name ?? <span className="italic text-primary/50">{t('failureUnknownProduct')}</span>}
+                                      {r.missingPrice && (
+                                        <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700 dark:bg-red-900/50 dark:text-red-300">
+                                          {t('failureMissingPrice')}
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="py-1.5 pr-4 text-right">{r.qty}</td>
+                                    {hasPrices && (
+                                      <td className="py-1.5 pr-4 text-right">{r.price != null ? money(r.price) : '—'}</td>
+                                    )}
+                                    {hasPrices && (
+                                      <td className="py-1.5 text-right">{r.price != null ? money(r.price * r.qty) : '—'}</td>
+                                    )}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <p className="mt-2 text-right text-xs text-primary/60">
+                            {rows.length} {t('failureLines')} · {units} {t('failureUnits')}
+                            {total != null && ` · ${t('total')}: ${money(total)}`}
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {recoverError?.id === f.id && (
+                    <p className="mt-2 text-xs font-medium text-red-700 dark:text-red-300">
+                      {recoverError.message}
+                    </p>
+                  )}
+                  {dismissError?.id === f.id && (
+                    <p className="mt-2 text-xs font-medium text-red-700 dark:text-red-300">
+                      {dismissError.message}
+                    </p>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      )}
     </div>
   )
 
@@ -713,6 +972,9 @@ export default function OrdersAdmin() {
 
   // Aviso del efecto en stock dentro del modal de confirmación (2026-08-04):
   // solo aplica a pedidos reales — una cotización nunca mueve inventario.
+  // Fallo esperando confirmación de Descartar (2026-09-11). Si entre click y
+  // render desapareció de la lista (lo recuperó otra pestaña), no hay modal.
+  const dismissTarget = confirmDismiss ? failures.find((f) => f.id === confirmDismiss) : null
   const pendingOrder = confirmStatus ? orders.find((o) => o.id === confirmStatus.id) : null
   const stockNoticeKey =
     pendingOrder?.kind !== 'order'
@@ -1495,6 +1757,54 @@ export default function OrdersAdmin() {
                 className="flex-1 rounded-xl bg-ink py-2.5 text-sm font-bold text-secondary transition-opacity hover:opacity-90"
               >
                 {t('confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmación de "Descartar" un fallo recuperable (2026-09-11): misma
+          receta que la de cambio de estado. Dice de quién y de cuándo es lo
+          que se va a descartar, porque desde el panel no se puede deshacer. */}
+      {dismissTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-[2px] md:items-center"
+          onClick={() => setConfirmDismiss(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            data-testid="dismiss-confirm"
+            className="w-full max-w-sm animate-fade-up rounded-t-3xl border-t-4 border-red-500 bg-surface p-6 shadow-2xl md:rounded-3xl"
+          >
+            <h3 className="font-brand text-lg font-semibold">{t('dismissConfirmTitle')}</h3>
+            <p className="mt-1.5 text-sm leading-relaxed text-primary/60">
+              {t('dismissConfirmBody', {
+                client: dismissTarget.clients?.name ?? t('unknownClient'),
+                date: fmtFailureDate(dismissTarget.created_at),
+              })}
+            </p>
+            <p className="mt-3 rounded-xl bg-primary/[0.04] p-3 text-xs leading-relaxed text-primary/70">
+              {dismissTarget.kind === 'quote' ? t('quote') : t('order')}
+              {dismissTarget.line_count != null && ` · ${dismissTarget.line_count} ${t('failureLines')}`}
+              {' · '}
+              {dismissTarget.reason}
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button
+                onClick={() => setConfirmDismiss(null)}
+                className="flex-1 rounded-xl border border-line py-2.5 text-sm font-semibold transition-colors hover:border-primary/40"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={() => {
+                  const id = confirmDismiss
+                  setConfirmDismiss(null)
+                  dismiss(id)
+                }}
+                className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
+              >
+                {t('dismissFailure')}
               </button>
             </div>
           </div>

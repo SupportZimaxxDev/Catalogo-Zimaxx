@@ -137,16 +137,15 @@ const LIST_CODE_ALIASES = {
 // createSc corta antes de llamar a la Edge Function. Va en pareja con
 // CREATE_ENABLED en supabase/functions/sellercloud-customers/index.ts.
 //
-// VALOR POR RAMA (decisión del usuario, 2026-09-10):
-//   * main / producción → false: el alta quedó apagada el 09-09 mientras se
-//     repara, y así sigue desplegada.
-//   * dev → true: ES la rama donde se repara la creación de clientes, así que
-//     acá no puede estar bloqueada.
-// Antes de deployar dev a producción, decidir a conciencia este valor (con
-// true, el alta se reactiva para todas las vendedoras). En un conflicto de
-// merge sobre esta zona, conservar el bloque completo del flag y elegir el
-// valor según la rama destino.
-const SC_CREATE_ENABLED = true
+// VALOR (decisión del usuario, 2026-09-14): false en las DOS ramas. El 09-10
+// dev había quedado en true para reparar la creación de clientes; el 09-14,
+// al deployar dev a producción, el usuario pidió volver a bloquear el alta,
+// así que main y dev van iguales (false) y no queda ningún valor "por rama"
+// que un merge pueda perder. Para retomar la reparación en dev: los dos flags
+// en true SIN deployar. Para reactivar el alta en producción: los dos en true
+// + deploy del frontend + redeploy de sellercloud-customers. En un conflicto
+// de merge sobre esta zona, conservar el bloque completo del flag.
+const SC_CREATE_ENABLED = false
 
 // scCreate (2026-09-02): "Crear también en SellerCloud" — prendido por
 // defecto (mientras SC_CREATE_ENABLED lo permita); al elegir la lista 'quote'
@@ -1321,7 +1320,7 @@ export default function ClientsAdmin() {
             value={form.business_name}
             onChange={(e) => onChange({ business_name: e.target.value })}
             onKeyDown={onKeyDown}
-            placeholder={t('businessNameOptional')}
+            placeholder={t('businessName')}
             className={`${profileInputCls} mt-0.5`}
           />
         </label>

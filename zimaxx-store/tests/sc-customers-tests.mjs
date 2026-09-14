@@ -300,6 +300,15 @@ console.log('customerUpdateBody: solo lo que tiene valor (UpdateCustomerRequest 
   ok(!('AccountManager1Id' in customerUpdateBody({ accountManagerId: -3 })), 'account manager negativo no viaja')
   ok(customerUpdateBody({ accountManagerId: '75448' }).AccountManager1Id === 75448, 'account manager como string numérico se convierte')
   ok(!('AccountManager1Id' in customerUpdateBody({ accountManagerId: 'abc' })), 'account manager no numérico no viaja')
+  // Mayorista + compañía explícitos (2026-09-11)
+  ok(customerUpdateBody({ isWholesale: true }).IsWholesale === true, 'isWholesale true → IsWholesale: true')
+  ok(customerUpdateBody({ isWholesale: false }).IsWholesale === false, 'isWholesale false viaja como false (booleano explícito)')
+  ok(!('IsWholesale' in customerUpdateBody({ isWholesale: null })), 'isWholesale null no viaja')
+  ok(!('IsWholesale' in customerUpdateBody({ comments: 'x' })), 'sin isWholesale no viaja')
+  ok(customerUpdateBody({ companyId: 8 }).CompanyId === 8, 'companyId → CompanyId')
+  ok(!('CompanyId' in customerUpdateBody({ companyId: 0 })), 'companyId 0 no viaja')
+  ok(!('CompanyId' in customerUpdateBody({ companyId: null })), 'companyId null no viaja')
+  ok(!('CompanyId' in customerUpdateBody({ companyId: NaN })), 'companyId NaN no viaja')
 }
 
 console.log('updateCustomer: PUT con la ficha completa')
@@ -311,6 +320,8 @@ console.log('updateCustomer: PUT con la ficha completa')
     accountManagerId: 75448,
     salesman: 'Adriana Montilla',
     comments: 'Mayorista',
+    isWholesale: true,
+    companyId: cfg.companyId,
   })
   const req = lastReq()
   ok(req.method === 'PUT' && req.path === '/rest/api/Customers/777', 'PUT /Customers/{id}')
@@ -319,7 +330,8 @@ console.log('updateCustomer: PUT con la ficha completa')
       req.body.Comments === 'Mayorista' && req.body.BusinessName === 'ACME',
     'teléfono + ficha en UN solo PUT',
   )
-  ok(applied.length === 5 && applied.includes('Comments'), 'devuelve las claves que viajaron')
+  ok(req.body.IsWholesale === true && req.body.CompanyId === 8, 'y en el mismo PUT: IsWholesale true + CompanyId del negocio (2026-09-11)')
+  ok(applied.length === 7 && applied.includes('Comments') && applied.includes('IsWholesale') && applied.includes('CompanyId'), 'devuelve las claves que viajaron')
 
   state.requests = []
   const none = await updateCustomer(cfg, token, 777, { phone: '', businessName: null })
