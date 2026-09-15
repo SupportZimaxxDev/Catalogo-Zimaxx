@@ -6,10 +6,10 @@ import { buildOrderMessage, whatsappUrl } from '../utils/whatsapp'
 import { downloadOrderPdf } from '../utils/pdf'
 import { clearPending, flushPending, loadPending, markFailed, postWithRetry, savePending } from '../utils/orderOutbox'
 import { logEvent } from '../utils/systemLog'
+import { minOrderFor } from '../utils/minOrder'
 
-// Pedido mínimo del negocio: no se puede enviar una orden por debajo de
-// este monto.
-const MIN_ORDER = Number(import.meta.env.VITE_MIN_ORDER ?? 800)
+// Pedido mínimo: desde 2026-09-15 es POR LISTA (`client.min_order`, lo manda
+// get_catalog; ver src/utils/minOrder.js). Antes era un 800 plano para todas.
 
 // Drawer lateral (desktop) / hoja completa (móvil) con resumen y checkout.
 export default function CartDrawer({ token, client }) {
@@ -87,7 +87,12 @@ export default function CartDrawer({ token, client }) {
   if (!cart.open) return null
 
   const clientName = client?.name ?? ''
-  const belowMin = cart.hasPrices && cart.total < MIN_ORDER
+  // Mínimo de la lista del cliente (null = sin mínimo). Solo bloquea el
+  // pedido por WhatsApp: el PDF es una cotización y no tiene mínimo. El
+  // servidor rechaza igual por debajo del mínimo (create_order), esto es el
+  // aviso previo.
+  const minOrder = minOrderFor(client)
+  const belowMin = cart.hasPrices && minOrder != null && cart.total < minOrder
 
   // Cerrar el drawer también descarta el acuse: si vuelve a abrirlo para
   // armar otro pedido, arranca limpio. `failed` no se toca: mientras el
@@ -397,13 +402,17 @@ export default function CartDrawer({ token, client }) {
             )}
 
             {belowMin && (
-              <p className="rounded-lg bg-gold-pale/60 p-3 text-xs font-medium leading-relaxed">
-                {t('minOrderIs')} {money(MIN_ORDER)} · {t('missingForMin')}{' '}
-                <span className="font-bold">{money(MIN_ORDER - cart.total)}</span>
+              <p
+                data-testid="min-order-notice"
+                className="rounded-lg bg-gold-pale/60 p-3 text-xs font-medium leading-relaxed"
+              >
+                {t('minOrderIs')} {money(minOrder)} · {t('missingForMin')}{' '}
+                <span className="font-bold">{money(minOrder - cart.total)}</span>
               </p>
             )}
 
             <button
+              data-testid="checkout-button"
               onClick={() => setConfirming(true)}
               disabled={belowMin || busy}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#25D366] py-3 font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"

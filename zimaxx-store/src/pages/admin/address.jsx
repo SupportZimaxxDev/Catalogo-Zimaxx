@@ -71,6 +71,18 @@ export function addressSummary(row) {
   return [line, cityState, row.address_country].filter(Boolean).join(', ')
 }
 
+// "8323 NW 12th St, Doral, FL 33126, US" — SIN la segunda línea: es lo que
+// se muestra bajo el ID de SellerCloud cuando la dirección ya está verificada
+// allá (2026-09-14, pedido del usuario: ver la dirección, no un texto que
+// diga que está). La completa va en el tooltip.
+export function addressShort(row) {
+  if (!row) return ''
+  const cityState = [row.address_city, [row.address_state, row.address_zip].filter(Boolean).join(' ')]
+    .filter(Boolean)
+    .join(', ')
+  return [row.address_line1, cityState, row.address_country].filter(Boolean).join(', ')
+}
+
 const inputCls =
   'w-full min-w-0 rounded-lg border border-line bg-surface px-2 py-1.5 text-xs outline-none transition-colors placeholder:text-primary/35 focus:border-secondary'
 

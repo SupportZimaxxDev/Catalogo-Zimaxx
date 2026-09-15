@@ -21,7 +21,9 @@ const dict = {
     results: 'resultados',
     loadMore: 'Ver más productos',
     preorder: 'Pre-Order',
-    minOrderIs: 'El pedido mínimo es',
+    // 2026-09-15: el mínimo depende de la lista del cliente (800 / 2,000), por
+    // eso el texto dice "de tu lista" y el monto lo pone el carrito.
+    minOrderIs: 'El pedido mínimo de tu lista es',
     missingForMin: 'Te faltan',
 
     // Flash Sale: desde 2026-08-07 es solo una etiqueta del producto (badge
@@ -187,7 +189,6 @@ const dict = {
     addressOptionalHint:
       'Opcional mientras el cliente no se cree en SellerCloud; conviene cargarla igual, se va a necesitar para sus órdenes.',
     addressIncomplete: 'La dirección está incompleta: falta {fields}.',
-    addressScSynced: 'Dirección en SellerCloud ✓',
     addressScSyncedHint: 'Cargada y verificada en SellerCloud (dirección #{id}).',
     addressScPending: 'Dirección sin sincronizar',
     addressScPendingHint:
@@ -788,7 +789,7 @@ const dict = {
     results: 'results',
     loadMore: 'Load more products',
     preorder: 'Pre-Order',
-    minOrderIs: 'Minimum order is',
+    minOrderIs: 'The minimum order for your price list is',
     missingForMin: 'You need',
 
     flashSale: 'Flash Sale',
@@ -923,7 +924,6 @@ const dict = {
     addressOptionalHint:
       'Optional while the client is not created in SellerCloud; worth filling in anyway, their orders will need it.',
     addressIncomplete: 'The address is incomplete: missing {fields}.',
-    addressScSynced: 'Address in SellerCloud ✓',
     addressScSyncedHint: 'Loaded and verified in SellerCloud (address #{id}).',
     addressScPending: 'Address not synced',
     addressScPendingHint:

@@ -33,8 +33,21 @@ Dos regiones × dos niveles + una lista Special general (sin región):
 - **El token no cambia al cambiar de lista**: identifica al cliente, y la
   lista se resuelve al abrir el catálogo. Cambiar la lista en el admin
   actualiza al instante lo que ve el mismo link.
-- **Pedido mínimo $800**: el checkout se bloquea por debajo (configurable
-  con `VITE_MIN_ORDER` en `.env`). Aplica también a Special.
+- **Pedido mínimo POR LISTA** (2026-09-15, a pedido del usuario: "limitar la
+  creación de órdenes menores a 2000 al catálogo de 800$"; antes era $800
+  plano para todas y solo en el navegador): `us_min`/`ve_min` **$800**;
+  `us_wholesale`/`ve_wholesale`/`special`/`luzmar` **$2,000**; `quote` sin
+  mínimo. El valor vive en `price_lists.min_order` (null = sin mínimo,
+  default 800 para listas nuevas), `get_catalog` lo manda como
+  `client.min_order`, el carrito bloquea el envío por WhatsApp por debajo
+  ("El pedido mínimo de tu lista es $2000.00 · Te faltan $X") y
+  **`create_order` lo hace cumplir en el servidor**: un pedido real cuyo
+  total recalculado no llega al mínimo se rechaza y queda en
+  `order_failures` con el motivo. El PDF (cotización) no tiene mínimo. Los
+  caminos del panel (pedido manual, convertir cotización, editar) tampoco lo
+  chequean: ahí decide una persona. `VITE_MIN_ORDER` quedó solo como
+  fallback para una base sin la migración. Cambiar el mínimo de una lista:
+  `update public.price_lists set min_order = 800 where code = 'luzmar';`.
 
 ### Listas con dueña (personales y compartidas)
 
@@ -86,7 +99,8 @@ asignada (mismo mecanismo de `vendedora_phone` que un cliente normal). El
 pedido se guarda igual en `orders` pero con `kind = 'quote'` y todos los
 precios en `null` — `create_order` fuerza esto en el servidor por el
 código de lista del cliente, sin importar lo que mande el navegador. No
-tiene pedido mínimo (no aplica sin precio). La lista `quote` no aparece en
+tiene pedido mínimo (no aplica sin precio; `min_order` null desde
+2026-09-15). La lista `quote` no aparece en
 la matriz/carga de precios de la pestaña Precios (no tiene sentido
 subirle precio, `get_catalog` los ignoraría de todos modos).
 
@@ -947,7 +961,7 @@ Pestañas:
 |---|---|
 | **Productos** | Tabla completa con buscador (nombre/SKU/UPC), filtros (categoría/marca, línea de perfume, activo/inactivo/con stock/sin stock/sin foto/pre-order/🔥 flash/✨ nuevo), columnas **UPC** y **Stock** (datos internos, no se muestran al cliente), contadores clickeables de "sin foto", "Pre-Order", "✨ Nuevo" y "🔥 Flash Sale", miniaturas, alta/edición manual **con campo Stock editable** (2026-08-04 — reponer stock a mano es lo que devuelve un producto de Pre-Order a Disponible sin esperar al sync; vacío = "sin dato", distinto de 0), **selección por casillas para acciones en bloque** (solo admin: activar/desactivar, poner o quitar las etiquetas 🔥 Flash Sale / Pre-Order / Disponible, y marcar o quitar ✨ Nuevo — ver abajo), y **tres cargas por Excel**: productos, fotos y **🔥 Flash Sales** (2026-08-07). |
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador, botones con contador "con precios" / "sin precios" y **los mismos filtros por grupo de producto que la pestaña Productos** (2026-08-07: marca, línea, activo/inactivo, con/sin stock, Pre-Order, 🔥 Flash Sale, ✨ Nuevo) para revisar los precios de un recorte concreto. |
-| **Clientes** | Tabla con buscador (nombre/teléfono/vendedora) **por términos** (2026-08-12, mismo criterio que Pedidos — ver "Buscadores del panel" más abajo), filtros por lista y vendedora, **selector de lista por fila con confirmación** (2026-07-15: elegir una opción no aplica el cambio de una — pide "¿Cambiar la lista a X?" con Confirmar/Cancelar; ahora lo puede hacer también una vendedora con sus propios clientes, no solo admin) y campo **"$ inversión → nivel"** (solo admin, asigna el nivel automáticamente sin confirmación — pensado para carga rápida), **reasignar vendedora** por fila y **eliminar cliente** (ambos solo admin, vía RPC con registro de auditoría), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). **Clientes ↔ SellerCloud** (2026-09-02): en la fila de un cliente sin `sellercloud_id` aparece "⚠️ Sin vínculo" + **"🔍 Buscar en SellerCloud"**, que trae candidatos por email → teléfono → nombre vía la Edge Function `sellercloud-customers` y vincula el elegido con la RPC auditada `link_sellercloud_customer` (admin cualquiera, vendedora sus propios clientes). El **alta de customers en SellerCloud** (toggle "Crear también en SellerCloud" del formulario y botones "Crear en SellerCloud"/"Crear de todos modos" del panel) tiene un candado por flag, `SC_CREATE_ENABLED` en `ClientsAdmin.jsx` en pareja con `CREATE_ENABLED` en la Edge Function `sellercloud-customers`: con `false` el toggle se ve apagado y deshabilitado con el aviso, el panel solo busca y vincula y la función responde 503 a `create`. **Valor por rama (2026-09-14, decisión del usuario)**: `main`/producción → los dos en `false` (deploy `7924120` del 09-14 con el alta bloqueada + función **v7** con el candado cerrado, bajada y diffeada: idéntica al repo); `dev` → los dos en `true` desde la tarde del 09-14, porque `dev` es la rama donde se repara la creación de clientes ("sigamos trabajando el dev con la función en true"). Historia: el hotfix del 2026-09-09 lo apagó en `main`; el 09-10 `dev` quedó en `true`; la v6 de la función desplegada desde `dev` el 09-11 dejó el candado del servidor abierto; el 09-14 se puso `false` en `dev`, se deployó todo (frontend + v7) y `dev` volvió a `true`. **Regla antes de cada deploy desde `dev`** (`main` es ancestro de `dev`, el merge es fast-forward): poner los dos flags en `false`, deployar (frontend por push a `main`; función con `npx supabase functions deploy sellercloud-customers` desde `zimaxx-store/`, que sube el árbol de trabajo, no la rama), y volver a `true` en `dev`. Reactivar el alta en producción a conciencia = los dos en `true` + deploy del frontend + redeploy de la función. **Dirección del cliente** (2026-09-14): bloque 📍 Dirección en el alta, en la fila de edición y en el form "Crear en SellerCloud" (calle, apto, ciudad, estado, código postal, país ISO-2 — UNA dirección que en SellerCloud vale como envío y facturación; estado obligatorio para todos los países). Obligatoria y completa solo cuando el cliente se crea en SellerCloud; si no, puede quedar vacía pero **nunca a medias**. Bajo el ID de SellerCloud un badge dice si la dirección está allá (✓), pendiente (⏳ + **Enviar dirección**), fallida (⚠️ + **Reintentar dirección**, motivo en el tooltip) o sin cargar (📍); la vista completa suma las columnas **Dirección** y **Dir. SellerCloud** (14). Necesita `migration-2026-09-14-client-address.sql` + redeploy de `sellercloud-customers`. Ver la sección 3. |
+| **Clientes** | Tabla con buscador (nombre/teléfono/vendedora) **por términos** (2026-08-12, mismo criterio que Pedidos — ver "Buscadores del panel" más abajo), filtros por lista y vendedora, **selector de lista por fila con confirmación** (2026-07-15: elegir una opción no aplica el cambio de una — pide "¿Cambiar la lista a X?" con Confirmar/Cancelar; ahora lo puede hacer también una vendedora con sus propios clientes, no solo admin) y campo **"$ inversión → nivel"** (solo admin, asigna el nivel automáticamente sin confirmación — pensado para carga rápida), **reasignar vendedora** por fila y **eliminar cliente** (ambos solo admin, vía RPC con registro de auditoría), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). **Clientes ↔ SellerCloud** (2026-09-02): en la fila de un cliente sin `sellercloud_id` aparece "⚠️ Sin vínculo" + **"🔍 Buscar en SellerCloud"**, que trae candidatos por email → teléfono → nombre vía la Edge Function `sellercloud-customers` y vincula el elegido con la RPC auditada `link_sellercloud_customer` (admin cualquiera, vendedora sus propios clientes). El **alta de customers en SellerCloud** (toggle "Crear también en SellerCloud" del formulario y botones "Crear en SellerCloud"/"Crear de todos modos" del panel) tiene un candado por flag, `SC_CREATE_ENABLED` en `ClientsAdmin.jsx` en pareja con `CREATE_ENABLED` en la Edge Function `sellercloud-customers`: con `false` el toggle se ve apagado y deshabilitado con el aviso, el panel solo busca y vincula y la función responde 503 a `create`. **Valor por rama (2026-09-14, decisión del usuario)**: `main`/producción → los dos en `false` (deploy `7924120` del 09-14 con el alta bloqueada + función **v7** con el candado cerrado, bajada y diffeada: idéntica al repo); `dev` → los dos en `true` desde la tarde del 09-14, porque `dev` es la rama donde se repara la creación de clientes ("sigamos trabajando el dev con la función en true"). Historia: el hotfix del 2026-09-09 lo apagó en `main`; el 09-10 `dev` quedó en `true`; la v6 de la función desplegada desde `dev` el 09-11 dejó el candado del servidor abierto; el 09-14 se puso `false` en `dev`, se deployó todo (frontend + v7) y `dev` volvió a `true`. **Regla antes de cada deploy desde `dev`** (`main` es ancestro de `dev`, el merge es fast-forward): poner los dos flags en `false`, deployar (frontend por push a `main`; función con `npx supabase functions deploy sellercloud-customers` desde `zimaxx-store/`, que sube el árbol de trabajo, no la rama), y volver a `true` en `dev`. Reactivar el alta en producción a conciencia = los dos en `true` + deploy del frontend + redeploy de la función. **Dirección del cliente** (2026-09-14): bloque 📍 Dirección en el alta, en la fila de edición y en el form "Crear en SellerCloud" (calle, apto, ciudad, estado, código postal, país ISO-2 — UNA dirección que en SellerCloud vale como envío y facturación; estado obligatorio para todos los países). Obligatoria y completa solo cuando el cliente se crea en SellerCloud; si no, puede quedar vacía pero **nunca a medias**. Bajo el ID de SellerCloud un badge dice si la dirección está allá (✓ seguido de la dirección abreviada, la completa en el tooltip), pendiente (⏳ + **Enviar dirección**), fallida (⚠️ + **Reintentar dirección**, motivo en el tooltip) o sin cargar (📍); la vista completa suma las columnas **Dirección** y **Dir. SellerCloud** (14). Necesita `migration-2026-09-14-client-address.sql` + redeploy de `sellercloud-customers`. Ver la sección 3. |
 | **🛡️ Registro de movimientos** (solo admin, pestaña propia desde 2026-07-15 — antes vivía colapsada dentro de Clientes) | Historial de quién reasignó/borró un cliente, le cambió la lista de precio, o tocó un pedido (editar ítems, cambiar estado, convertir cotización) — con el **movimiento de stock** de ese cambio de estado cuando hubo uno (2026-08-04: "Stock descontado: N · M sin dato de stock"; el `detail` guarda producto, SKU, cantidad y el antes/después de cada uno). Fecha, usuario, acción, cliente, detalle, leído directo de `admin_audit_log`. Desde 2026-08-05 también registra **todo lo que se hace en la pestaña Superadmin** (rol admin, cambios de contraseña, dueñas de listas, alta/renombre/borrado de listas) — en esas filas la columna "Cliente / objetivo" no es un cliente sino el email del usuario o el nombre de la lista. **Filtros** (2026-07-15): por usuario, por acción y por rango de fechas (desde/hasta). **"⬇️ Descargar Excel"** (2026-08-05): baja **todo** el historial, no los 200 que muestra la tabla (usa `fetchAll`, así pasa el corte de 1,000 filas de PostgREST), respetando los filtros activos — el botón aclara "(todo el historial)" o "(filtrado)". Columnas: Fecha (texto `YYYY-MM-DD HH:MM:SS` local, ordenable en cualquier Excel sin depender de la configuración regional), Usuario, Acción, Cliente / objetivo, Detalle, ID cliente, ID pedido y **Datos completos (JSON)** — el `detail` crudo, porque el resumen legible deja cosas afuera (el antes/después ítem por ítem de una edición de pedido, el stock producto por producto). Con filtros que no dejan ninguna fila no genera archivo vacío: avisa. Es de solo lectura: la tabla no tiene policy de insert/update/delete para nadie, solo la escriben las RPC (`reassign_client`/`delete_client`/`update_client_price_list`/las de pedidos/`sa_log` desde las `sa_*`). |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. Columna **SellerCloud** (ID de empleado: Sales Rep de las órdenes y account manager de sus clientes) y columna **Grupo SellerCloud** (2026-09-09: ID + nombre del grupo de clientes de esa vendedora; se propone como grupo al crear un cliente suyo — la API no lista grupos, por eso se carga acá). El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**, dos formas de dar acceso a una vendedora sin cuenta: **"Vincular acceso"** (email de un usuario que ya existe en Supabase Auth, RPC `link_vendedora_login`) o **"+ Crear acceso"** (2026-07-15: crea el usuario de una — el admin define email + contraseña inicial ahí mismo, sin pasar por el dashboard de Supabase — vía la Edge Function `admin-create-vendedora-user`, ver sección 6). "Desvincular" le quita el acceso sin borrar la vendedora ni el usuario de Auth. |
 | **Pedidos** | **Todos los pedidos, sin tope** (2026-08-07: antes traía los últimos 200, así que el conteo del encabezado decía "200" hubiera 200 o 900 y los pedidos viejos no se podían ni ver ni marcar atendidos). Carga con `fetchAll` (páginas de 1,000 en paralelo) y se renderiza por lotes con scroll infinito; el encabezado muestra el total real y, con filtros puestos, "coinciden / total". Click en una fila expande un detalle de ancho completo (tabla Producto/Cantidad/Precio/Subtotal, 2026-07-17 — antes se abría angosto dentro de la columna Ítems). Cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado; 2026-07-17: las 3 acciones piden confirmación en un modal antes de aplicarse, y quedan auditadas vía RPC `update_order_status`, antes un `update` directo sin rastro) y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) **por términos** (2026-08-12: todos los términos tienen que aparecer, en cualquier orden y sin acentos — antes pedía una subcadena contigua y buscar "robert carlos" no encontraba a "Robert Edu Carlos Pacheco"; ver "Buscadores del panel" más abajo) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"**/**"Descargar Excel"** por fila (2026-07-17 el primero, mismo generador que el carrito del cliente; el Excel con las columnas exactas de `UploadTemplate.xls` para subirlo directo al bulk-order upload de SellerCloud); debajo, separados, **"Editar"** y **"Convertir en pedido"** — ambos **solo para cotizaciones** (`kind = 'quote'`), nunca para un pedido real, y "Editar" además solo mientras la cotización sigue `new` (ni atendida ni cancelada se edita). "Editar" (RPC auditada `update_order_items`) deja cambiar cantidad/quitar/agregar producto — cualquiera con acceso al pedido puede hacerlo (admin siempre, vendedora solo los de sus propios clientes). "Convertir en pedido" (RPC `convert_quote_to_order`) congela el precio de ese momento con la lista real del cliente (a diferencia de la cotización, que sigue mostrando el precio **vigente** vía `get_quotes_live_pricing` — ver sección 6) y deja de ajustarse a cambios de precio futuros. Arriba de la lista, **aviso rojo de los pedidos que el cliente envió y no se registraron** (2026-08-05, `order_failures`): cliente, fecha, motivo y cantidad de líneas, con un botón **"Recuperar"** que lo carga como pedido con los precios vigentes de su lista (RPC `recover_order_failure`, auditada) — antes un pedido rechazado no dejaba rastro en ninguna parte. Aparece también cuando todavía no hay ningún pedido, para que "aún no hay pedidos" no tape justo lo que hay que ver. Una vendedora solo ve (y recupera) los de sus propios clientes. **Desde 2026-09-10 es un cuadro plegado** con el conteo por tipo y "Ver detalle"; cada fallo lleva el badge Pedido/Cotización y "Ver contenido" despliega sus líneas, con la que no tenía precio marcada en rojo (ver sección 1). Al lado, **"💬 Cargar pedido desde WhatsApp"** (2026-08-17): pega el mensaje del chat y crea el pedido, para el caso en que el registro nunca llegó al sistema y el cliente no vuelve a abrir el catálogo — ver la sección 2 para el detalle. **Cliente sin dirección en SellerCloud** (2026-09-14): cuando "Enviar a SellerCloud" rebota porque el customer no tiene ninguna dirección allá (en vivo, o el rechazo guardado de un intento anterior — los 6 de septiembre), la fila ofrece **📍 Cargar dirección y reenviar**: un modal completa la dirección del cliente, la guarda (RPC auditada `update_client_address`), la carga en SellerCloud (acción `update` de `sellercloud-customers`, PUT + relectura) y reenvía la orden; cada paso que falla deja el modal abierto con el motivo. Necesita la migración del 09-14 y el redeploy de las dos funciones. |
@@ -986,7 +1000,7 @@ en las cinco puertas que llevan a lo mismo
 | `get_catalog` | `and pp.price > 0` en vez de `is not null`. **La rama de la lista `quote` no se toca**: ahí devolver todo con `price = null` es la función, no un dato faltante. |
 | `get_flash_sales` | `and fs.price > 0` — `flash_sales.price` tiene el mismo `check (price >= 0)`, así que una carga masiva con la columna corrida podía llenar la sección Flash Sale de $0.00. |
 | `compute_order_items` | los dos lookups (flash y lista) piden `> 0`, así un 0 se comporta **igual que "no hay fila"** y todo lo que ya sabía tratar "sin precio" (el total que no suma, el `—` de la tabla de pedidos, el PDF sin precios) sigue andando sin tocarlo. El ítem **no** se descarta a propósito: descartarlo lo haría desaparecer de la vista de cotizaciones con precio vigente sin decir nada. |
-| `create_order` | un pedido real con una línea sin precio **no se guarda**: se rechaza entero y queda en `order_failures` con los SKU culpables, así el admin lo ve en el aviso rojo de Pedidos, carga el precio y le da "Recuperar". Una **cotización** sí se guarda sin precios (es su función). |
+| `create_order` | un pedido real con una línea sin precio **no se guarda**: se rechaza entero y queda en `order_failures` con los SKU culpables, así el admin lo ve en el aviso rojo de Pedidos, carga el precio y le da "Recuperar". Una **cotización** sí se guarda sin precios (es su función). Desde 2026-09-15, por el mismo camino, también se rechaza un pedido real cuyo total **recalculado** no llega al `min_order` de la lista del cliente (motivo: `total $1,900.00 por debajo del pedido mínimo de $2,000.00 de la lista US Wholesale`); el rechazo por sin precio tiene prioridad. |
 | `convert_quote_to_order` | misma regla por la puerta del admin, con `raise exception` que nombra los SKU a arreglar. De paso se le sumó el guard de "ningún producto válido" que `update_order_items` ya tenía. |
 | `apply_price_list` | un `0` en el Excel cuenta como **precio inválido**: entra en el contador `invalid_prices` que el preview ya muestra antes de confirmar, y no se upsertea ni activa el producto. Es un solo cambio en el `CASE` del parseo; todo lo de abajo ya filtraba por `price is not null` y hereda la regla. |
 
@@ -1798,7 +1812,11 @@ la RPC auditada `update_client_address` (admin cualquiera, vendedora sus
 clientes; no deja borrar una dirección que ya está en SellerCloud, sí
 corregirla, y un cambio la deja "pendiente de mandar") y, si el cliente está
 vinculado, la manda en el mismo `update` de la ficha. **Badge** bajo el ID de
-SellerCloud en cada fila vinculada: ✓ "Dirección en SellerCloud", ⏳
+SellerCloud en cada fila vinculada: **✓ seguido de la dirección abreviada**
+(calle, ciudad, estado y código postal, país — sin la segunda línea; la
+completa y el #id de la dirección en el tooltip; a pedido del usuario, que
+no quería un texto que dijera "Dirección en SellerCloud" sino ver la
+dirección), ⏳
 "Dirección sin sincronizar" + **Enviar dirección**, ⚠️ "Sin dirección en
 SellerCloud" + **Reintentar dirección** (motivo en el tooltip) o 📍 "Sin
 dirección cargada" (Editar → Dirección). La vista completa suma las columnas
@@ -1809,7 +1827,7 @@ existe allá, SellerCloud es la fuente de verdad (contrato en la sección 7).
 Registro de movimientos: "Dirección del cliente" (antes → después de lo que
 cambió) y "Dirección enviada a SellerCloud". Verificado con la migración ×2 +
 8 bloques de assert + preflight negativo en PG 18 desechable, 78 comprobaciones
-en Node del cliente de la API (`tests/sc-customers-tests.mjs`) y 74/74
+en Node del cliente de la API (`tests/sc-customers-tests.mjs`) y 78/78
 Playwright contra el build real (Clientes y Pedidos, es/en).
 
 **Vista completa** (botón **⤢ Vista completa / ⤡ Vista compacta** junto a
@@ -1885,7 +1903,7 @@ etiqueta del toggle sin `flex-wrap`); quedó corregido.
 | `VITE_SUPABASE_URL` | URL del proyecto Supabase |
 | `VITE_SUPABASE_ANON_KEY` | anon key (Settings → API) |
 | `VITE_DEFAULT_WHATSAPP` | Número fallback si el cliente no tiene vendedora con teléfono (solo dígitos con código de país) |
-| `VITE_MIN_ORDER` | Pedido mínimo en USD (default: 800) |
+| `VITE_MIN_ORDER` | **Solo fallback** (default: 800). Desde 2026-09-15 el mínimo real es por lista (`price_lists.min_order`, llega en `client.min_order` de `get_catalog`); esto aplica únicamente si la base no tiene `migration-2026-09-15-price-list-min-order.sql` |
 
 ### Local
 
@@ -2270,6 +2288,22 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 ---
 
 ## 7. Roadmap / pendientes
+
+> **⚠️ MIGRACIÓN NUEVA DEL 2026-09-15 — UNA (sin Edge Functions):**
+> `migration-2026-09-15-price-list-min-order.sql` — pedido mínimo POR LISTA:
+> `price_lists.min_order` (semilla 800 / 2,000 / null, ver sección 1),
+> `get_catalog` con `client.min_order` y `create_order` rechazando por debajo
+> del mínimo. Idempotente, con preflight; probada ×2 + 12 bloques de assert en
+> PG 18 desechable y 28/28 Playwright contra el build. **Orden: frontend
+> PRIMERO, migración después** (o los dos juntos): el frontend nuevo sin la
+> migración cae al 800 de siempre; al revés, mientras el carrito viejo siga
+> servido, deja mandar pedidos mayoristas de $800–$1,999 que el servidor
+> rechaza (quedan en `order_failures`, no se pierden, pero el cliente ve
+> "rechazado"). **Impacto**: hoy la mitad de los pedidos de `us_wholesale`
+> (244 de 489 desde el 07-27) está por debajo de $2,000 — avisar a las
+> vendedoras que sus clientes mayoristas van a ver "El pedido mínimo de tu
+> lista es $2000.00". `special` y `luzmar` también quedan en 2,000; si alguna
+> debe seguir en 800 es un `update` de una línea (sección 1).
 
 > **⚠️ MIGRACIÓN NUEVA DEL 2026-09-14 — UNA (+ redeploy de DOS Edge
 > Functions):** `migration-2026-09-14-client-address.sql` — dirección del
@@ -2705,9 +2739,12 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   `allow_shared_phone` para 2 pares de clientes reales que comparten
   número a propósito — ver sección 6. Pendiente: `git push` del commit
   local `9ce3020` (a criterio del usuario).
-- Enforcement estricto por nivel (mínimo $2,000 para wholesale, etc.) o
-  nivel automático por total del carrito ("te faltan $X para precio
-  mayorista") — opción C discutida.
+- ~~Enforcement estricto por nivel (mínimo $2,000 para wholesale, etc.)~~ →
+  **hecho el 2026-09-15** (`price_lists.min_order`, sección 1 y banner de
+  arriba). Queda como idea aparte la variante "nivel automático por total
+  del carrito" ("te faltan $X para precio mayorista", opción C): hoy el
+  cliente mayorista con menos de $2,000 se bloquea, no se le re-cotiza al
+  precio de la lista de $800.
 - Subida directa de archivos de imagen (hoy es por URL).
 - Integración CRM (Bigin/Zoho) — fuera de alcance del spec original.
 
@@ -2731,6 +2768,7 @@ src/
     whatsapp.js         Mensaje de pedido + link wa.me
     pdf.js              PDF del pedido/cotización (jsPDF; columnas Producto · UPC · Cantidad · Precio unit. · Subtotal)
     format.js           money / cleanPhone
+    minOrder.js         minOrderFor(client): pedido mínimo por lista (client.min_order; null = sin mínimo; clave ausente → 800) (2026-09-15)
     countries.js        Países (24, es/en, ISO-2) + estados de US y Venezuela + país propuesto por lista (ve_* → VE, resto → US) para la dirección del cliente (2026-09-14)
   components/           Header, FilterBar, ProductCard, CartBar,
                         CartDrawer, ProductImage, ThemeToggle,

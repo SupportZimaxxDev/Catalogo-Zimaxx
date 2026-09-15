@@ -16,6 +16,7 @@ import {
   addressIsEmpty,
   addressMissing,
   addressPayload,
+  addressShort,
   addressSummary,
 } from './address'
 import { defaultCountryForList } from '../../utils/countries'
@@ -1463,13 +1464,17 @@ export default function ClientsAdmin() {
       )
     }
     if (c.sc_address_synced_at) {
+      // Verificada allá: se muestra LA DIRECCIÓN abreviada (calle, ciudad,
+      // estado y código postal, país), no un texto que diga que está —
+      // pedido del usuario (2026-09-14). La completa y el #id, en el tooltip.
+      const short = addressShort(c) || `#${c.sc_address_id ?? '—'}`
       return (
         <span
-          title={t('addressScSyncedHint', { id: c.sc_address_id ?? '—' })}
-          className="whitespace-nowrap text-[11px] font-semibold text-green-700 dark:text-green-400"
+          title={`${t('addressScSyncedHint', { id: c.sc_address_id ?? '—' })} ${addressSummary(c)}`.trim()}
+          className="block max-w-[18rem] truncate text-[11px] text-green-700 dark:text-green-400"
           data-testid="address-badge-synced"
         >
-          {t('addressScSynced')}
+          ✓ {short}
         </span>
       )
     }

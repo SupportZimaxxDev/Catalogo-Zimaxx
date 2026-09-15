@@ -19,8 +19,21 @@ create extension if not exists pgcrypto;
 create table if not exists public.price_lists (
   id    uuid primary key default gen_random_uuid(),
   code  text not null unique,
-  label text not null
+  label text not null,
+  -- Pedido mínimo en USD de la lista (2026-09-15,
+  -- migration-2026-09-15-price-list-min-order.sql). NULL = sin mínimo (la
+  -- lista `quote`). get_catalog lo devuelve como `client.min_order` y
+  -- create_order lo hace cumplir para los pedidos reales.
+  min_order numeric(12, 2) default 800
 );
+
+-- Instalaciones anteriores al 2026-09-15: la columna con su default; la
+-- semilla por nivel (800 / 2000 / null) la hace la migración, no este script.
+alter table public.price_lists
+  add column if not exists min_order numeric(12, 2) default 800;
+alter table public.price_lists drop constraint if exists price_lists_min_order_check;
+alter table public.price_lists add constraint price_lists_min_order_check
+  check (min_order is null or min_order >= 0);
 
 -- Vendedora asignada a los clientes: tabla propia en vez de texto libre
 -- repetido por cliente, para poder editar su teléfono en un solo lugar y
@@ -597,14 +610,16 @@ create index if not exists admin_audit_log_order_idx
 -- selector, sin lógica de negocio especial (a diferencia de 'quote'):
 -- necesita que le suban precios en la pestaña Precios como a cualquier
 -- otra, y se selecciona igual en el alta/edición de cliente.
-insert into public.price_lists (code, label) values
-  ('us_min',       'US Minimum Order'),
-  ('us_wholesale', 'US Wholesale'),
-  ('ve_min',       'VE Minimum Order'),
-  ('ve_wholesale', 'VE Wholesale'),
-  ('special',      'Special Order'),
-  ('quote',        'Cotización (sin precio)'),
-  ('luzmar',       'Luzmar - Precio Especial')
+-- `min_order` (2026-09-15): pedido mínimo por lista — 800 para el "catálogo
+-- de $800" (us_min/ve_min), 2000 para el resto con precio, null para quote.
+insert into public.price_lists (code, label, min_order) values
+  ('us_min',       'US Minimum Order',         800),
+  ('us_wholesale', 'US Wholesale',             2000),
+  ('ve_min',       'VE Minimum Order',         800),
+  ('ve_wholesale', 'VE Wholesale',             2000),
+  ('special',      'Special Order',            2000),
+  ('quote',        'Cotización (sin precio)',  null),
+  ('luzmar',       'Luzmar - Precio Especial', 2000)
 on conflict (code) do nothing;
 
 -- Hace a Luzmar Quintero dueña principal de la lista 'luzmar' (por nombre,
