@@ -2294,12 +2294,14 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 > `price_lists.min_order` (semilla 800 / 2,000 / null, ver sección 1),
 > `get_catalog` con `client.min_order` y `create_order` rechazando por debajo
 > del mínimo. Idempotente, con preflight; probada ×2 + 12 bloques de assert en
-> PG 18 desechable y 28/28 Playwright contra el build. **Orden: frontend
-> PRIMERO, migración después** (o los dos juntos): el frontend nuevo sin la
-> migración cae al 800 de siempre; al revés, mientras el carrito viejo siga
-> servido, deja mandar pedidos mayoristas de $800–$1,999 que el servidor
-> rechaza (quedan en `order_failures`, no se pierden, pero el cliente ve
-> "rechazado"). **Impacto**: hoy la mitad de los pedidos de `us_wholesale`
+> PG 18 desechable y 28/28 Playwright contra el build. **Ya corrida en
+> producción el 2026-09-15** (verificada en `pg_proc` y `price_lists`), con el
+> frontend todavía SIN desplegar — el orden recomendado era el inverso
+> (frontend primero: sin la clave cae al 800 de siempre). Mientras Netlify
+> sirva el carrito viejo, los mayoristas pueden mandar pedidos de $800–$1,999
+> que el servidor rechaza (quedan en `order_failures` con motivo "pedido
+> mínimo", no se pierden, pero el cliente ve "rechazado"): **desplegar el
+> frontend cuanto antes**. **Impacto**: hoy la mitad de los pedidos de `us_wholesale`
 > (244 de 489 desde el 07-27) está por debajo de $2,000 — avisar a las
 > vendedoras que sus clientes mayoristas van a ver "El pedido mínimo de tu
 > lista es $2000.00". `special` y `luzmar` también quedan en 2,000; si alguna
