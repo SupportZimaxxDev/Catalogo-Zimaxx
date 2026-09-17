@@ -919,6 +919,79 @@ corrió el usuario ese día, y hasta entonces —con el frontend ya desplegado�
 `loadFailures()` recibía `42703` y el banner rojo se veía **vacío en
 silencio** (77 fallos sin recuperar detrás), no roto.
 
+**Corrección (2026-09-17): la de `recover-as-quote` NUNCA corrió.** Al intentar
+correr la migración del 09-17 (abajo), su preflight rechazó el
+`recover_order_failure` vivo y `pg_get_functiondef` mostró la versión del
+08-05: "Recuperar" venía creando **pedidos reales** con el tipo original y
+precio congelado — las 89 recuperaciones entre el 08-07 y el 09-17 entraron
+así (34 atendidos, 50 cancelados, 5 nuevos), mientras el panel decía "se carga
+como cotización". La 08-13 queda absorbida por la migración del 09-17 (que
+trae el "siempre cotización") y tiene un guard para no correrse después; la de
+descartar sí está corrida desde el 09-10.
+
+#### La vendedora se entera cuando le recuperan un pedido (2026-09-17)
+
+Hasta hoy "Recuperar" dejaba la cotización en la bandeja como una más, sin
+marca, y el único rastro de quién y cuándo estaba en `admin_audit_log`, que
+una vendedora no puede leer. A pedido del usuario ("enviarle una notificación
+a la respectiva vendedora cuando se les recupere una orden… y así además se
+puede llevar un registro de cuándo se hizo esa recuperación"):
+
+- **Registro en la propia fila**
+  (`migration-2026-09-17-recovery-notifications.sql`): `order_failures` suma
+  `recovered_at`, `recovered_by`, `recovered_by_email` y `recovery_seen_at`
+  (null = aviso pendiente). `recover_order_failure` las llena; las
+  recuperaciones anteriores se rellenan desde la auditoría (o la fecha del
+  pedido) y nacen **vistas**, así el día del deploy nadie recibe un aluvión.
+  De paso el update pasó a compare-and-set: dos clicks simultáneos sobre el
+  mismo fallo ya no crean dos cotizaciones. **Y absorbe la 08-13**: como el
+  vivo era el del 08-05 (ver la corrección de arriba), esta migración es la
+  que de verdad activa el "siempre cotización" — desde que corra, "Recuperar"
+  crea una cotización que hay que **Convertir en pedido** tras confirmar con
+  el cliente, en vez del pedido real directo de hasta ahora. El preflight
+  acepta las dos versiones conocidas del vivo (08-05 y 08-13) y para ante
+  cualquier otra.
+- **Campanita 🔔 en el encabezado** (solo vendedoras; `RecoveryBell.jsx` +
+  `useRecoveryNotices.js`): contador de avisos pendientes, visible desde
+  cualquier pestaña, refrescado cada minuto y al volver a la pestaña. Cada
+  aviso dice "Se recuperó el pedido / la cotización de {cliente}", cuándo y
+  por quién, con **Ver** (lleva a la cotización en Pedidos y la despliega) y
+  **Marcar visto**; abajo, **Marcar todos como vistos**. El visto es
+  **explícito**, no se marca solo al abrir (decisión del usuario). La RPC
+  `mark_recoveries_seen(uuid[])` solo alcanza filas recuperadas, pendientes y
+  de SUS clientes.
+- **Sin autoaviso**: si la propia dueña toca "Recuperar", queda registrado
+  (quién y cuándo) pero nace visto — el aviso es para cuando lo recuperó otra
+  persona (un admin). Si el cliente no tiene vendedora tampoco hay a quién
+  avisar.
+- **En Pedidos, solo el chip**: cada cotización recuperada lleva en su fila el
+  chip **♻️ Recuperado** (tooltip con fecha y autor), que es lo que identifica
+  la fila a la que llega "Ver". **Nada más**: hubo un cuadro verde "Pedidos
+  recuperados" con el historial y el usuario pidió sacarlo el mismo día
+  ("quiero que el registro quede nada más en el registro de movimientos… el
+  panel verde que se ve en pedidos quitalo de ahí, el rojo… ese sí lo puedes
+  dejar"). El cuadro rojo de los que no se registraron sigue igual.
+- **Todo identificado en el Registro de movimientos** (segunda vuelta del
+  mismo día, a pedido del usuario: "cambia el registro de los pedidos, eso
+  debe estar en registro de movimientos, identificado como tal"): la
+  recuperación ya no dice solo "Pedido recuperado" — la etiqueta sale de
+  cómo entró (`detail.kind`) y qué intentó el cliente (`original_kind`):
+  **"Pedido recuperado como cotización"**, **"Cotización recuperada"** o, para
+  las 89 anteriores a la migración, **"Pedido recuperado como pedido real"**;
+  el detalle dice intento original, motivo, líneas, total y "aviso a la
+  vendedora: pendiente" / "sin aviso" (`detail.notify_vendedora`, clave
+  nueva). Cada **"Marcar visto"** queda como movimiento **"Aviso de
+  recuperación visto"** (acción `recovery_seen`, la escribe la propia RPC en
+  la misma sentencia que el update, con el pedido recuperado y quién/cuándo
+  lo recuperó). Y de paso "Descartar" ganó su etiqueta, **"Intento
+  descartado"**: hasta hoy sus filas caían en la de reasignación.
+
+Degradación: contra una base sin la migración la consulta da `42703` → sin
+campanita ni chips ♻️, el resto igual; por eso la migración puede ir
+**antes** del deploy (aditiva) y es el orden recomendado. Verificado en PG 18
+desechable (11 bloques de assert, migración ×2, dos preflights negativos) y
+49/49 en Playwright contra el build (vendedora, admin + Registro de movimientos, base sin migración).
+
 ---
 
 ## 2. Panel admin (`/admin`)
@@ -962,7 +1035,7 @@ Pestañas:
 | **Productos** | Tabla completa con buscador (nombre/SKU/UPC), filtros (categoría/marca, línea de perfume, activo/inactivo/con stock/sin stock/sin foto/pre-order/🔥 flash/✨ nuevo), columnas **UPC** y **Stock** (datos internos, no se muestran al cliente), contadores clickeables de "sin foto", "Pre-Order", "✨ Nuevo" y "🔥 Flash Sale", miniaturas, alta/edición manual **con campo Stock editable** (2026-08-04 — reponer stock a mano es lo que devuelve un producto de Pre-Order a Disponible sin esperar al sync; vacío = "sin dato", distinto de 0), **selección por casillas para acciones en bloque** (solo admin: activar/desactivar, poner o quitar las etiquetas 🔥 Flash Sale / Pre-Order / Disponible, y marcar o quitar ✨ Nuevo — ver abajo), y **tres cargas por Excel**: productos, fotos y **🔥 Flash Sales** (2026-08-07). |
 | **Precios** | Carga de Excel de precios + **matriz de precios por lista** (producto × 5 listas: 4 regionales + Special) con buscador, botones con contador "con precios" / "sin precios" y **los mismos filtros por grupo de producto que la pestaña Productos** (2026-08-07: marca, línea, activo/inactivo, con/sin stock, Pre-Order, 🔥 Flash Sale, ✨ Nuevo) para revisar los precios de un recorte concreto. |
 | **Clientes** | Tabla con buscador (nombre/teléfono/vendedora) **por términos** (2026-08-12, mismo criterio que Pedidos — ver "Buscadores del panel" más abajo), filtros por lista y vendedora, **selector de lista por fila con confirmación** (2026-07-15: elegir una opción no aplica el cambio de una — pide "¿Cambiar la lista a X?" con Confirmar/Cancelar; ahora lo puede hacer también una vendedora con sus propios clientes, no solo admin) y campo **"$ inversión → nivel"** (solo admin, asigna el nivel automáticamente sin confirmación — pensado para carga rápida), **reasignar vendedora** por fila y **eliminar cliente** (ambos solo admin, vía RPC con registro de auditoría), botón copiar link, carga por Excel y alta individual ("+ Nuevo cliente"; una vendedora se autoasigna el cliente, un admin puede elegir la vendedora o dejarlo sin asignar). **Clientes ↔ SellerCloud** (2026-09-02): en la fila de un cliente sin `sellercloud_id` aparece "⚠️ Sin vínculo" + **"🔍 Buscar en SellerCloud"**, que trae candidatos por email → teléfono → nombre vía la Edge Function `sellercloud-customers` y vincula el elegido con la RPC auditada `link_sellercloud_customer` (admin cualquiera, vendedora sus propios clientes). El **alta de customers en SellerCloud** (toggle "Crear también en SellerCloud" del formulario y botones "Crear en SellerCloud"/"Crear de todos modos" del panel) tiene un candado por flag, `SC_CREATE_ENABLED` en `ClientsAdmin.jsx` en pareja con `CREATE_ENABLED` en la Edge Function `sellercloud-customers`: con `false` el toggle se ve apagado y deshabilitado con el aviso, el panel solo busca y vincula y la función responde 503 a `create`. **Valor por rama (2026-09-14, decisión del usuario)**: `main`/producción → los dos en `false` (deploy `7924120` del 09-14 con el alta bloqueada + función **v7** con el candado cerrado, bajada y diffeada: idéntica al repo); `dev` → los dos en `true` desde la tarde del 09-14, porque `dev` es la rama donde se repara la creación de clientes ("sigamos trabajando el dev con la función en true"). Historia: el hotfix del 2026-09-09 lo apagó en `main`; el 09-10 `dev` quedó en `true`; la v6 de la función desplegada desde `dev` el 09-11 dejó el candado del servidor abierto; el 09-14 se puso `false` en `dev`, se deployó todo (frontend + v7) y `dev` volvió a `true`. **Regla antes de cada deploy desde `dev`** (`main` es ancestro de `dev`, el merge es fast-forward): poner los dos flags en `false`, deployar (frontend por push a `main`; función con `npx supabase functions deploy sellercloud-customers` desde `zimaxx-store/`, que sube el árbol de trabajo, no la rama), y volver a `true` en `dev`. Reactivar el alta en producción a conciencia = los dos en `true` + deploy del frontend + redeploy de la función. **Dirección del cliente** (2026-09-14): bloque 📍 Dirección en el alta, en la fila de edición y en el form "Crear en SellerCloud" (calle, apto, ciudad, estado, código postal, país ISO-2 — UNA dirección que en SellerCloud vale como envío y facturación; estado obligatorio para todos los países). Obligatoria y completa solo cuando el cliente se crea en SellerCloud; si no, puede quedar vacía pero **nunca a medias**. Bajo el ID de SellerCloud un badge dice si la dirección está allá (✓ seguido de la dirección abreviada, la completa en el tooltip), pendiente (⏳ + **Enviar dirección**), fallida (⚠️ + **Reintentar dirección**, motivo en el tooltip) o sin cargar (📍); la vista completa suma las columnas **Dirección** y **Dir. SellerCloud** (14). Necesita `migration-2026-09-14-client-address.sql` + redeploy de `sellercloud-customers`. Ver la sección 3. |
-| **🛡️ Registro de movimientos** (solo admin, pestaña propia desde 2026-07-15 — antes vivía colapsada dentro de Clientes) | Historial de quién reasignó/borró un cliente, le cambió la lista de precio, o tocó un pedido (editar ítems, cambiar estado, convertir cotización) — con el **movimiento de stock** de ese cambio de estado cuando hubo uno (2026-08-04: "Stock descontado: N · M sin dato de stock"; el `detail` guarda producto, SKU, cantidad y el antes/después de cada uno). Fecha, usuario, acción, cliente, detalle, leído directo de `admin_audit_log`. Desde 2026-08-05 también registra **todo lo que se hace en la pestaña Superadmin** (rol admin, cambios de contraseña, dueñas de listas, alta/renombre/borrado de listas) — en esas filas la columna "Cliente / objetivo" no es un cliente sino el email del usuario o el nombre de la lista. **Filtros** (2026-07-15): por usuario, por acción y por rango de fechas (desde/hasta). **"⬇️ Descargar Excel"** (2026-08-05): baja **todo** el historial, no los 200 que muestra la tabla (usa `fetchAll`, así pasa el corte de 1,000 filas de PostgREST), respetando los filtros activos — el botón aclara "(todo el historial)" o "(filtrado)". Columnas: Fecha (texto `YYYY-MM-DD HH:MM:SS` local, ordenable en cualquier Excel sin depender de la configuración regional), Usuario, Acción, Cliente / objetivo, Detalle, ID cliente, ID pedido y **Datos completos (JSON)** — el `detail` crudo, porque el resumen legible deja cosas afuera (el antes/después ítem por ítem de una edición de pedido, el stock producto por producto). Con filtros que no dejan ninguna fila no genera archivo vacío: avisa. Es de solo lectura: la tabla no tiene policy de insert/update/delete para nadie, solo la escriben las RPC (`reassign_client`/`delete_client`/`update_client_price_list`/las de pedidos/`sa_log` desde las `sa_*`). |
+| **🛡️ Registro de movimientos** (solo admin, pestaña propia desde 2026-07-15 — antes vivía colapsada dentro de Clientes) | Historial de quién reasignó/borró un cliente, le cambió la lista de precio, o tocó un pedido (editar ítems, cambiar estado, convertir cotización) — con el **movimiento de stock** de ese cambio de estado cuando hubo uno (2026-08-04: "Stock descontado: N · M sin dato de stock"; el `detail` guarda producto, SKU, cantidad y el antes/después de cada uno). Fecha, usuario, acción, cliente, detalle, leído directo de `admin_audit_log`. Desde 2026-08-05 también registra **todo lo que se hace en la pestaña Superadmin** (rol admin, cambios de contraseña, dueñas de listas, alta/renombre/borrado de listas) — en esas filas la columna "Cliente / objetivo" no es un cliente sino el email del usuario o el nombre de la lista. **Filtros** (2026-07-15): por usuario, por acción y por rango de fechas (desde/hasta). **"⬇️ Descargar Excel"** (2026-08-05): baja **todo** el historial, no los 200 que muestra la tabla (usa `fetchAll`, así pasa el corte de 1,000 filas de PostgREST), respetando los filtros activos — el botón aclara "(todo el historial)" o "(filtrado)". Columnas: Fecha (texto `YYYY-MM-DD HH:MM:SS` local, ordenable en cualquier Excel sin depender de la configuración regional), Usuario, Acción, Cliente / objetivo, Detalle, ID cliente, ID pedido y **Datos completos (JSON)** — el `detail` crudo, porque el resumen legible deja cosas afuera (el antes/después ítem por ítem de una edición de pedido, el stock producto por producto). Con filtros que no dejan ninguna fila no genera archivo vacío: avisa. Es de solo lectura: la tabla no tiene policy de insert/update/delete para nadie, solo la escriben las RPC (`reassign_client`/`delete_client`/`update_client_price_list`/las de pedidos/`sa_log` desde las `sa_*`). **Desde 2026-09-17** (a pedido del usuario: "eso debe estar en registro de movimientos, identificado como tal") las recuperaciones de pedidos perdidos van etiquetadas por **cómo entraron**: "Pedido recuperado como cotización" / "Cotización recuperada" (desde la migración del 09-17) o "Pedido recuperado como pedido real" (las 89 anteriores, versión 08-05 de la RPC), con intento original, motivo del rechazo, líneas, total y si quedó **aviso pendiente a la vendedora**; el visto de la vendedora es un movimiento propio, "Aviso de recuperación visto" (lo escribe `mark_recoveries_seen`, una fila por fallo con el pedido y quién/cuándo lo había recuperado); y el descarte del cuadro rojo tiene por fin su etiqueta, "Intento descartado" (hasta hoy caía en la de reasignación por no estar mapeado). Las tres entran en el filtro por acción y en el Excel. |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. Columna **SellerCloud** (ID de empleado: Sales Rep de las órdenes y account manager de sus clientes) y columna **Grupo SellerCloud** (2026-09-09: ID + nombre del grupo de clientes de esa vendedora; se propone como grupo al crear un cliente suyo — la API no lista grupos, por eso se carga acá). El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**, dos formas de dar acceso a una vendedora sin cuenta: **"Vincular acceso"** (email de un usuario que ya existe en Supabase Auth, RPC `link_vendedora_login`) o **"+ Crear acceso"** (2026-07-15: crea el usuario de una — el admin define email + contraseña inicial ahí mismo, sin pasar por el dashboard de Supabase — vía la Edge Function `admin-create-vendedora-user`, ver sección 6). "Desvincular" le quita el acceso sin borrar la vendedora ni el usuario de Auth. |
 | **Pedidos** | **Todos los pedidos, sin tope** (2026-08-07: antes traía los últimos 200, así que el conteo del encabezado decía "200" hubiera 200 o 900 y los pedidos viejos no se podían ni ver ni marcar atendidos). Carga con `fetchAll` (páginas de 1,000 en paralelo) y se renderiza por lotes con scroll infinito; el encabezado muestra el total real y, con filtros puestos, "coinciden / total". Click en una fila expande un detalle de ancho completo (tabla Producto/Cantidad/Precio/Subtotal, 2026-07-17 — antes se abría angosto dentro de la columna Ítems). Cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado; 2026-07-17: las 3 acciones piden confirmación en un modal antes de aplicarse, y quedan auditadas vía RPC `update_order_status`, antes un `update` directo sin rastro) y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) **por términos** (2026-08-12: todos los términos tienen que aparecer, en cualquier orden y sin acentos — antes pedía una subcadena contigua y buscar "robert carlos" no encontraba a "Robert Edu Carlos Pacheco"; ver "Buscadores del panel" más abajo) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"**/**"Descargar Excel"** por fila (2026-07-17 el primero, mismo generador que el carrito del cliente; el Excel con las columnas exactas de `UploadTemplate.xls` para subirlo directo al bulk-order upload de SellerCloud); debajo, separados, **"Editar"** y **"Convertir en pedido"** — ambos **solo para cotizaciones** (`kind = 'quote'`), nunca para un pedido real, y "Editar" además solo mientras la cotización sigue `new` (ni atendida ni cancelada se edita). "Editar" (RPC auditada `update_order_items`) deja cambiar cantidad/quitar/agregar producto — cualquiera con acceso al pedido puede hacerlo (admin siempre, vendedora solo los de sus propios clientes). "Convertir en pedido" (RPC `convert_quote_to_order`) congela el precio de ese momento con la lista real del cliente (a diferencia de la cotización, que sigue mostrando el precio **vigente** vía `get_quotes_live_pricing` — ver sección 6) y deja de ajustarse a cambios de precio futuros. Arriba de la lista, **aviso rojo de los pedidos que el cliente envió y no se registraron** (2026-08-05, `order_failures`): cliente, fecha, motivo y cantidad de líneas, con un botón **"Recuperar"** que lo carga como pedido con los precios vigentes de su lista (RPC `recover_order_failure`, auditada) — antes un pedido rechazado no dejaba rastro en ninguna parte. Aparece también cuando todavía no hay ningún pedido, para que "aún no hay pedidos" no tape justo lo que hay que ver. Una vendedora solo ve (y recupera) los de sus propios clientes. **Desde 2026-09-10 es un cuadro plegado** con el conteo por tipo y "Ver detalle"; cada fallo lleva el badge Pedido/Cotización y "Ver contenido" despliega sus líneas, con la que no tenía precio marcada en rojo (ver sección 1). Al lado, **"💬 Cargar pedido desde WhatsApp"** (2026-08-17): pega el mensaje del chat y crea el pedido, para el caso en que el registro nunca llegó al sistema y el cliente no vuelve a abrir el catálogo — ver la sección 2 para el detalle. **Cliente sin dirección en SellerCloud** (2026-09-14): cuando "Enviar a SellerCloud" rebota porque el customer no tiene ninguna dirección allá (en vivo, o el rechazo guardado de un intento anterior — los 6 de septiembre), la fila ofrece **📍 Cargar dirección y reenviar**: un modal completa la dirección del cliente, la guarda (RPC auditada `update_client_address`), la carga en SellerCloud (acción `update` de `sellercloud-customers`, PUT + relectura) y reenvía la orden; cada paso que falla deja el modal abierto con el motivo. Necesita la migración del 09-14 y el redeploy de las dos funciones. |
 | **🔐 Superadmin** (2026-08-05, solo superadmin) | Lo que antes obligaba a entrar al SQL Editor o al dashboard de Auth. **Usuarios y accesos**: todos los usuarios de Supabase Auth con su rol (Superadmin/Admin/Vendedora/Sin rol), la vendedora vinculada, fecha de alta y último acceso; por fila, "Hacer admin"/"Quitar admin" (con confirmación) y **"Cambiar contraseña"** (sirve para cualquier acceso: vendedora, admin o el propio superadmin); arriba, **"+ Crear admin"** (crea el usuario de Auth con su contraseña inicial y le da el rol, en un paso). **Listas de precio y dueñas**: por lista, cuántos clientes y cuántos precios tiene, sus dueñas con la principal marcada (★), agregar/quitar dueña y cambiar cuál es la principal; si al mover dueñas quedaron clientes con una vendedora que ya no es dueña, avisa cuántos y ofrece pasarlos a la principal de una vez. También **crear** una lista nueva (código + nombre visible; el código se valida y no se puede cambiar después), **renombrar** el nombre visible y **eliminar** una lista que no sea de las base y esté completamente vacía. Todo va por RPC `sa_*` con `is_superadmin()` adentro (o por la Edge Function `superadmin-users` cuando hace falta la Admin API de Auth) y **todo queda en el Registro de movimientos**. |
@@ -1975,7 +2048,17 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
     recuperar los pedidos de sus propios clientes. Audita en
     `admin_audit_log`. `order_failures` es de **solo lectura** vía RLS (admin
     todo, vendedora lo de sus clientes, `anon` nada) y no tiene policy de
-    insert/update/delete para nadie: solo la escribe `create_order`.
+    insert/update/delete para nadie: solo la escriben las RPC. Desde
+    2026-09-17 además graba en la fila `recovered_at/by/email` y
+    `recovery_seen_at` (el aviso a la vendedora dueña: null = pendiente; nace
+    visto si la recupera ella misma o el cliente no tiene vendedora).
+  - `mark_recoveries_seen(p_failure_ids uuid[])` (2026-09-17) — solo
+    `authenticated`, mismo gate (`is_admin()` o `is_vendedora()`); el update
+    solo alcanza filas recuperadas, pendientes y de los clientes de la
+    vendedora que llama (`current_vendedora_id()`), así que un admin recibe 0
+    y una vendedora no puede marcar los de otra. Sin auditoría (es "marcar
+    leído"). Sin RLS nueva: la vendedora ya lee sus filas recuperadas por
+    `vendedora_read_own_failures`.
 - Escritura solo para usuarios autenticados presentes en `admins`
   (`is_admin()`), **salvo `admins` y `price_list_owners`, que desde 2026-08-05
   solo las escribe el superadmin** (ver abajo).
@@ -2288,6 +2371,26 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 ---
 
 ## 7. Roadmap / pendientes
+
+> **⚠️ MIGRACIÓN NUEVA DEL 2026-09-17 — UNA (sin Edge Functions):**
+> `migration-2026-09-17-recovery-notifications.sql` — aviso a la vendedora
+> cuando le recuperan un pedido + registro de cuándo y quién: cuatro columnas
+> en `order_failures` (`recovered_at`, `recovered_by`, `recovered_by_email`,
+> `recovery_seen_at`) con backfill de las históricas (nacen vistas),
+> `recover_order_failure` que las llena (y compare-and-set) y la RPC nueva
+> `mark_recoveries_seen(uuid[])` (audita cada visto como `recovery_seen`; el
+> detail de la recuperación suma `vendedora_id`/`notify_vendedora` para el
+> Registro de movimientos). **Absorbe la 08-13** (`recover-as-quote`,
+> que resultó NUNCA haber corrido: el vivo era el 08-05 — el primer intento
+> del 09-17 abortó en el preflight por eso, y el preflight pasó a aceptar las
+> dos versiones): desde esta migración toda recuperación crea cotización.
+> Idempotente, con preflight; probada ×2 sobre el cuerpo vivo bajado de
+> producción + camino 08-13 + guard + 11 bloques de assert + 2 preflights
+> negativos en PG 18 desechable y 49/49 Playwright contra el build. **Orden: migración PRIMERO** (aditiva, el
+> frontend viejo ni la ve), frontend después; al revés no rompe nada — el
+> frontend nuevo sin la migración no pinta campanita ni chips ♻️ (42703).
+> Sondeo: `position('recovery_seen_at' in pg_get_functiondef('public.recover_order_failure(uuid)'::regprocedure)) > 0`.
+> **Estado (2026-09-17): SIN correr en producción y frontend SIN desplegar.**
 
 > **⚠️ MIGRACIÓN NUEVA DEL 2026-09-15 — UNA (sin Edge Functions):**
 > `migration-2026-09-15-price-list-min-order.sql` — pedido mínimo POR LISTA:
@@ -2763,29 +2866,32 @@ src/
   index.css             Tokens de diseño + modo oscuro
   lib/supabase.js       Cliente + fetchAll (paginación >1,000 filas)
   hooks/useInfiniteRows.js  Scroll infinito por lotes
+  hooks/useInventoryFreshness.js  Frescura de inventario (poll 60 s) + refresco (2026-09-04)
+  hooks/useRecoveryNotices.js  Avisos de recuperación de la vendedora: pendientes (poll 60 s + al volver a la pestaña), markSeen, degradación 42703 (2026-09-17)
   context/CartContext.jsx   Carrito (localStorage, clave por product id) + request_id por carrito (idempotencia del alta)
   utils/
     excel.js            Parser Excel (detección de encabezados, columna de fotos) + exports: pedido (UploadTemplate.xls), productos sin foto, registro de movimientos, lista de precios (priceListExcelRows/buildPriceListWorkbook/downloadPriceListExcel — compartido por el catálogo y la pestaña Precios)
     token.js            Tokens de cliente + SKU autogenerado
     whatsapp.js         Mensaje de pedido + link wa.me
     pdf.js              PDF del pedido/cotización (jsPDF; columnas Producto · UPC · Cantidad · Precio unit. · Subtotal)
-    format.js           money / cleanPhone
+    format.js           money / cleanPhone + fechas del panel en el idioma elegido (fmtDateTime / fmtDay / calendarDaysAgo / agoLabel — compartidas por el cuadro rojo, el verde y la campanita, 2026-09-17)
     minOrder.js         minOrderFor(client): pedido mínimo por lista (client.min_order; null = sin mínimo; clave ausente → 800) (2026-09-15)
     countries.js        Países (24, es/en, ISO-2) + estados de US y Venezuela + país propuesto por lista (ve_* → VE, resto → US) para la dirección del cliente (2026-09-14)
   components/           Header, FilterBar, ProductCard, CartBar,
                         CartDrawer, ProductImage, ThemeToggle,
-                        PriceListExcel (bloque "¿Prefieres verlo en Excel?" — puente temporal, 2026-09-08)
+                        PriceListExcel (bloque "¿Prefieres verlo en Excel?" — puente temporal, 2026-09-08),
+                        RecoveryBell (🔔 avisos de recuperación en el header del panel, solo vendedora: Ver / Marcar visto / Marcar todos, 2026-09-17)
   pages/
     Catalog.jsx         Catálogo del cliente
     admin/
-      AdminLayout.jsx   Login + shell del panel
+      AdminLayout.jsx   Login + shell del panel (monta useInventoryFreshness y useRecoveryNotices y los reparte por Outlet context; 🔔 solo para vendedora)
       ProductsAdmin.jsx Productos + carga Excel (productos, fotos, 🔥 Flash Sales) + acciones en bloque
       PricesUpload.jsx  Precios Excel + matriz por lista + filtros por grupo de producto
       ClientsAdmin.jsx  Clientes + niveles por inversión + ficha y dirección SellerCloud
       address.jsx       Dirección del cliente (2026-09-14): helpers (payload/form/missing/summary) + bloque AddressFields compartido por alta, edición, panel SellerCloud y el modal de Pedidos
       AuditLogAdmin.jsx Registro de movimientos (clientes, pedidos, superadmin)
       VendedoresAdmin.jsx  Alta manual de vendedoras + teléfono + acceso
-      OrdersAdmin.jsx   Bandeja de pedidos + cuadro de los que no se registraron (order_failures) con fecha, "Recuperar" y "Descartar"
+      OrdersAdmin.jsx   Bandeja de pedidos + cuadro rojo de los que no se registraron (order_failures) con fecha, "Recuperar" y "Descartar" + chip ♻️ Recuperado por fila (tooltip: cuándo y quién) + deep link ?recovered= desde la campanita (2026-09-17; el registro completo va al Registro de movimientos, no acá)
       SuperAdminPanel.jsx  Usuarios/roles/contraseñas + dueñas de listas (solo superadmin)
       MetricsAdmin.jsx  KPIs en vivo por polling + gráfico SVG + adopción por vendedora (solo superadmin)
       ui.jsx            Piezas compartidas (UploadZone, SearchIcon, ProductFilters/productMatchesFilters, ...)

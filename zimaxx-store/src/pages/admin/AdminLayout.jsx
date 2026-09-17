@@ -5,6 +5,8 @@ import { useI18n } from '../../i18n'
 import ThemeToggle from '../../components/ThemeToggle'
 import InventoryFreshness from './InventoryFreshness'
 import { useInventoryFreshness } from '../../hooks/useInventoryFreshness'
+import RecoveryBell from '../../components/RecoveryBell'
+import { useRecoveryNotices } from '../../hooks/useRecoveryNotices'
 
 function Login() {
   const { t } = useI18n()
@@ -85,6 +87,13 @@ export default function AdminLayout() {
   // (Pedidos lo usa para el candado de Atendido/push). Solo consulta con rol
   // resuelto: sin sesión no hay nada que preguntar.
   const inventory = useInventoryFreshness(!!role)
+
+  // Avisos de recuperación (2026-09-17): mismo patrón — un solo dueño del
+  // estado acá, la campanita del header lo pinta y Pedidos lo recibe por
+  // Outlet context para marcar visto / refrescar. Solo tiene sentido para
+  // una vendedora: el admin no tiene avisos propios (ver useRecoveryNotices).
+  const recoveries = useRecoveryNotices(role === 'vendedora')
+  const userId = session?.user?.id ?? null
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null))
@@ -195,6 +204,9 @@ export default function AdminLayout() {
             </h1>
           </div>
           <div className="flex min-w-0 items-center gap-2">
+            {/* 🔔 Avisos de recuperación (2026-09-17): solo vendedora. Si la
+                base no tiene la migración, el componente no pinta nada. */}
+            {role === 'vendedora' && <RecoveryBell recoveries={recoveries} userId={userId} />}
             {/* Indicador de frescura + 🔄 Refrescar stock (2026-09-04):
                 visible en todas las pestañas para todos los roles. */}
             <InventoryFreshness inventory={inventory} />
@@ -232,7 +244,7 @@ export default function AdminLayout() {
         </nav>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6">
-        <Outlet context={{ role, isSuper, inventory }} />
+        <Outlet context={{ role, isSuper, inventory, recoveries, userId }} />
       </main>
     </div>
   )

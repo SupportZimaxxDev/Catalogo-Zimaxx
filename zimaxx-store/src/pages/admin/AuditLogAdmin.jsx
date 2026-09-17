@@ -30,6 +30,11 @@ const ACTION_STYLES = {
   update_order_status: 'bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300',
   convert_quote_to_order: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
   recover_order_failure: 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300',
+  // Avisos de recuperación (2026-09-17): el visto de la vendedora, y el
+  // descarte de un intento (2026-08-13) que hasta hoy caía en el estilo y la
+  // etiqueta de reasignación por no estar acá.
+  recovery_seen: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300',
+  dismiss_order_failure: 'bg-primary/10 text-primary/60',
   create_manual_order: 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300',
   push_order_sellercloud: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
   set_admin: 'bg-ink text-secondary',
@@ -58,7 +63,9 @@ const ACTION_LABELS = {
   edit_order_items: 'actionEditOrder',
   update_order_status: 'actionUpdateOrderStatus',
   convert_quote_to_order: 'actionConvertQuote',
-  recover_order_failure: 'actionRecoverOrder',
+  recover_order_failure: 'actionRecoverOrder', // la etiqueta real la decide actionLabel() por el detail
+  recovery_seen: 'actionRecoverySeen',
+  dismiss_order_failure: 'actionDismissFailureLog',
   create_manual_order: 'actionManualOrder',
   push_order_sellercloud: 'actionPushSellerCloud',
   set_admin: 'actionSetAdmin',
@@ -88,6 +95,8 @@ const ACTION_FILTERS = [
   ['update_order_status', 'actionUpdateOrderStatus'],
   ['convert_quote_to_order', 'actionConvertQuote'],
   ['recover_order_failure', 'actionRecoverOrder'],
+  ['recovery_seen', 'actionRecoverySeen'],
+  ['dismiss_order_failure', 'actionDismissFailureLog'],
   ['create_manual_order', 'actionManualOrder'],
   ['push_order_sellercloud', 'actionPushSellerCloud'],
   ['set_admin,create_admin_user', 'actionSetAdmin'],
@@ -132,7 +141,21 @@ export default function AuditLogAdmin() {
   const statusLabel = (status) =>
     status === 'done' ? t('statusDone') : status === 'cancelled' ? t('statusCancelled') : t('statusNew')
 
-  const actionLabel = (action) => t(ACTION_LABELS[action] ?? 'actionReassign')
+  // La etiqueta sale de la acción, salvo la recuperación de un pedido perdido
+  // (2026-09-17, a pedido del usuario: "identificado como tal"): ahí importa
+  // CÓMO entró — como cotización (desde la migración del 09-17) o como pedido
+  // real (las anteriores, versión 08-05 de la RPC) — y qué había intentado el
+  // cliente. Se lee del detail que guarda la RPC: `kind` es lo que se creó,
+  // `original_kind` lo que intentó el cliente (las filas viejas no lo traen).
+  const actionLabel = (a) => {
+    if (a.action === 'recover_order_failure') {
+      if (a.detail?.kind === 'quote') {
+        return t(a.detail?.original_kind === 'quote' ? 'actionRecoverQuote' : 'actionRecoverOrderAsQuote')
+      }
+      return t('actionRecoverOrderLegacy')
+    }
+    return t(ACTION_LABELS[a.action] ?? 'actionReassign')
+  }
 
   // Movimiento de stock del cambio de estado (2026-08-04): update_order_status
   // y convert_quote_to_order guardan en detail.stock qué productos ajustaron y
@@ -253,6 +276,47 @@ export default function AuditLogAdmin() {
         .filter(Boolean)
         .join(' · ')
     }
+    // Recuperación de un pedido que no se registró (detalle desde 2026-09-17):
+    // qué intentó el cliente, por qué rebotó, cuánto entró, y si le quedó
+    // aviso pendiente a la vendedora (`notify_vendedora`, clave nueva — las
+    // filas anteriores no la traen y no dicen nada al respecto). En las viejas
+    // `original_kind` no existe: lo que se creó ERA lo que intentó el cliente.
+    if (a.action === 'recover_order_failure') {
+      const d = a.detail ?? {}
+      const original = d.original_kind ?? d.kind
+      const lines = Array.isArray(d.items) ? d.items.length : null
+      const total = d.total != null ? money(d.total) : null
+      return [
+        t('auditOriginalKind', { kind: original === 'quote' ? t('quote') : t('order') }),
+        d.reason,
+        lines != null && `${lines} ${t('items')}${total ? ` · ${total}` : ''}`,
+        'notify_vendedora' in d && (d.notify_vendedora ? t('auditNotifyPending') : t('auditNotifyNone')),
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    }
+    // La vendedora marcó visto el aviso (2026-09-17): de qué recuperación era.
+    if (a.action === 'recovery_seen') {
+      const d = a.detail ?? {}
+      return [
+        d.kind === 'quote' ? t('quote') : t('order'),
+        d.recovered_at &&
+          t('auditSeenRecoveredOn', {
+            date: new Date(d.recovered_at).toLocaleString(),
+            who: d.recovered_by_email ?? '—',
+          }),
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    }
+    // Intento descartado desde el cuadro rojo (2026-08-13; sin cliente, el
+    // objetivo va vacío y acá queda el hint del token para rastrearlo).
+    if (a.action === 'dismiss_order_failure') {
+      const d = a.detail ?? {}
+      return [d.kind === 'quote' ? t('quote') : t('order'), d.reason, d.token_hint && `token ${d.token_hint}…`]
+        .filter(Boolean)
+        .join(' · ')
+    }
     // Acciones del panel Superadmin (2026-08-05). El objetivo (email o nombre
     // de lista) ya va en la columna Cliente / objetivo: acá va el qué.
     if (a.action === 'set_admin') return `${a.detail?.granted ? '+' : '−'} ${t('roleAdmin')}`
@@ -336,7 +400,7 @@ export default function AuditLogAdmin() {
         rows: data.map((a) => ({
           [header[0]]: stamp(a.created_at),
           [header[1]]: a.performed_by_email ?? '',
-          [header[2]]: actionLabel(a.action),
+          [header[2]]: actionLabel(a),
           [header[3]]: a.client_name ?? '',
           [header[4]]: detailText(a),
           [header[5]]: a.client_id ?? '',
@@ -444,7 +508,7 @@ export default function AuditLogAdmin() {
                     <span
                       className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${ACTION_STYLES[a.action] ?? ACTION_STYLES.reassign_client}`}
                     >
-                      {actionLabel(a.action)}
+                      {actionLabel(a)}
                     </span>
                   </td>
                   <td className="p-3 font-medium">{a.client_name}</td>

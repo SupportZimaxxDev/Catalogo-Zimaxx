@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import { supabase, fetchAll } from '../../lib/supabase'
 import { useI18n } from '../../i18n'
-import { money, cleanPhone } from '../../utils/format'
+import { money, cleanPhone, fmtDateTime, fmtDay, agoLabel } from '../../utils/format'
 import { searchTerms, matchesTerms } from '../../utils/search'
 import { downloadOrderExcel } from '../../utils/excel'
 import { downloadOrderPdf } from '../../utils/pdf'
@@ -77,8 +77,15 @@ const FAILURES_CAP = 200
 // memoria del chat de WhatsApp.
 export default function OrdersAdmin() {
   const { t, lang } = useI18n()
-  const { role, isSuper, inventory } = useOutletContext()
+  // recoveries / userId (2026-09-17): el estado de los avisos de recuperación
+  // vive en AdminLayout (useRecoveryNotices) — acá se usa para "Marcar visto"
+  // desde el cuadro de recuperados y para refrescar la campanita al recuperar.
+  const { role, isSuper, inventory, recoveries, userId } = useOutletContext()
   const isAdmin = role === 'admin'
+  // Deep link desde la campanita (2026-09-17): ?recovered=<order_id> abre la
+  // cotización recuperada.
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
 
   // Candado de frescura (2026-09-04): la VERDAD vive en el servidor
   // (update_order_status rechaza con ZS001, la Edge Function del push con
@@ -191,6 +198,21 @@ export default function OrdersAdmin() {
   const [failureOpen, setFailureOpen] = useState(() => new Set())
   const [failureDetail, setFailureDetail] = useState({}) // id → { status, rows, message }
 
+  // Recuperaciones de la ventana (2026-09-17): filas de order_failures con
+  // recovered_order_id, SOLO para el chip "♻️ Recuperado" de la fila (y su
+  // tooltip con fecha y autor). El registro completo — quién, cuándo, cómo
+  // entró, si la vendedora lo vio — vive en el Registro de movimientos, no
+  // acá: hubo un cuadro verde en esta pantalla y el usuario pidió sacarlo
+  // ("quiero que el registro quede nada más en el registro de movimientos").
+  // Si la migración no corrió (42703) queda vacío y no hay chips.
+  // recoveredMsg: aviso de "Ver" desde la campanita cuando la cotización no
+  // está en la bandeja actual.
+  const [recovered, setRecovered] = useState([])
+  const [recoveredMsg, setRecoveredMsg] = useState(null)
+  // "Ver cotización" cuando el pedido no está en la ventana actual: se amplía
+  // a todo el historial y se reintenta cuando llegue la carga nueva.
+  const pendingGoTo = useRef(null) // { id, prevOrders }
+
   // Los SKU que nombra el motivo "productos sin precio en la lista del
   // cliente: A, B" (create_order) — para marcar esas líneas en rojo.
   const missingSkusOf = (f) => {
@@ -208,30 +230,22 @@ export default function OrdersAdmin() {
   // create_order rechazó el intento; para los del outbox expirado es cuando
   // el teléfono lo reportó (≥24 h después de armarlo), no cuando el cliente
   // tocó Enviar — report_outbox_expired no viaja con esa hora.
-  const failureLocale = lang === 'en' ? 'en-US' : 'es-VE'
-  const fmtFailureDate = (iso) => {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return '—'
-    return d.toLocaleString(failureLocale, {
-      weekday: 'short',
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  }
-  const fmtFailureDay = (d) => d.toLocaleDateString(failureLocale, { day: 'numeric', month: 'short', year: 'numeric' })
-  // "hoy" / "ayer" / "hace N días", por día calendario local (no por 24 h:
-  // algo de anoche a las 23:00 es "ayer" aunque hayan pasado 9 horas).
-  const failureAgo = (iso) => {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return null
-    const dayStart = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
-    const days = Math.round((dayStart(new Date()) - dayStart(d)) / 86400000)
-    if (days <= 0) return t('failureAgoToday')
-    if (days === 1) return t('failureAgoYesterday')
-    return t('failureAgoDays', { n: days })
+  // Desde 2026-09-17 las tres viven en utils/format.js (las comparte la
+  // campanita de avisos y el cuadro de recuperados); acá quedan los nombres
+  // de siempre. "hoy" / "ayer" / "hace N días" es por día calendario local.
+  const fmtFailureDate = (iso) => fmtDateTime(iso, lang)
+  const fmtFailureDay = (d) => fmtDay(d, lang)
+  const failureAgo = (iso) => agoLabel(iso, t)
+  // "del 12 ago. 2026 al 10 sept. 2026" (o un solo día suelto) a partir de una
+  // lista de timestamps; lo usan el cuadro rojo y el verde.
+  const dateRangeLabel = (times) => {
+    const valid = times.filter(Number.isFinite)
+    if (valid.length === 0) return null
+    const oldest = new Date(Math.min(...valid))
+    const newest = new Date(Math.max(...valid))
+    return fmtFailureDay(oldest) === fmtFailureDay(newest)
+      ? fmtFailureDay(newest)
+      : t('failedOrdersRange', { from: fmtFailureDay(oldest), to: fmtFailureDay(newest) })
   }
 
   // Ítems del fallo listos para mostrar. El payload puede venir completo
@@ -555,16 +569,35 @@ export default function OrdersAdmin() {
       .limit(FAILURES_CAP)
       .then(({ data }) => setFailures(data ?? []))
 
+  // Las recuperaciones de la ventana, para el chip de la fila (2026-09-17).
+  // Consulta SEPARADA de loadFailures a propósito — si la base no tiene la
+  // migración, esta da 42703 y solo se pierden los chips; el cuadro rojo
+  // sigue igual. Misma ventana que la bandeja, sobre recovered_at.
+  const loadRecovered = (days = rangeDays) => {
+    const since = days > 0 ? new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString() : null
+    let q = supabase
+      .from('order_failures')
+      .select('id, kind, recovered_order_id, recovered_at, recovered_by, recovered_by_email')
+      .not('recovered_order_id', 'is', null)
+    if (since) q = q.gte('recovered_at', since)
+    return q
+      .order('recovered_at', { ascending: false, nullsFirst: false })
+      .limit(FAILURES_CAP)
+      .then(({ data, error }) => setRecovered(error ? [] : data ?? []))
+  }
+
   // Recarga al montar Y al cambiar la ventana. Los fallos (order_failures) no
   // llevan ventana: son una alarma acotada a FAILURES_CAP filas, no un listado.
   useEffect(() => {
     setLoading(true)
     setLoadError(false)
     setExpanded(null)
+    setRecoveredMsg(null)
     loadOrders(rangeDays)
       .catch(() => setLoadError(true))
       .finally(() => setLoading(false))
     loadFailures()
+    loadRecovered(rangeDays)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeDays])
 
@@ -581,11 +614,64 @@ export default function OrdersAdmin() {
       setRecoverError({ id, message: error?.message ?? t('recoverFailed') })
       return
     }
-    // Recargar las dos listas: el pedido nuevo tiene que aparecer arriba y el
-    // aviso desaparecer.
+    // Recargar las listas: el pedido nuevo tiene que aparecer arriba (con su
+    // chip ♻️) y el aviso rojo desaparecer. La campanita se refresca también
+    // (2026-09-17): si quien recuperó es la dueña, la RPC ya lo dejó visto y
+    // no aparece nada.
     await loadOrders().catch(() => {})
     loadFailures()
+    loadRecovered()
+    recoveries?.refresh?.()
   }
+
+  // Lleva a la cotización que salió de una recuperación ("Ver" de la
+  // campanita, vía ?recovered=). Si está en la bandeja: limpia filtros, la
+  // despliega y hace scroll. Si no está y la ventana no es "todo el
+  // historial", amplía y reintenta al llegar la carga; si tampoco, lo avisa.
+  const goToOrder = (orderId) => {
+    const o = orders.find((x) => x.id === orderId)
+    if (o) {
+      setRecoveredMsg(null)
+      setQuery('')
+      setStatusFilter('')
+      setTypeFilter('')
+      setRepFilter('')
+      setScFilter('')
+      setExpanded(orderId)
+      withItems(o).catch(() => {})
+      requestAnimationFrame(() => {
+        document.getElementById(`order-${orderId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      })
+      return
+    }
+    if (rangeDays !== 0) {
+      pendingGoTo.current = { id: orderId, prevOrders: orders }
+      setRangeDays(0)
+      return
+    }
+    setRecoveredMsg(t('recoveredNotInRange'))
+  }
+
+  useEffect(() => {
+    const p = pendingGoTo.current
+    if (!p || loading || orders === p.prevOrders) return
+    pendingGoTo.current = null
+    if (orders.some((x) => x.id === p.id)) goToOrder(p.id)
+    else setRecoveredMsg(t('recoveredNotInRange'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, loading])
+
+  // Deep link desde la campanita: ?recovered=<order_id> (ir a la cotización).
+  // Se limpia la URL al atenderlo, así el mismo enlace vuelve a funcionar si
+  // se toca de nuevo estando acá.
+  useEffect(() => {
+    if (loading) return
+    const target = searchParams.get('recovered')
+    if (!target) return
+    goToOrder(target)
+    navigate('/admin/orders', { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, searchParams])
 
   // Descarta un fallo: no borra la fila, solo la saca del banner
   // (dismissed_at) y queda en admin_audit_log. Nació para los que nunca se
@@ -834,15 +920,7 @@ export default function OrdersAdmin() {
   // Rango de fechas para el resumen plegado ("del 12 ago 2026 al 10 sep
   // 2026"): así se sabe de cuándo son sin abrir la lista. Un solo día se
   // muestra suelto.
-  const failureTimes = failures.map((f) => new Date(f.created_at).getTime()).filter(Number.isFinite)
-  const oldestFailure = failureTimes.length ? new Date(Math.min(...failureTimes)) : null
-  const newestFailure = failureTimes.length ? new Date(Math.max(...failureTimes)) : null
-  const failuresRange =
-    oldestFailure && newestFailure
-      ? fmtFailureDay(oldestFailure) === fmtFailureDay(newestFailure)
-        ? fmtFailureDay(newestFailure)
-        : t('failedOrdersRange', { from: fmtFailureDay(oldestFailure), to: fmtFailureDay(newestFailure) })
-      : null
+  const failuresRange = dateRangeLabel(failures.map((f) => new Date(f.created_at).getTime()))
   const failuresNotice = failures.length > 0 && (
     <div className="rounded-xl border-2 border-red-500 bg-red-50 p-4 dark:bg-red-950/40" data-testid="failures-box">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1024,6 +1102,18 @@ export default function OrdersAdmin() {
     </div>
   )
 
+  // Chip "♻️ Recuperado" por fila de la bandeja (2026-09-17): el pedido nació
+  // de una recuperación. {orderId: fila de order_failures}. El tooltip dice
+  // cuándo y quién ("vos" si fue quien mira); el registro completo está en el
+  // Registro de movimientos.
+  const recoveredWho = (f) =>
+    f.recovered_by && userId && f.recovered_by === userId ? t('recoveryByYou') : (f.recovered_by_email ?? '—')
+  const recoveredByOrder = useMemo(() => {
+    const map = {}
+    for (const f of recovered) if (f.recovered_order_id) map[f.recovered_order_id] = f
+    return map
+  }, [recovered])
+
   // Cargar a mano el pedido que llegó por WhatsApp y no al sistema
   // (2026-08-17). Va acá, en la misma pantalla donde se ve el aviso rojo de
   // los que sí dejaron rastro: es el mismo problema visto desde el otro lado.
@@ -1117,6 +1207,14 @@ export default function OrdersAdmin() {
 
       {failuresNotice}
 
+      {/* "Ver" desde la campanita y la cotización no está en la bandeja
+          actual ni en todo el historial (2026-09-17). */}
+      {recoveredMsg && (
+        <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300" data-testid="recovered-msg">
+          {recoveredMsg}
+        </p>
+      )}
+
       <div>{manualBlock}</div>
 
       <div className="flex flex-col gap-2 md:flex-row">
@@ -1200,6 +1298,7 @@ export default function OrdersAdmin() {
               return (
               <Fragment key={o.id}>
               <tr
+                id={`order-${o.id}`}
                 onClick={() => {
                   const next = expanded === o.id ? null : o.id
                   setExpanded(next)
@@ -1283,6 +1382,17 @@ export default function OrdersAdmin() {
                     {priceDrift[o.id] && (
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
                         ⚠️ {t('priceDriftBadge')}
+                      </span>
+                    )}
+                    {/* Nació de una recuperación (2026-09-17): el registro
+                        completo está en el cuadro verde de arriba. */}
+                    {recoveredByOrder[o.id] && (
+                      <span
+                        data-testid="recovered-chip"
+                        title={`${t('recoveredOn', { date: fmtFailureDate(recoveredByOrder[o.id].recovered_at) })} · ${t('recoveryBy', { who: recoveredWho(recoveredByOrder[o.id]) })}`}
+                        className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300"
+                      >
+                        ♻️ {t('recoveredChip')}
                       </span>
                     )}
                     {(o.status ?? 'new') === 'new' ? (

@@ -15,6 +15,14 @@
 --
 -- Idempotente, se puede re-correr. lock_timeout corto para fallar rápido y
 -- limpio si un lock se traba contra producción.
+--
+-- ⛔ 2026-09-17: esta migración NUNCA CORRIÓ en producción (el doc la daba por
+-- corrida desde el 08-19; al intentar correr la del 09-17 el preflight mostró
+-- que el vivo seguía siendo el del 08-05). Su cuerpo quedó ABSORBIDO por
+-- migration-2026-09-17-recovery-notifications.sql, que trae el "siempre
+-- cotización" más el registro/aviso. Correr ESTA después de aquella la
+-- desharía (volvería a un recover sin recovered_at/recovery_seen_at): el
+-- preflight de abajo lo impide. Ya no hace falta correrla nunca.
 set lock_timeout = '10s';
 
 -- ---------- Preflight ----------
@@ -23,6 +31,10 @@ begin
   if to_regprocedure('public.recover_order_failure(uuid)') is null then
     raise exception using message =
       'Falta recover_order_failure: corré primero migration-2026-08-05-order-capture.sql';
+  end if;
+  if position('recovery_seen_at' in pg_get_functiondef('public.recover_order_failure(uuid)'::regprocedure)) > 0 then
+    raise exception using message =
+      'El recover_order_failure vivo ya es el de migration-2026-09-17-recovery-notifications.sql, que absorbe esta: NO correr esta migración (la desharía)';
   end if;
 end $$;
 

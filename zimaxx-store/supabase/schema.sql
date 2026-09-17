@@ -2744,6 +2744,12 @@ grant execute on function public.convert_quote_to_order(uuid) to authenticated;
 --
 -- Mismos permisos y auditoría que el resto de las acciones del panel: admin
 -- cualquiera, vendedora solo los de sus clientes, y queda en admin_audit_log.
+--
+-- Desde 2026-09-17 (migration-2026-09-17-recovery-notifications.sql) además
+-- deja el REGISTRO en la propia fila (recovered_at / recovered_by /
+-- recovered_by_email) y el AVISO a la vendedora dueña (recovery_seen_at null =
+-- pendiente; nace visto si la recupera ella misma o el cliente no tiene
+-- vendedora), y el update es compare-and-set contra dos clicks simultáneos.
 create or replace function public.recover_order_failure(p_failure_id uuid)
 returns jsonb
 language plpgsql
@@ -2757,6 +2763,7 @@ declare
   v_items   jsonb;
   v_order   uuid;
   v_email   text;
+  v_seen    timestamptz;   -- 2026-09-17
 begin
   if not (public.is_admin() or public.is_vendedora()) then
     raise exception 'no autorizado';
@@ -2804,9 +2811,33 @@ begin
   values (v_client.id, v_items, (v_result->>'total')::numeric, 'quote')
   returning id into v_order;
 
-  update public.order_failures set recovered_order_id = v_order where id = p_failure_id;
-
   select email into v_email from auth.users where id = auth.uid();
+
+  -- 2026-09-17: el aviso a la vendedora dueña. Si la recupera la PROPIA dueña
+  -- del cliente — o el cliente no tiene vendedora — nace ya visto: no hay a
+  -- quién avisar. Si la recupera otra persona (un admin: current_vendedora_id()
+  -- es null), queda pendiente y la campanita del panel lo muestra hasta que
+  -- ella lo marque con mark_recoveries_seen.
+  v_seen := case
+    when v_client.vendedora_id is not distinct from public.current_vendedora_id() then now()
+    else null
+  end;
+
+  -- 2026-09-17: compare-and-set. Dos clicks simultáneos sobre el mismo fallo
+  -- pasaban los dos el chequeo de arriba (la fila no estaba bloqueada) y
+  -- creaban dos cotizaciones; ahora el segundo espera el lock, ya no
+  -- encuentra la fila sin recuperar, y su insert se revierte con la excepción.
+  update public.order_failures
+  set recovered_order_id = v_order,
+      recovered_at       = now(),
+      recovered_by       = auth.uid(),
+      recovered_by_email = v_email,
+      recovery_seen_at   = v_seen
+  where id = p_failure_id
+    and recovered_order_id is null;
+  if not found then
+    raise exception 'este pedido ya fue recuperado';
+  end if;
 
   insert into public.admin_audit_log
     (action, performed_by, performed_by_email, client_id, client_name, order_id, detail)
@@ -2818,11 +2849,17 @@ begin
        'kind',          'quote',
        'original_kind', coalesce(v_fail.kind, 'order'),
        'items',         v_items,
-       'total',         v_result->'total'
+       'total',         v_result->'total',
+       -- 2026-09-17: para el Registro de movimientos — a quién le quedó el
+       -- aviso y si quedó pendiente (false = la recuperó la propia dueña o el
+       -- cliente no tiene vendedora).
+       'vendedora_id',     v_client.vendedora_id,
+       'notify_vendedora', (v_seen is null)
      ));
 
   return jsonb_build_object('ok', true, 'order_id', v_order, 'total', v_result->'total',
-                            'lines', jsonb_array_length(v_items));
+                            'lines', jsonb_array_length(v_items),
+                            'recovered_at', now());   -- 2026-09-17
 end;
 $$;
 
@@ -2835,6 +2872,26 @@ grant execute on function public.recover_order_failure(uuid) to authenticated;
 -- migration-2026-08-13-dismiss-order-failures.sql).
 alter table public.order_failures
   add column if not exists dismissed_at timestamptz;
+
+-- Registro de la recuperación + aviso a la vendedora dueña (2026-09-17,
+-- migration-2026-09-17-recovery-notifications.sql). Las escribe
+-- recover_order_failure; recovery_seen_at la marca mark_recoveries_seen.
+-- En una instalación vieja la migración además backfillea las recuperadas
+-- desde admin_audit_log y las deja vistas — este script solo crea las
+-- columnas.
+alter table public.order_failures
+  add column if not exists recovered_at       timestamptz,
+  add column if not exists recovered_by       uuid,
+  add column if not exists recovered_by_email text,
+  add column if not exists recovery_seen_at   timestamptz;
+comment on column public.order_failures.recovered_at is
+  'Cuándo se recuperó este fallo (2026-09-17, migration-2026-09-17-recovery-notifications.sql). La escribe recover_order_failure; para las recuperaciones anteriores a la migración, backfill desde admin_audit_log (o la fecha del pedido recuperado).';
+comment on column public.order_failures.recovered_by is
+  'auth.users.id de quien lo recuperó (2026-09-17). Sin FK a propósito, igual que admin_audit_log.performed_by: el registro sobrevive al usuario borrado.';
+comment on column public.order_failures.recovered_by_email is
+  'Correo de quien lo recuperó, copiado en el momento (2026-09-17): el panel lo muestra sin leer auth.users.';
+comment on column public.order_failures.recovery_seen_at is
+  'Cuándo la vendedora dueña del cliente vio la recuperación (2026-09-17). NULL = aviso pendiente (campanita del panel). Nace = recovered_at si la recupera la propia dueña o el cliente no tiene vendedora (no hay a quién avisar); las históricas anteriores a la migración también quedaron vistas. Lo marca mark_recoveries_seen. Borde: si el cliente cambia de vendedora antes de verse, el aviso lo ve la dueña actual.';
 
 -- ---------- RPC: dismiss_order_failure ----------
 -- Mismos permisos que recover_order_failure: admin cualquiera, vendedora
@@ -2900,6 +2957,77 @@ $$;
 
 revoke execute on function public.dismiss_order_failure(uuid) from public;
 grant execute on function public.dismiss_order_failure(uuid) to authenticated;
+
+-- ---------- RPC: mark_recoveries_seen ----------
+-- "Marcar visto" de la campanita / cuadro de recuperados (2026-09-17,
+-- migration-2026-09-17-recovery-notifications.sql). Mismo gate que
+-- recover/dismiss (admin o vendedora; cualquier otro rol → 'no autorizado'),
+-- pero el update solo alcanza filas recuperadas, pendientes y de los
+-- clientes de la vendedora que llama: un admin puro (current_vendedora_id()
+-- null) recibe 0 — no tiene avisos propios —, una vendedora no puede "leer"
+-- los de otra, y marcar dos veces devuelve 0 la segunda. Cada visto queda en
+-- admin_audit_log como `recovery_seen` (a pedido del usuario: todo lo de esta
+-- tanda tiene que verse en el Registro de movimientos, identificado como
+-- tal) — una fila por fallo, con el pedido recuperado, quién y cuándo lo
+-- había recuperado.
+create or replace function public.mark_recoveries_seen(p_failure_ids uuid[])
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_n     integer;
+  v_email text;
+begin
+  if not (public.is_admin() or public.is_vendedora()) then
+    raise exception 'no autorizado';
+  end if;
+
+  if p_failure_ids is null or cardinality(p_failure_ids) = 0 then
+    return 0;
+  end if;
+
+  -- El panel manda de a uno o "todos" los que tiene en pantalla (tope 50):
+  -- un array absurdo no es un uso legítimo.
+  if cardinality(p_failure_ids) > 500 then
+    raise exception 'demasiados avisos de una vez: % (el tope es 500)', cardinality(p_failure_ids);
+  end if;
+
+  select email into v_email from auth.users where id = auth.uid();
+
+  -- El update y su auditoría en una sola sentencia: se audita exactamente lo
+  -- que se marcó (y nada si no se marcó nada).
+  with upd as (
+    update public.order_failures f
+    set recovery_seen_at = now()
+    where f.id = any(p_failure_ids)
+      and f.recovered_order_id is not null
+      and f.recovery_seen_at is null
+      and f.client_id in (
+        select id from public.clients where vendedora_id = public.current_vendedora_id()
+      )
+    returning f.id, f.client_id, f.kind, f.reason, f.recovered_order_id, f.recovered_at, f.recovered_by_email
+  )
+  insert into public.admin_audit_log
+    (action, performed_by, performed_by_email, client_id, client_name, order_id, detail)
+  select 'recovery_seen', auth.uid(), v_email, u.client_id, c.name, u.recovered_order_id,
+         jsonb_build_object(
+           'failure_id',         u.id,
+           'kind',               u.kind,
+           'reason',             u.reason,
+           'recovered_at',       u.recovered_at,
+           'recovered_by_email', u.recovered_by_email
+         )
+  from upd u
+  left join public.clients c on c.id = u.client_id;
+  get diagnostics v_n = row_count;
+  return v_n;
+end;
+$$;
+
+revoke execute on function public.mark_recoveries_seen(uuid[]) from public;
+grant execute on function public.mark_recoveries_seen(uuid[]) to authenticated;
 
 -- ---------- RPC: get_quotes_live_pricing ----------
 -- Una cotización (kind = 'quote') nunca guarda precio congelado (ver
