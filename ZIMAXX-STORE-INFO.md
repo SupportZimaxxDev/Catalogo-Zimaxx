@@ -368,6 +368,33 @@
 > Verificado: 41 aserciones Playwright, build limpio. Mismo deploy
 > pendiente.)
 >
+> Antes: 2026-09-04 (**frescura de inventario: indicador
+> en el header, botón "🔄 Refrescar stock" y candado de Atendido/push**,
+> punto 77b — documentado recién el 2026-09-25, a pedido del usuario: "dentro
+> del .md no sale reflejado la actualización con el botón de refresh". El
+> stock entra por Excel dos veces al día y entre cargas el catálogo queda
+> desalineado con SellerCloud. Migración
+> `migration-2026-09-04-inventory-freshness.sql` (tabla `inventory_syncs` —
+> registro unificado de Excel + refresco con lock ZS002 y corridas colgadas a
+> los 10 min —, `app_settings` con `stock_freshness_minutes` default 45,
+> RPCs `inventory_sync_begin/finish`, `refresh_stock_upsert` (SOLO
+> `products.stock`, los triggers deciden el resto), `get_inventory_freshness`,
+> `audit_freshness_override`, `sa_set_stock_freshness`, y
+> `update_order_status(uuid, text, boolean)` con candado ZS001 en
+> `order`→`done`). Edge Function NUEVA `sellercloud-refresh-stock` (pagina
+> `/Inventory` a 50, chunks de 500, con el JWT del que apretó — admin o
+> vendedora) y candado en `sellercloud-push-order` (`freshness.ts`: 409
+> `stale_inventory`, override solo superadmin y auditado). Panel:
+> `InventoryFreshness.jsx` en el header (verde/ámbar/rojo, poll 60 s vía
+> `useInventoryFreshness` montado en AdminLayout), botones Atendido/📦
+> deshabilitados con CTA de refresco en Pedidos, "Forzar sin refrescar"
+> tras el rechazo (superadmin), umbral editable en 🔐 Superadmin, la carga
+> de Excel de Productos registra su corrida. Verificado:
+> `tests/stock-refresh-tests.mjs` NUEVO (57, Node) + asserts SQL en PG 18.
+> **Todo en producción desde el deploy del 09-14** (migración corrida —
+> `inventory_syncs` existe allá —, `sellercloud-refresh-stock` v1, push v14,
+> frontend 7924120).)
+>
 > Antes: 2026-09-03, cierre de la tanda
 > SellerCloud (**backfill aplicado + hallazgo de duplicados**, punto 77: el
 > `--apply` vinculó **5 clientes** (Genesis Mercado, Luis Linares, Manuel
@@ -2762,6 +2789,7 @@ migración (`schema.sql` y `diagnostico-2026-08-12-*.sql` no cuentan).
 | `migration-2026-08-17-sellercloud-push.sql` | ✅ corrida | comprobado 2026-08-18 con la anon key: `orders.sellercloud_order_id` existe y `mark_order_sellercloud` responde `no autorizado` (existe, anon sin permiso) |
 | `migration-2026-08-17-manual-order.sql` | ✅ corrida | comprobado 2026-08-18 con la anon key: las tres RPC responden `no autorizado` (existen) |
 | `migration-2026-08-18-sellercloud-salesrep.sql` | ✅ corrida | 2026-08-18, confirmada por el usuario el mismo día (junto con el secret `SELLERCLOUD_MARKETING_SOURCE_ID`). Probada 2× en PG 18 local antes de entregarla |
+| `migration-2026-09-04-inventory-freshness.sql` | ✅ corrida (verificado el 2026-09-14 en la foto de producción: `inventory_syncs` existe allá — su policy `admin_read_inventory_syncs` es la única que quedó en forma vieja, no InitPlan) | frescura de inventario (punto 77b): `inventory_syncs`, `app_settings`, RPCs de refresco, `get_inventory_freshness`, `update_order_status(uuid, text, boolean)` con candado ZS001 |
 | `migration-2026-09-11-sa-metrics-historic.sql` | ✅ corrida (2026-09-11, el usuario con `npx supabase db query --linked -f`; verificado en `pg_proc` que la función viva tiene `v_historic`, punto 87) | reemplaza `sa_metrics_overview` con la misma firma: `p_days = 0` = Histórico desde el primer pedido, `period.historic/since/bucket`, serie semanal en rangos largos. El frontend puede ir antes: sin ella 7/14/30 siguen igual y el botón Histórico avisa que falta |
 | `migration-2026-09-15-price-list-min-order.sql` | ✅ **corrida el 2026-09-15** por el usuario (`npx supabase db query --linked -f`, punto 90; verificado en el acto: `price_lists.min_order` sembrado 800/2000/null con default 800 y check, `create_order` viva con "pedido mínimo", `get_catalog` viva con `min_order`, grants anon+authenticated). Antes: probada ×2 sobre el estado vivo reconstruido en PG 18 desechable + 12 bloques de assert. **Corrió ANTES del deploy del frontend** (orden invertido respecto al recomendado): hasta que Netlify sirva el frontend nuevo, el carrito viejo deja mandar pedidos mayoristas de $800–$1,999 que el servidor rechaza a `order_failures` | `price_lists.min_order` (semilla 800 / 2000 / null solo la primera vez, default 800, check), `get_catalog` con `client.min_order`, `create_order` rechazando por debajo del mínimo (`order_failures`). **Orden: frontend PRIMERO** (sin la clave cae al 800 de siempre), migración después; al revés, el carrito viejo deja mandar pedidos mayoristas de $800–$1,999 que el servidor rechaza. Sondeo: `position('pedido mínimo' in pg_get_functiondef('public.create_order(text, jsonb, numeric, text, uuid)'::regprocedure)) > 0` |
 | `migration-2026-09-17-recovery-notifications.sql` | ⏳ **SIN CORRER** (2026-09-17, punto 91. El primer intento del usuario abortó en el preflight — correcto: el recover vivo era el del 08-05, no el del 08-13 — y el preflight pasó a aceptar las dos versiones conocidas; **ABSORBE la 08-13**: desde esta migración TODA recuperación crea cotización. Probada ×2 sobre el cuerpo vivo bajado de producción + camino 08-13 + guard de la 08-13 + 11 bloques de assert — backfill desde audit por `order_id` / `detail->>'failure_id'` / fecha del pedido, admin → pendiente, dueña → vista, ajena → rechazada, cliente sin vendedora → vista, admin+vendedora, `mark_recoveries_seen` dueña/ajena/admin/sin rol/anon/tope 500, RLS, grants, idempotencia — + 2 preflights negativos en PG 18 desechable) | `order_failures.recovered_at / recovered_by / recovered_by_email / recovery_seen_at` (backfill de las ya recuperadas, todas vistas), `recover_order_failure` que las llena (sin autoaviso; compare-and-set) y RPC `mark_recoveries_seen(uuid[]) → integer` (audita cada visto como `recovery_seen`; el detail de la recuperación suma `vendedora_id`/`notify_vendedora`; el Registro de movimientos etiqueta las recuperaciones por cómo entraron). Aditiva: **va ANTES del deploy del frontend**; al revés el frontend nuevo degrada (42703 → sin campanita ni chips ♻️). Sondeo exclusivo: `position('recovery_seen_at' in pg_get_functiondef('public.recover_order_failure(uuid)'::regprocedure)) > 0` y `to_regprocedure('public.mark_recoveries_seen(uuid[])') is not null` |
@@ -2832,10 +2860,13 @@ zimaxx-store/
 │   ├── schema.sql             ← ejecutar en Supabase SQL Editor (idempotente)
 │   ├── migration-*.sql        ← deltas sobre una base ya creada
 │   ├── functions/             ← Edge Functions (Deno). sellercloud-push-order manda el pedido a SellerCloud (2026-08-17; desde el 2026-08-19 asigna Sales Rep y direcciones con nombre vía PUT posterior al create, verificando por relectura; desde 2026-09-14 el 502 trae `code: 'customer_no_address'` cuando el customer no tiene dirección allá). sellercloud-customers busca/vincula/crea/actualiza customers desde Clientes (2026-09-02; ficha 09-09; desde 2026-09-14 exige la dirección para crear y la carga con PUT /Customers/{id}/Addresses + relectura, también en `update`). Comparten `sellercloud-push-order/sellercloud.ts`
+│   │   ├── sellercloud-refresh-stock/ ← refresco on-demand del stock (2026-09-04): index.ts (CORS/auth/secrets, log `stock_refresh`) + refresh.ts (paginación /Inventory a 50, chunks de 500 a refresh_stock_upsert; sin Deno, testeable en Node). v1 en producción desde el 09-14
+│   │   └── sellercloud-push-order/freshness.ts ← gate de frescura del push (2026-09-04): fresco / 409 stale_inventory / override auditado / override rechazado; sin Deno
 │   └── cleanup-*.sql          ← limpiezas de datos de una sola vez, a mano y paso por paso (no son migraciones)
 ├── tests/
 │   ├── sc-customers-tests.mjs ← suite del alta/ficha/dirección de customers (78 comprobaciones desde 2026-09-14, Node contra un servidor falso con PUT /Customers/{id}/Addresses)
 │   ├── sc-push-tests.mjs      ← suite del cliente de SellerCloud (22 comprobaciones, Node contra un servidor falso; en el repo desde 2026-08-19)
+│   ├── stock-refresh-tests.mjs ← refresco de stock + gate de frescura del push (57 comprobaciones, Node contra un servidor falso de SellerCloud y un stub de RPCs; 2026-09-04)
 │   └── price-list-excel-tests.mjs ← Excel de la lista de precios (40 comprobaciones, Node; workbook serializado y leído de vuelta; 2026-09-08)
 └── src/
     ├── main.jsx
@@ -2870,7 +2901,8 @@ zimaxx-store/
     │       ├── AuditLogAdmin.jsx
     │       ├── ManualOrderModal.jsx ← pegar el mensaje de WhatsApp y crear el pedido (2026-08-17)
     │       ├── OrdersAdmin.jsx ← bandeja + cuadro rojo (order_failures sin recuperar) + chip ♻️ Recuperado por fila (tooltip cuándo/quién) + deep link ?recovered= desde la campanita (2026-09-17; el cuadro verde de recuperados se quitó el mismo día a pedido del usuario — el registro vive en el Registro de movimientos)
-    │       ├── SuperAdminPanel.jsx  ← solo superadmin (usuarios/roles/contraseñas + dueñas de listas)
+    │       ├── InventoryFreshness.jsx ← indicador "Inventario: hace X min" (verde/ámbar/rojo) + botón 🔄 Refrescar stock + toast, en el header del panel para todos los roles (2026-09-04)
+│       ├── SuperAdminPanel.jsx  ← solo superadmin (usuarios/roles/contraseñas + dueñas de listas + umbral de frescura de inventario desde 2026-09-04)
     │       └── MetricsAdmin.jsx     ← solo superadmin (KPIs en vivo por polling + gráfico SVG + adopción por vendedora)
     └── utils/
         ├── format.js           ← money(), cleanPhone(), hasCountryCode() + fechas del panel: panelLocale(), fmtDateTime(), fmtDay(), calendarDaysAgo(), agoLabel() (2026-09-17, compartidas por cuadro rojo, verde y campanita)
@@ -2921,6 +2953,8 @@ negro+dorado es idéntico en ambos modos).
 | `sync_runs` | Auditoría del sync SellerCloud→Supabase vía n8n (2026-07-10, `migration-2026-07-10-sellercloud-sync.sql`): `started_at`/`finished_at`, `status` 'running' \| 'ok' \| 'error', contadores `rows_products`/`rows_prices`/`rows_clients`, `error_detail`. n8n la escribe directo con la service_role key (salta RLS); admins solo lectura |
 | `admin_audit_log` | Auditoría de acciones sensibles (2026-07-14, `migration-2026-07-14-client-admin-actions.sql`; suma `update_price_list` 2026-07-15, `edit_order_items`/`update_order_status`/`convert_quote_to_order` 2026-07-17, y `recover_order_failure` 2026-08-05): `action` ('reassign_client' \| 'delete_client' \| 'update_price_list' \| 'edit_order_items' \| 'update_order_status' \| 'convert_quote_to_order' \| 'recover_order_failure' \| las `sa_*` del superadmin), `performed_by`/`performed_by_email` (quién), `client_id`/`client_name` (snapshot del cliente dueño del pedido/acción), `order_id` (2026-07-17, nullable, SIN FK por el mismo motivo que `client_id` — sobrevive si el pedido se borra a futuro), `detail` jsonb, `created_at`. Solo lectura para admin (RLS); la escriben solo las RPC `reassign_client`/`delete_client`/`update_client_price_list`/`update_order_items`/`update_order_status`/`convert_quote_to_order`/`recover_order_failure`/`sa_log` |
 | `system_logs` | **Logs de errores y eventos operativos** (2026-08-20, `migration-2026-08-20-system-logs.sql`): `id` bigint identity, `severity` con CHECK ('info' \| 'warning' \| 'error' \| 'critical'), `source` (sin CHECK a propósito — sumar una fuente no exige migración; en uso: `order_capture`, `order_outbox`, `sellercloud_push`, `sellercloud_customers` (2026-09-02), `stock_refresh`/`manual_refresh` (2026-09-04), `price_upload`, `product_upload`, `sync`, `frontend`, desde 2026-09-08 `catalog` — descargas del Excel de la lista de precios desde el catálogo del cliente, `info` por descarga y `warning` por fallo — y desde 2026-09-09 `clients` — un `client_created` por cada cliente creado desde el panel, formulario o Excel, con la ficha por nombres y `created_by` en el context; es lo que filtra el chip "Clientes creados desde el catálogo" de la pestaña Sistema), `event`, `message` (≤2,000), `context` jsonb (≤8 KB, truncado con marcador `_truncated`), `user_agent` (lo extrae `log_event` de `request.headers`). Índices `(created_at desc)` y `(severity, created_at desc)`. **RLS activo y CERO policies + revoke a `anon`/`authenticated`**: por PostgREST no se lee ni se escribe — la única escritura es `log_event` (SECURITY DEFINER, también para `anon`: el catálogo del cliente es justo donde los errores no dejaban rastro) y la única lectura `get_system_logs` (solo superadmin). No reemplaza a `order_failures` (que guarda el payload recuperable) ni a `orders.sellercloud_error` (que se ve en la bandeja): es la vista transversal de la pestaña ⚙️ Sistema. Retención: `purge_system_logs()` (30 días info/warning, 90 error/critical), pensada para pg_cron |
+| `inventory_syncs` | **Registro unificado de actualizaciones de INVENTARIO** (2026-09-04, `migration-2026-09-04-inventory-freshness.sql`): una fila por corrida de la carga de Excel de Productos (`source = 'excel_upload'`) o del refresco on-demand (`source = 'manual_refresh'`), con `status` 'running' → 'ok' \| 'error', `started_at`/`finished_at`, `started_by`/`started_by_email`, `products_updated`/`deactivated_count`/`reactivated_count` (nullables: la carga de Excel solo reporta `products_updated`, los desactivados/reactivados los decide el trigger fila por fila y ese camino no los ve; el refresco reporta los tres) y `error_message`. Índice `(status, started_at)`. RLS activo, `revoke all` a anon/authenticated: se escribe SOLO vía `inventory_sync_begin`/`inventory_sync_finish` (SECURITY DEFINER, con el JWT del usuario) y se lee vía `get_inventory_freshness`. **Tabla aparte de `sync_runs` a propósito**: aquella es la auditoría del sync completo de n8n (productos+precios+clientes, escrita directo con la service_role key); esta son corridas de inventario del panel con lock anti-concurrencia. Es lo que alimenta el "Inventario: hace X min" del header y el candado de Atendido/push |
+| `app_settings` | **Configuración editable del proyecto** (2026-09-04, misma migración): `key text pk`, `value jsonb`, `updated_at`, `updated_by`. Hoy una sola clave, `stock_freshness_minutes` (default 45, leída por `stock_freshness_minutes()` y escrita SOLO por `sa_set_stock_freshness`, superadmin). RLS activo y SIN policies — mismo criterio que `superadmins`/`system_logs`: se accede por funciones SECURITY DEFINER. El próximo valor configurable no necesita otra tabla |
 
 ### Listas de precio sembradas por el schema
 
@@ -3185,7 +3219,20 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
   stock_after, availability}], skipped:[{product_id, sku, qty, reason}]}`,
   que las dos RPC de arriba guardan en `admin_audit_log.detail->'stock'`.
 
-### `update_order_status(p_order_id uuid, p_status text) → jsonb`
+### `update_order_status(p_order_id uuid, p_status text, p_override boolean default false) → jsonb`
+- **Firma nueva desde 2026-09-04** (`migration-2026-09-04-inventory-freshness.sql`
+  hace `drop function` de la `(uuid, text)` — no pueden convivir las dos,
+  PostgREST no sabría cuál elegir). **Candado de frescura**: en LA transición
+  que descuenta stock (`kind = 'order'` → `'done'` con `stock_applied` en
+  false) consulta `get_inventory_freshness()` y si `is_stale` rechaza con
+  `errcode ZS001` ("Inventario desactualizado (hace N min, umbral M min):
+  refrescá el stock para continuar") ANTES de mover nada. Con `p_override =
+  true` (solo lo manda el botón "Forzar sin refrescar", nunca default) exige
+  `is_superadmin()` y deja `freshness_override` en `admin_audit_log` con la
+  edad calculada en la base. Reabrir/cancelar (devuelven stock) y las
+  cotizaciones pasan siempre; con inventario fresco `p_override` no hace nada
+  ni audita. El frontend lee `error.code === 'ZS001'` para mostrar el CTA de
+  refresco en vez de texto suelto. Ver "RPCs de frescura de inventario".
 - Acceso: solo `authenticated`. (2026-07-17, a pedido del usuario: antes
   "Marcar atendido"/"Cancelar"/"Reabrir" hacían un `update` directo sin
   dejar rastro.)
@@ -3208,6 +3255,59 @@ detalle del RPC más abajo y la sección de `ClientsAdmin.jsx`.
   stock antes de aplicar, y la fila muestra el resultado después
   (2026-08-04; hasta entonces un error de esta RPC se descartaba en
   silencio, ahora se muestra inline).
+
+### RPCs de frescura de inventario (2026-09-04, `migration-2026-09-04-inventory-freshness.sql`)
+
+Todas SECURITY DEFINER con `search_path = public`, `revoke ... from public,
+anon` + `grant execute to authenticated`; el permiso fino va adentro. Las
+usan el panel (con el JWT del usuario) y las Edge Functions
+`sellercloud-refresh-stock` / `sellercloud-push-order` (con el JWT de quien
+apretó — ninguna usa la service_role key).
+
+- **`get_inventory_freshness() → jsonb`** (stable): la última corrida
+  **exitosa** de `inventory_syncs` (`error`/`running` no cuentan — un refresco
+  que falló no volvió fresco a nadie), hace cuántos minutos fue, el umbral y si
+  venció. Devuelve `{ last_sync: {id, source, finished_at, products_updated,
+  deactivated_count, reactivated_count} | null, minutes_ago, threshold_minutes,
+  is_stale, running: {id, source, started_at} | null }`. **Regla de
+  activación: sin ninguna corrida `ok`, `is_stale = false`** — así la
+  migración puede correr antes que el frontend sin encender el candado. La
+  llama el header cada 60 s, `update_order_status`, el gate del push y la
+  sección de umbral en Superadmin.
+- **`inventory_sync_begin(p_source text) → jsonb`**: abre una corrida
+  (`excel_upload` | `manual_refresh`) y devuelve `{id}`. Requiere `is_admin()`
+  o `is_vendedora()`. Advisory lock transaccional + regla: una `running` de
+  menos de 10 min → `errcode ZS002` "Ya hay una actualización de inventario en
+  curso" (la Edge Function lo devuelve como 409 `refresh_in_progress`); una
+  `running` de MÁS de 10 min está colgada → se marca `error` y se permite
+  seguir.
+- **`inventory_sync_finish(p_id, p_status, p_products_updated, p_deactivated_count, p_reactivated_count, p_error) → jsonb`**:
+  cierra la corrida en `ok` o `error` con los contadores.
+- **`refresh_stock_upsert(p_rows jsonb) → jsonb`**: un chunk `[{sku, qty}]`
+  del inventario de SellerCloud. **Toca únicamente `products.stock`** (nunca
+  precio, nombre, foto ni estado) y los triggers
+  `products_availability_from_stock` + `products_enforce_noncatalog` derivan
+  disponibilidad y publicación, exacto igual que la carga de Excel. Criterios
+  copiados de `ProductsAdmin.jsx`: match por SKU `lower(trim())`, dedup dentro
+  del chunk (última fila gana), SKUs fuera del catálogo se ignoran
+  (`unknown_skus`), `-SPECIAL`/`-BOX` se saltean (`skipped_noncatalog`), qty no
+  numérico cuenta como `invalid_rows` sin tumbar el chunk. Un solo UPDATE en
+  lote con `stock is distinct from qty` (cuenta cambios reales, menos WAL).
+  Devuelve `{updated, unchanged, deactivated, reactivated, unknown_skus,
+  invalid_rows, skipped_noncatalog}`.
+- **`audit_freshness_override(p_via text, p_order_id uuid) → jsonb`**: la
+  usa el push cuando el superadmin fuerza con inventario vencido. Rechaza a
+  cualquiera que no sea superadmin y calcula ELLA la edad del inventario
+  (un override auditado con datos del cliente no sería auditoría); deja
+  `freshness_override` en `admin_audit_log` con `via = 'sellercloud_push'`.
+  `update_order_status` audita su propio override adentro (misma acción, `via`
+  distinto en el detail).
+- **`stock_freshness_minutes() → int`** (interna, sin grant): lee
+  `app_settings.stock_freshness_minutes`, default 45.
+- **`sa_set_stock_freshness(p_minutes int) → jsonb`**: solo superadmin,
+  5-1440 min, upsert en `app_settings` + `sa_log('set_stock_freshness')` con
+  from/to. Devuelve `{ok, minutes}`. La
+  llama la sección "📦 Frescura de inventario" de 🔐 Superadmin.
 
 ### `convert_quote_to_order(p_order_id uuid) → jsonb`
 - Acceso: solo `authenticated`. (2026-07-17, a pedido del usuario: una
@@ -3795,6 +3895,20 @@ por qué no entró sin ir a los logs de la función.
   de `is_noncatalog_sku` en la base — cambiar un sufijo implica cambiarlo en los
   dos lados.
 
+- **La carga de Excel registra su corrida en `inventory_syncs`** (2026-09-04,
+  solo si el archivo trae columna de stock): antes de los upserts llama
+  `inventory_sync_begin('excel_upload')` y al terminar `inventory_sync_finish`
+  con `ok` (`products_updated` = filas con stock del archivo; desactivados/
+  reactivados quedan null porque los decide el trigger y este camino no los
+  ve) o con `error` si una tanda falló a mitad (para no dejar la corrida
+  `running` colgada). Es una de las dos vías que alimentan el "Inventario:
+  hace X min" del header — la otra es el botón 🔄 Refrescar stock. Tres
+  salidas del begin: ok → se registra; **ZS002** (hay un refresco o carga
+  corriendo AHORA) → **la subida se corta** con ese mensaje, pisarse el stock
+  entre dos corridas es justo lo que el lock evita; cualquier otro error
+  (migración sin correr) → la carga sigue sin registrarse, degradación en
+  silencio como `logEvent`.
+
 ### Precios (Excel/CSV) — 2026-07-17: una lista por archivo + preview/confirmar
 - Elegir arriba a qué lista corresponde el archivo (selector con
   `price_lists`, sin `quote`); columnas: `SKU`, precio (genérica `Price`/
@@ -4034,6 +4148,20 @@ por qué no entró sin ir a los logs de la función.
      incompleta como si fuera completa.
   El aviso rojo de `order_failures` de arriba sigue con su `limit(50)`: es una
   alarma de pedidos sin recuperar, no el listado de pedidos.
+- **Candado de frescura de inventario** (2026-09-04): si el header dice que
+  el inventario venció (`inventory.freshness.is_stale`, el mismo dato que ve
+  la vendedora arriba), los botones **Atendido** (solo para `kind = 'order'`)
+  y **📦 SellerCloud** quedan deshabilitados con tooltip "Inventario
+  desactualizado (hace X) — refrescá el stock para continuar" y un botón
+  "🔄 Refrescar stock" al lado que dispara el mismo refresco del header. Es
+  solo reflejo: la verdad está en el servidor (`update_order_status` rechaza
+  con `ZS001`, la Edge Function del push con 409 `code: 'stale_inventory'`),
+  así que si el candado gana la carrera (fresco al abrir el modal, vencido al
+  confirmar) el error inline muestra el mismo CTA en vez de texto suelto.
+  **Superadmin** ve además "Forzar sin refrescar" después del rechazo: manda
+  `p_override: true` / `override: true` (jamás default), el servidor
+  re-verifica el rol y lo audita como `freshness_override`. Sin la migración
+  del 09-04, `freshness` es null y todo se ve como antes.
 - Click en una fila expande un detalle de ancho completo (2026-07-17,
   ajuste visual sobre una primera versión que lo abría angosto dentro de
   la columna Ítems y quedaba muy alto y feo): fila propia con
@@ -4173,7 +4301,7 @@ genera archivo: avisa "Sin movimientos registrados".
 
 Pestaña visible **solo** para el superadmin (`is_superadmin()`), última del
 menú. Junta lo que antes obligaba a entrar al SQL Editor de Supabase o al
-dashboard de Auth. Dos secciones:
+dashboard de Auth. Tres secciones (la tercera desde 2026-09-04):
 
 - **Usuarios y accesos**: tabla de todos los usuarios de Supabase Auth
   (`sa_list_users`) con email, rol (Superadmin / Admin / Vendedora / Sin rol —
@@ -4195,6 +4323,15 @@ dashboard de Auth. Dos secciones:
   tarjeta muestra el aviso con el número y un botón para pasarlos a la principal
   (`sa_sync_price_list_clients`) — no se mueven solos a propósito: una
   reasignación masiva silenciosa es justo lo que no se quiere.
+
+- **📦 Frescura de inventario** (2026-09-04): el umbral en minutos
+  (`stock_freshness_minutes`, default 45) a partir del cual el inventario se
+  considera vencido — el header pasa a ámbar/rojo y se cierra el candado de
+  Atendido/push. Input numérico + "Guardar umbral" (deshabilitado si está
+  vacío, igual al vigente, menor a 5 o mayor a 1440); lee el vigente con
+  `get_inventory_freshness` (la misma RPC del indicador) y escribe con
+  `sa_set_stock_freshness` (auditada en `sa_log`). Un admin común no lo puede
+  tocar: la regla está en la RPC, no en la UI.
 
 Notas de implementación: los formularios inline solo se cierran si la acción
 salió bien (si falla, no se pierde lo tipeado); después de cada acción el panel
@@ -4373,6 +4510,8 @@ Formato: `https://zimaxxstore.com/?c=<token>`
 76. **Ejecución de la tanda SellerCloud + ajustes pescados contra la API real** (2026-09-03, continuación del punto 75) — (a) **Ejecutado**: las 3 migraciones del 09-02 corrieron en producción (las corrió el usuario en el SQL Editor); `sellercloud-customers` (v1→v2) y `sellercloud-push-order` (v12→v13, saldando el redeploy pendiente desde el 08-31) desplegadas con `npx -y supabase functions deploy` — el CLI no está instalado, se usa npx, y el login fue con Personal Access Token del usuario vía `setx SUPABASE_ACCESS_TOKEN` en una ventana aparte (el flujo interactivo no anda sin TTY); dato importante: **el proyecto usa las API keys nuevas** (`sb_publishable_...`/`sb_secret_...`) — las legacy anon/service_role están DESHABILITADAS desde 2026-07-13, cualquier script server-side tiene que usar la `sb_secret` (se obtiene con `npx supabase projects api-keys --project-ref yukulanekksquqkateqk --reveal`). (b) **Dos bugs reales del backfill, pescados en la primera corrida contra la API viva y corregidos con test**: el servidor CLAMPEA el pageSize (se piden 500, sirve 50) y el corte por "vinieron menos de los pedidos" paraba la descarga en la página 1 con 50 de 1037 customers — ahora `listAllCustomers` corta solo por total alcanzado o por página sin IDs nuevos (anti-loop), y ya no recibe token: lo pide POR PÁGINA vía `getToken` (cacheado, se renueva a los 55 min) porque el segundo bug fue justamente un 401 a mitad del loop de teléfonos al expirar el token de 60 min en una corrida larga; el loop de teléfonos además pide token por iteración, reintenta una vez tras `resetTokenCache()` y una búsqueda fallida se anota y NO tumba la corrida (progreso cada 200). (c) **Ajustes de UI a pedido del usuario**: el panel SellerCloud dejó de abrirse arriba de la página — ahora es una FILA EXPANDIDA debajo del cliente en la tabla (mismo gesto que el detalle de un pedido en la bandeja; `scPanelBox` + Fragment por fila, con fallback al bloque de arriba si la fila no está a la vista por filtros/scroll — un alta con filtros puestos no puede dejar el flujo corriendo invisible); el form "Crear en SellerCloud" ganó campo de **correo editable** prellenado con el del cliente (viaja en el create; vacío = sin email, la API no lo exige; validado con EMAIL_RE); y **CustomerType pasó de 0 a 1** — el usuario confirmó que en SU instancia 1 = Wholesale; el Swagger se contradice a sí mismo (el x-enumNames del create dice 0=WholeSale, el del filtro del GET dice 1=Wholesale), así que manda lo observado en los datos reales, documentado en el código. Verificado: `sc-customers-tests` 26/26 (3 nuevos: pageSize clampeado baja TODO en 25 páginas, página repetida corta sin loop infinito, CustomerType 1), Playwright 26/26 (panel dentro de la tabla bajo la fila, correo prellenado y editado viajando en el create, más los 22 previos), push 35 OK, build de Vite limpio. El dry-run del backfill quedó corriendo contra la API real (1037 customers bajados completos). **Pendiente: deploy del frontend y el `--apply` del backfill tras revisar los CSVs.**
 
 77. **Backfill aplicado (parcial) + hallazgo de clientes duplicados** (2026-09-03, cierre del punto 76) — el dry-run contra la API real terminó: 1039 customers allá vs 1939 clientes sin vincular acá; 27 matches automáticos por nombre único (0 por email — casi nadie tiene correo cargado — y los 4 hits de teléfono degradados a revisión: **el filtro model.phoneNumber de SellerCloud matchea por SUBSTRING** y la primera corrida vinculó 2 de 4 al customer equivocado; el fix lee el teléfono REAL del detalle del customer y solo un sufijo que coincide de verdad matchea automático — los aproximados van a ambiguous.csv con el candidato). `--apply-file` de los 27: **5 aplicados** (Genesis Mercado, Luis Linares, Manuel García, Mohaya Askoul, Roxana Ortega) y **22 bloqueados por el índice único**: ya existe OTRO cliente local con ese sellercloud_id — son pares de duplicados locales (mismo nombre, teléfono con dígitos de más/de menos que escapa a la dedup por sufijo: ej. Carlos Alberto Escobar 584146330638 vs 5841463306) u homónimos que NO hay que fusionar (ej. las dos Diana Torres tienen teléfonos totalmente distintos). El índice único hizo exactamente su trabajo. Reporte con conteo de pedidos por gemelo en `Documents/catalogo/backfill-sellercloud-2026-09-03/duplicados.csv` (varios pares tienen pedidos EN AMBAS filas — la fusión es decisión humana, caso por caso; los CSVs matches/ambiguous/unmatched finales están en la misma carpeta). Pendiente: deploy del frontend; resolver los 22 duplicados y los 4 ambiguos a mano (panel o CSV); los 1908 sin candidato se crean bajo demanda desde el panel.
+
+77b. **Frescura de inventario: indicador en el header, botón "🔄 Refrescar stock" y candado de Atendido/push** (2026-09-04, a pedido del usuario; numerado "77b" porque se documentó recién el 2026-09-25 — "dentro del .md no sale reflejado la actualización con el botón de refresh" — y renumerar rompería las referencias 78-91) — el stock entra por la carga de Excel de productos (8:30 y 16:30) y entre cargas el catálogo queda desalineado con SellerCloud: las vendedoras marcaban Atendido o mandaban a SellerCloud pedidos sobre stock viejo. **Base** (`migration-2026-09-04-inventory-freshness.sql`, idempotente, preflight que exige stock/deactivated_by_stock/superadmin/apply_order_stock/admin_audit_log.order_id): tabla `inventory_syncs` (registro unificado de corridas de inventario, `excel_upload` | `manual_refresh`, running → ok/error, contadores; aparte de `sync_runs` porque aquella es del sync de n8n con service_role), `app_settings` key/value con `stock_freshness_minutes` default 45, RPCs `inventory_sync_begin` (advisory lock; `running` < 10 min → ZS002; > 10 min = colgada → error y sigue) / `inventory_sync_finish` / `refresh_stock_upsert` (chunk `[{sku, qty}]`, **toca SOLO `products.stock`**, los triggers `products_availability_from_stock` + `products_enforce_noncatalog` deciden disponibilidad y publicación — cero reglas de stock nuevas; ignora SKUs desconocidos, saltea -BOX/-SPECIAL, `is distinct from`) / `get_inventory_freshness` (última corrida `ok`, minutes_ago, threshold, is_stale, running; **sin corridas registradas is_stale = false** = deploy seguro expand/contract) / `audit_freshness_override` / `sa_set_stock_freshness`, y `update_order_status(uuid, text, boolean default false)` (DROP de la firma vieja) con **candado ZS001** solo en `order` → `done` con stock sin descontar; reabrir/cancelar/cotizaciones pasan siempre. **Edge Functions**: NUEVA `sellercloud-refresh-stock` (index.ts = CORS/auth/secrets/log source `stock_refresh`; refresh.ts sin Deno: pagina `GET /rest/api/Inventory?companyID=…` a **50 por página, el máximo del contrato**, ~74 páginas y 25-40 s para los ~3,700 SKUs, token renovado por página, corte por total o página repetida, chunks de 500 a `refresh_stock_upsert`; ZS002 → 409 `refresh_in_progress` sin log de error; admin O vendedora con su JWT, nunca service_role) y candado en `sellercloud-push-order` (`freshness.ts`: fresco / 409 `stale_inventory` / override auditado por `audit_freshness_override` / 403 `override_forbidden`; `freshness_unavailable` como warning si la RPC no existe — no bloquea pero lo deja dicho; se corta ANTES del create para no dejar una orden a medias allá). **Panel**: `useInventoryFreshness` (poll 60 s, un solo dueño en AdminLayout repartido por Outlet context) + `InventoryFreshness.jsx` en el header para todos los roles (verde ≤ umbral, ámbar ≤ 2×, rojo; "sin actualizaciones registradas"; fuera del umbral el texto es CTA; botón 🔄 con spinner; toast 9 s "Stock actualizado — N productos, D desactivados, R reactivados" o el motivo real del cuerpo); Pedidos deshabilita Atendido (solo `order`) y 📦 con tooltip + "🔄 Refrescar stock", error inline con el mismo CTA si el candado gana la carrera, y "Forzar sin refrescar" solo superadmin tras el rechazo (`p_override`/`override: true`, jamás default); 🔐 Superadmin gana "📦 Frescura de inventario" (umbral 5-1440); la carga de Excel de Productos abre/cierra su corrida; ⚙️ Sistema suma `stock_refresh`/`manual_refresh` al select. i18n `inv*` en es/en. **Orden de deploy** que exige la cabecera: migración → funciones (push y refresh) → frontend. Verificado: `tests/stock-refresh-tests.mjs` NUEVO (57 comprobaciones en Node contra un servidor falso de SellerCloud y un stub de RPCs) + asserts SQL en PG 18 desechable + build limpio. **Estado: TODO en producción desde el deploy del 2026-09-14** (migración corrida — `inventory_syncs` existe allá —, `sellercloud-refresh-stock` v1, `sellercloud-push-order` v14, frontend `7924120`; verificado en la foto del 09-14, punto 88).
 
 78. **Excel de la lista de precios para el cliente** (2026-09-08, a pedido del usuario: "para los clientes que se ponen tercos con usar el catálogo en Excel puedan verlo, solo mientras se terminan de acostumbrar los clientes más grandes en edad"). **Puente temporal a propósito**: cuando dejen de usarlo se quita `components/PriceListExcel.jsx` del catálogo y nada más. Dos entradas al MISMO archivo: **(1) catálogo del cliente** — bloque "📊 ¿Prefieres verlo en Excel?" arriba de los resultados (solo con cliente válido y productos), botón "Descargar lista en Excel" que baja `zimaxx-lista-precios-<cliente>-<fecha>.xlsx` con SU lista COMPLETA (`products` de get_catalog, no `filtered`: es su lista, no lo que tenga filtrado en pantalla): membrete (título · Cliente · Asesora + teléfono · Generado), fila en blanco, tabla UPC · Marca · Producto · Línea · Disponibilidad · Precio con autofiltro y anchos; precios como NÚMERO con formato `"$"#,##0.00` (sumables), UPC como texto, línea/disponibilidad traducidas con el diccionario del catálogo; lista `quote` → archivo "catálogo" sin columna Precio; sin SKU (get_catalog no lo expone, el cliente identifica por UPC). **(2) pestaña Precios** — botón "Descargar Excel de la lista" junto a los contadores de la matriz, para la lista elegida en el selector, con el criterio EXACTO de get_catalog (activo Y precio > 0 en esa lista, orden marca → nombre) y la columna SKU de más; visible para admin y vendedora; sin lista → pide elegir; sin filas → aviso sin archivo; sin request nuevo. **Decisiones**: se arma en el navegador con lo que ya hay (sin RPC ni migración — el archivo dice lo mismo que la pantalla y no hay nada nuevo que pueda quedar desincronizado con `get_catalog`); SheetJS bajo demanda con `import()` al tocar el botón (el bundle inicial del catálogo NO engorda: `xlsx` sigue siendo un chunk aparte de 429 kB); `try/finally` suelta `busy` si el import falla (misma lección que el PDF del carrito, punto 58) con aviso y log `warning`; cada descarga exitosa deja un `info` en `system_logs` con source NUEVO `catalog` (evento `price_list_excel_downloaded`, context `token_hint` de 8 —nunca el token—, `client`, `price_list_code`, `products`, `lang`) — es lo que responde "¿quién sigue pidiendo el Excel?" y "¿ya se puede sacar?"; `SystemLogsAdmin` suma `catalog` a los sources filtrables. Generador compartido en `utils/excel.js`: `priceListExcelRows({t, products, lineLabel, withSku})` → `buildPriceListWorkbook(XLSX, …)` (puro, testeable en Node) → `downloadPriceListExcel`. i18n `excelList*`/`excelCol*`/`listExcel*` en es/en. **Verificado de verdad**: `tests/price-list-excel-tests.mjs` NUEVO (40 comprobaciones en Node del código real, con el workbook serializado y leído de vuelta: membrete/blanco/encabezados/filas, formato de moneda solo en celdas numéricas, celdas null sin crear, autofiltro sobre la tabla, quote sin Precio, withSku, fileSlug); 43 aserciones Playwright en el catálogo (es/en, membrete y valores traducidos, filtro activo no recorta el archivo, log con token_hint y sin token, quote, token inválido y catálogo vacío sin bloque, chunk de xlsx abortado → aviso + botón libre + warning, móvil 390 px sin desborde) y 24 en la pestaña Precios (admin: exclusiones inactivo/precio 0/otra lista, orden, SKU, formato, mensaje con conteo, lista vacía, quote fuera del selector; vendedora: sin carga pero con descarga, marca vacía al final), contra el build real con Supabase interceptado; build de Vite limpio. **Pendiente: deploy del frontend** (sin migración, se suma al deploy ya pendiente).
 

@@ -1038,7 +1038,7 @@ Pestañas:
 | **🛡️ Registro de movimientos** (solo admin, pestaña propia desde 2026-07-15 — antes vivía colapsada dentro de Clientes) | Historial de quién reasignó/borró un cliente, le cambió la lista de precio, o tocó un pedido (editar ítems, cambiar estado, convertir cotización) — con el **movimiento de stock** de ese cambio de estado cuando hubo uno (2026-08-04: "Stock descontado: N · M sin dato de stock"; el `detail` guarda producto, SKU, cantidad y el antes/después de cada uno). Fecha, usuario, acción, cliente, detalle, leído directo de `admin_audit_log`. Desde 2026-08-05 también registra **todo lo que se hace en la pestaña Superadmin** (rol admin, cambios de contraseña, dueñas de listas, alta/renombre/borrado de listas) — en esas filas la columna "Cliente / objetivo" no es un cliente sino el email del usuario o el nombre de la lista. **Filtros** (2026-07-15): por usuario, por acción y por rango de fechas (desde/hasta). **"⬇️ Descargar Excel"** (2026-08-05): baja **todo** el historial, no los 200 que muestra la tabla (usa `fetchAll`, así pasa el corte de 1,000 filas de PostgREST), respetando los filtros activos — el botón aclara "(todo el historial)" o "(filtrado)". Columnas: Fecha (texto `YYYY-MM-DD HH:MM:SS` local, ordenable en cualquier Excel sin depender de la configuración regional), Usuario, Acción, Cliente / objetivo, Detalle, ID cliente, ID pedido y **Datos completos (JSON)** — el `detail` crudo, porque el resumen legible deja cosas afuera (el antes/después ítem por ítem de una edición de pedido, el stock producto por producto). Con filtros que no dejan ninguna fila no genera archivo vacío: avisa. Es de solo lectura: la tabla no tiene policy de insert/update/delete para nadie, solo la escriben las RPC (`reassign_client`/`delete_client`/`update_client_price_list`/las de pedidos/`sa_log` desde las `sa_*`). **Desde 2026-09-17** (a pedido del usuario: "eso debe estar en registro de movimientos, identificado como tal") las recuperaciones de pedidos perdidos van etiquetadas por **cómo entraron**: "Pedido recuperado como cotización" / "Cotización recuperada" (desde la migración del 09-17) o "Pedido recuperado como pedido real" (las 89 anteriores, versión 08-05 de la RPC), con intento original, motivo del rechazo, líneas, total y si quedó **aviso pendiente a la vendedora**; el visto de la vendedora es un movimiento propio, "Aviso de recuperación visto" (lo escribe `mark_recoveries_seen`, una fila por fallo con el pedido y quién/cuándo lo había recuperado); y el descarte del cuadro rojo tiene por fin su etiqueta, "Intento descartado" (hasta hoy caía en la de reasignación por no estar mapeado). Las tres entran en el filtro por acción y en el Excel. |
 | **Vendedoras** (solo admin) | Alta manual (nombre + teléfono), edición del teléfono en un click, contador de clientes asignados. Columna **SellerCloud** (ID de empleado: Sales Rep de las órdenes y account manager de sus clientes) y columna **Grupo SellerCloud** (2026-09-09: ID + nombre del grupo de clientes de esa vendedora; se propone como grupo al crear un cliente suyo — la API no lista grupos, por eso se carga acá). El link de WhatsApp del checkout de cada cliente usa el teléfono de acá. Columna **Acceso**, dos formas de dar acceso a una vendedora sin cuenta: **"Vincular acceso"** (email de un usuario que ya existe en Supabase Auth, RPC `link_vendedora_login`) o **"+ Crear acceso"** (2026-07-15: crea el usuario de una — el admin define email + contraseña inicial ahí mismo, sin pasar por el dashboard de Supabase — vía la Edge Function `admin-create-vendedora-user`, ver sección 6). "Desvincular" le quita el acceso sin borrar la vendedora ni el usuario de Auth. |
 | **Pedidos** | **Todos los pedidos, sin tope** (2026-08-07: antes traía los últimos 200, así que el conteo del encabezado decía "200" hubiera 200 o 900 y los pedidos viejos no se podían ni ver ni marcar atendidos). Carga con `fetchAll` (páginas de 1,000 en paralelo) y se renderiza por lotes con scroll infinito; el encabezado muestra el total real y, con filtros puestos, "coinciden / total". Click en una fila expande un detalle de ancho completo (tabla Producto/Cantidad/Precio/Subtotal, 2026-07-17 — antes se abría angosto dentro de la columna Ítems). Cada pedido se marca **Nuevo/Atendido/Cancelado** (2026-07-15: se sumó Cancelado; 2026-07-17: las 3 acciones piden confirmación en un modal antes de aplicarse, y quedan auditadas vía RPC `update_order_status`, antes un `update` directo sin rastro) y el menú muestra el contador de pedidos sin atender (solo cuenta `new`). Buscador (nombre/teléfono del cliente) **por términos** (2026-08-12: todos los términos tienen que aparecer, en cualquier orden y sin acentos — antes pedía una subcadena contigua y buscar "robert carlos" no encontraba a "Robert Edu Carlos Pacheco"; ver "Buscadores del panel" más abajo) + filtros por estado, tipo (Pedido/Cotización) y, solo admin, vendedora. Botones **"Descargar PDF"**/**"Descargar Excel"** por fila (2026-07-17 el primero, mismo generador que el carrito del cliente; el Excel con las columnas exactas de `UploadTemplate.xls` para subirlo directo al bulk-order upload de SellerCloud); debajo, separados, **"Editar"** y **"Convertir en pedido"** — ambos **solo para cotizaciones** (`kind = 'quote'`), nunca para un pedido real, y "Editar" además solo mientras la cotización sigue `new` (ni atendida ni cancelada se edita). "Editar" (RPC auditada `update_order_items`) deja cambiar cantidad/quitar/agregar producto — cualquiera con acceso al pedido puede hacerlo (admin siempre, vendedora solo los de sus propios clientes). "Convertir en pedido" (RPC `convert_quote_to_order`) congela el precio de ese momento con la lista real del cliente (a diferencia de la cotización, que sigue mostrando el precio **vigente** vía `get_quotes_live_pricing` — ver sección 6) y deja de ajustarse a cambios de precio futuros. Arriba de la lista, **aviso rojo de los pedidos que el cliente envió y no se registraron** (2026-08-05, `order_failures`): cliente, fecha, motivo y cantidad de líneas, con un botón **"Recuperar"** que lo carga como pedido con los precios vigentes de su lista (RPC `recover_order_failure`, auditada) — antes un pedido rechazado no dejaba rastro en ninguna parte. Aparece también cuando todavía no hay ningún pedido, para que "aún no hay pedidos" no tape justo lo que hay que ver. Una vendedora solo ve (y recupera) los de sus propios clientes. **Desde 2026-09-10 es un cuadro plegado** con el conteo por tipo y "Ver detalle"; cada fallo lleva el badge Pedido/Cotización y "Ver contenido" despliega sus líneas, con la que no tenía precio marcada en rojo (ver sección 1). Al lado, **"💬 Cargar pedido desde WhatsApp"** (2026-08-17): pega el mensaje del chat y crea el pedido, para el caso en que el registro nunca llegó al sistema y el cliente no vuelve a abrir el catálogo — ver la sección 2 para el detalle. **Cliente sin dirección en SellerCloud** (2026-09-14): cuando "Enviar a SellerCloud" rebota porque el customer no tiene ninguna dirección allá (en vivo, o el rechazo guardado de un intento anterior — los 6 de septiembre), la fila ofrece **📍 Cargar dirección y reenviar**: un modal completa la dirección del cliente, la guarda (RPC auditada `update_client_address`), la carga en SellerCloud (acción `update` de `sellercloud-customers`, PUT + relectura) y reenvía la orden; cada paso que falla deja el modal abierto con el motivo. Necesita la migración del 09-14 y el redeploy de las dos funciones. |
-| **🔐 Superadmin** (2026-08-05, solo superadmin) | Lo que antes obligaba a entrar al SQL Editor o al dashboard de Auth. **Usuarios y accesos**: todos los usuarios de Supabase Auth con su rol (Superadmin/Admin/Vendedora/Sin rol), la vendedora vinculada, fecha de alta y último acceso; por fila, "Hacer admin"/"Quitar admin" (con confirmación) y **"Cambiar contraseña"** (sirve para cualquier acceso: vendedora, admin o el propio superadmin); arriba, **"+ Crear admin"** (crea el usuario de Auth con su contraseña inicial y le da el rol, en un paso). **Listas de precio y dueñas**: por lista, cuántos clientes y cuántos precios tiene, sus dueñas con la principal marcada (★), agregar/quitar dueña y cambiar cuál es la principal; si al mover dueñas quedaron clientes con una vendedora que ya no es dueña, avisa cuántos y ofrece pasarlos a la principal de una vez. También **crear** una lista nueva (código + nombre visible; el código se valida y no se puede cambiar después), **renombrar** el nombre visible y **eliminar** una lista que no sea de las base y esté completamente vacía. Todo va por RPC `sa_*` con `is_superadmin()` adentro (o por la Edge Function `superadmin-users` cuando hace falta la Admin API de Auth) y **todo queda en el Registro de movimientos**. |
+| **🔐 Superadmin** (2026-08-05, solo superadmin) | Desde 2026-09-04 también la sección **📦 Frescura de inventario** (umbral en minutos, ver más abajo). Lo que antes obligaba a entrar al SQL Editor o al dashboard de Auth. **Usuarios y accesos**: todos los usuarios de Supabase Auth con su rol (Superadmin/Admin/Vendedora/Sin rol), la vendedora vinculada, fecha de alta y último acceso; por fila, "Hacer admin"/"Quitar admin" (con confirmación) y **"Cambiar contraseña"** (sirve para cualquier acceso: vendedora, admin o el propio superadmin); arriba, **"+ Crear admin"** (crea el usuario de Auth con su contraseña inicial y le da el rol, en un paso). **Listas de precio y dueñas**: por lista, cuántos clientes y cuántos precios tiene, sus dueñas con la principal marcada (★), agregar/quitar dueña y cambiar cuál es la principal; si al mover dueñas quedaron clientes con una vendedora que ya no es dueña, avisa cuántos y ofrece pasarlos a la principal de una vez. También **crear** una lista nueva (código + nombre visible; el código se valida y no se puede cambiar después), **renombrar** el nombre visible y **eliminar** una lista que no sea de las base y esté completamente vacía. Todo va por RPC `sa_*` con `is_superadmin()` adentro (o por la Edge Function `superadmin-users` cuando hace falta la Admin API de Auth) y **todo queda en el Registro de movimientos**. |
 | **📈 Métricas** (2026-08-06, solo superadmin) | Los KPIs de todo el sistema en una pantalla, **en vivo** (se refresca solo cada 60 s, más un botón "↻ Actualizar" y un cartel "actualizado hace X"). Selector de rango **7 / 14 / 30 días** (default 14) **+ "Histórico"** (2026-09-11: desde el primer pedido real hasta hoy, `p_days = 0`; la nota del gráfico dice desde cuándo y cuántos días, y con más de 120 días las barras pasan a ser **por semana**; necesita `migration-2026-09-11-sa-metrics-historic.sql` — sin ella la pestaña avisa que falta en vez de mostrar el último día disfrazado de histórico). Nueve tarjetas: monto capturado, pedidos, ticket promedio, cotizaciones, vendedoras activas, **tiempo promedio a atender** (horas desde que entró el pedido hasta la primera vez que se marcó Atendido; "—" con la aclaración "aún sin pedidos marcados atendidos" cuando todavía no hay ninguno), cotizaciones convertidas, cancelados y **Enviados a SellerCloud** (2026-08-18, `migration-2026-08-18-sa-metrics-sellercloud.sql`: pedidos del período con `sellercloud_order_id` anotado — cancelados incluidos a propósito, un pedido enviado y cancelado acá igual salió — con el total histórico en la leyenda; muestra "—" mientras la RPC sea la vieja); debajo, los **fallos de envío** del período y cuántos se recuperaron. Después, un **mini-gráfico de barras del monto por día** (SVG propio, sin librería de charts) y la tabla **"Adopción por vendedora"** (pedidos, monto, ticket y cotizaciones por vendedora, ordenada por monto, con fila de total del período que cuadra con las tarjetas) y su **"⬇️ Descargar Excel"**. Los pedidos sin vendedora salen agrupados en una fila "—". **Las cuentas de prueba (`SystemsPruebas` y compañía) quedan afuera de todos los números** y sus nombres se listan al pie de la tabla, para que la exclusión se vea en vez de ser invisible. Toda la data viene de **una sola RPC** `sa_metrics_overview(p_days)` con `is_superadmin()` adentro: los agregados cruzan a todas las vendedoras, así que sumarlos desde el cliente daría un número distinto según quién mira (la RLS le recorta a cada vendedora sus propios pedidos). Es la única `sa_*` que **no** audita: es de solo lectura, y una fila por refresco llenaría `admin_audit_log` con una por minuto por pestaña abierta. |
 
 > **La pestaña Flash Sales se eliminó** (2026-08-07). Estaba entre Vendedoras
@@ -1219,6 +1219,95 @@ Registro, `['name', 'id']` en Productos/Clientes/Vendedoras y
 la regla es esa: la clave de orden tiene que identificar la fila sin empates
 (la tabla no tiene por qué tener `id` — `product_prices` no lo tiene).
 
+### Frescura de inventario y 🔄 Refrescar stock (2026-09-04)
+
+El stock entra al catálogo por la carga de Excel de productos (dos veces al
+día, 8:30 y 16:30) y entre cargas queda desalineado con SellerCloud: las
+vendedoras marcaban Atendido o mandaban a SellerCloud pedidos armados sobre
+stock viejo. Esta tanda (a pedido del usuario) mete cuatro piezas, todas en
+`migration-2026-09-04-inventory-freshness.sql` + Edge Function nueva
+`sellercloud-refresh-stock` + candado en `sellercloud-push-order`:
+
+1. **Indicador en el header del panel** (`InventoryFreshness.jsx`, visible en
+   todas las pestañas y para todos los roles): "Inventario: hace 12 min
+   (Excel|Refresco)". Verde dentro del umbral (`stock_freshness_minutes`,
+   default **45 min**), ámbar hasta 2× el umbral, rojo más allá; "sin
+   actualizaciones registradas" mientras `inventory_syncs` esté vacía. Se
+   relee cada 60 s (`useInventoryFreshness`, montado UNA vez en
+   `AdminLayout` y repartido por Outlet context — el "hace X min" que ve la
+   vendedora y el que deshabilita los botones son el mismo dato). Si
+   `get_inventory_freshness` no existe (migración sin correr) no se pinta
+   nada y el header queda como antes.
+2. **Botón "🔄 Refrescar stock"** al lado del indicador (fuera del umbral,
+   el texto del indicador también es CTA). Invoca la Edge Function
+   `sellercloud-refresh-stock` con el JWT de quien apretó (admin O vendedora:
+   solo alinea el stock con la verdad de SellerCloud, no hay nada que abusar;
+   nunca usa la service_role key). La función pagina
+   `GET /rest/api/Inventory?companyID=…` (**pageSize 50, máximo del
+   contrato**; ~74 páginas para los ~3,700 SKUs, 25-40 s de pared, token
+   renovado por página) y aplica `{sku, qty}` por chunks de 500 a la RPC
+   `refresh_stock_upsert`, que **toca SOLO `products.stock`** y deja que los
+   triggers `products_availability_from_stock` + `products_enforce_noncatalog`
+   decidan disponibilidad y publicación — la MISMA invariante que la carga de
+   Excel, cero reglas de stock nuevas. Ignora SKUs desconocidos, saltea
+   `-BOX`/`-SPECIAL`, y `stock is distinct from qty` para no reescribir filas
+   sin cambio. Toast al terminar: "Stock actualizado — N productos, D
+   desactivados, R reactivados" (9 s, se va solo); el error viene con el
+   motivo real del cuerpo, no el genérico de supabase-js.
+3. **Registro unificado `inventory_syncs`** (source `excel_upload` |
+   `manual_refresh`, status `running` → `ok`/`error`, contadores). La carga
+   de Excel de Productos también abre y cierra su corrida
+   (`inventory_sync_begin`/`inventory_sync_finish`), así que las dos vías
+   alimentan el mismo "hace X min". Lock anti-concurrencia en
+   `inventory_sync_begin`: una corrida `running` de menos de 10 min rechaza
+   con **ZS002** (la función lo traduce a 409 `refresh_in_progress`, que NO
+   se loguea como error); una `running` de más de 10 min está colgada
+   (pestaña cerrada, función abortada), se marca `error` y se sigue.
+   Tabla aparte de `sync_runs` a propósito: esa es la auditoría del sync
+   completo de n8n escrita con la service_role key; esta la escriben usuarios
+   del panel vía RPC con su JWT.
+4. **Candado**: con inventario vencido (`is_stale`), **marcar Atendido un
+   pedido real** (`update_order_status`, solo la transición `order` → `done`
+   con stock aún sin descontar) rechaza con **ZS001** y el **push a
+   SellerCloud** con 409 `code: 'stale_inventory'` — los dos ANTES de tocar
+   nada (un rechazo después del create dejaría una orden a medias allá).
+   Reabrir/cancelar (devuelven stock), las cotizaciones, crear/editar
+   pedidos y el catálogo del cliente pasan siempre. En Pedidos los botones
+   Atendido y 📦 quedan deshabilitados con tooltip "Inventario desactualizado
+   (hace X) — refrescá el stock para continuar" y un "🔄 Refrescar stock"
+   al lado; si el candado gana la carrera (estaba fresco al abrir el modal y
+   venció al confirmar) el error inline trae el mismo CTA. **Override solo
+   superadmin**: botón "Forzar sin refrescar" que reaparece tras el rechazo
+   (`p_override: true` / `override: true`, jamás default); el servidor
+   re-verifica `is_superadmin()` y lo deja en `admin_audit_log` como
+   `freshness_override` con la edad calculada en la base (vía
+   `audit_freshness_override` en el push). Caso de uso: la API de SellerCloud
+   caída y el pedido tiene que salir igual.
+
+**Umbral editable**: sección "📦 Frescura de inventario" en 🔐 Superadmin
+(`sa_set_stock_freshness`, 5-1440 min, auditada como `sa_log`; vive en la
+tabla nueva `app_settings` key/value jsonb, RLS sin policies). El candado se
+enciende solo cuando existe una corrida `ok` registrada: con la migración
+corrida y el frontend viejo la tabla queda vacía y nada cambia (expand/
+contract). Orden de deploy que exige la cabecera de la migración: migración →
+`functions deploy sellercloud-push-order` y `sellercloud-refresh-stock` →
+frontend (si el frontend saliera antes que el push nuevo, la primera carga de
+Excel activaría el candado de Atendido y el push viejo lo ignoraría).
+
+Logs en `system_logs`: source `stock_refresh` (`refresh_ok` info con
+`pressed_by`, `run_id`, `duration_ms` y los totales; `refresh_failed` error) y
+en `sellercloud_push` los warnings `freshness_unavailable` (la RPC no existe:
+el push NO bloquea pero lo deja dicho) y `push_freshness_override`.
+
+Verificado: `tests/stock-refresh-tests.mjs` (57 comprobaciones en Node contra
+un servidor falso de SellerCloud y un stub de RPCs: paginación con clamp a
+50 y cortes por total/página repetida, chunks de `{sku, qty}`, ZS002 → 409,
+corrida colgada, cierre en error a mitad del loop y las cuatro salidas del
+gate del push) + bloques de assert SQL en PG 18 desechable, build limpio.
+**Estado: en producción desde el deploy del 2026-09-14** (migración corrida,
+`sellercloud-refresh-stock` v1, `sellercloud-push-order` v14, frontend
+`7924120` — verificado en la foto de producción del 09-14).
+
 ### Logs del sistema (pestaña ⚙️ Sistema, solo superadmin — 2026-08-20)
 
 Hasta hoy los errores vivían dispersos y cada uno se miraba en un lugar
@@ -1268,7 +1357,7 @@ cliente **en ninguna parte**. Ahora hay un registro central consultable:
 | `sellercloud_customers` | `search_failed` / `link_verify_failed` / `link_ok` / `create_failed` / `create_annotate_failed` / `create_ok` / `update_failed` / `update_ok` / `address_ok` / `address_failed` / `address_annotate_failed` | error / error / info / error / critical / info / error / info-o-warning / info / error / warning | Búsqueda, vinculación, alta, ficha y dirección de customers desde Clientes (Edge Function `sellercloud-customers`, 2026-09-02; `update_*` desde 2026-09-09; `address_*` desde 2026-09-14). El context lleva `client_id`, `client` (nombre), `sellercloud_id` y, en el alta/ficha, lo que entró (`applied`, `group`) y el `warning` de lo que no; desde el 09-14 también `address_status` / `sc_address_id` / `address_error`. `address_ok` = la dirección se cargó (o actualizó) con `PUT /Customers/{id}/Addresses` y se verificó releyendo; `address_failed` = el PUT falló o al releer no apareció (la fila queda en rojo con "Reintentar dirección"); `address_annotate_failed` = entró allá pero no se pudo anotar acá (`mark_client_sc_address` falló — p. ej. migración del 09-14 sin correr) |
 | `clients` | `client_created` | info | **Cada cliente creado desde el catálogo** (2026-09-09): el alta individual (`via: 'panel'`) y cada cliente NUEVO de una carga por Excel (`via: 'excel'`, con `file`); los actualizados por Excel no. El context es la ficha completa **por nombres** (name, phone, email, price_list, vendedora, business_name, group, account_manager, salesman, comments), `sellercloud_requested` y `created_by` (email del usuario logueado — `log_event` no guarda identidad). Es lo que alimenta el filtro rápido y el Excel de la pestaña Sistema |
 | `catalog` | `price_list_excel_downloaded` / `price_list_excel_failed` | info / warning | Descargas del Excel de la lista de precios desde el catálogo del cliente (2026-09-08, `token_hint` de 8, nunca el token) |
-| `stock_refresh` / `manual_refresh` | — | — | Refresco de inventario desde SellerCloud y su override manual (Edge Function `sellercloud-refresh-stock`, 2026-09-04) |
+| `stock_refresh` | `refresh_ok` / `refresh_failed` | info / error | Refresco de inventario desde SellerCloud (Edge Function `sellercloud-refresh-stock`, 2026-09-04): `pressed_by`, `run_id`, `duration_ms` y los totales (updated/deactivated/reactivated/unknown_skus/invalid_rows/skipped_noncatalog). Un 409 por corrida en curso NO se loguea. `manual_refresh` está en el select de ⚙️ Sistema pero no es un source: es el `source` de la fila en `inventory_syncs`. Los warnings del candado del push (`freshness_unavailable`, `push_freshness_override`) van en `sellercloud_push` — ver "Frescura de inventario" |
 | `sync` | — | — | Reservado para n8n (puede llamar `log_event` con la service_role key); hoy el sync sigue reportando solo en `sync_runs` |
 
 La pestaña **⚙️ Sistema** (`SystemLogsAdmin.jsx`, ruta `/admin/system`, solo
@@ -2885,6 +2974,7 @@ src/
     Catalog.jsx         Catálogo del cliente
     admin/
       AdminLayout.jsx   Login + shell del panel (monta useInventoryFreshness y useRecoveryNotices y los reparte por Outlet context; 🔔 solo para vendedora)
+      InventoryFreshness.jsx  Indicador "Inventario: hace X min" (verde/ámbar/rojo) + botón 🔄 Refrescar stock + toast de resultado, en el header del panel (2026-09-04)
       ProductsAdmin.jsx Productos + carga Excel (productos, fotos, 🔥 Flash Sales) + acciones en bloque
       PricesUpload.jsx  Precios Excel + matriz por lista + filtros por grupo de producto
       ClientsAdmin.jsx  Clientes + niveles por inversión + ficha y dirección SellerCloud
@@ -2901,6 +2991,9 @@ supabase/functions/admin-create-vendedora-user/  Edge Function (Deno) — crea e
 supabase/functions/superadmin-users/  Edge Function (Deno) — cambia contraseñas y crea admins (Admin API de Auth), requiere deploy manual (estuvo SIN desplegar en producción desde antes del 2026-08-19 hasta el 2026-09-10, en que se redesplegó como v2)
 supabase/functions/sellercloud-push-order/  Edge Function (Deno) — crea la orden en SellerCloud + Sales Rep y direcciones vía PUT (v11 en producción, 2026-08-19; v14 al 2026-09-14; el `code: 'customer_no_address'` del 09-14 requiere redeploy → v15)
 supabase/functions/sellercloud-customers/  Edge Function (Deno) — busca, vincula, crea y actualiza customers desde Clientes (2026-09-02; ficha 09-09; dirección con PUT /Customers/{id}/Addresses + relectura 09-14, requiere redeploy → v8). Importa `../sellercloud-push-order/sellercloud.ts`
+supabase/functions/sellercloud-refresh-stock/  Edge Function (Deno) — refresco on-demand del stock desde GET /Inventory de SellerCloud (páginas de 50, chunks de 500 a refresh_stock_upsert; solo products.stock; v1 en producción desde 2026-09-14). refresh.ts sin Deno, testeable en Node
+supabase/functions/sellercloud-push-order/freshness.ts  Candado de frescura del push (2026-09-04): fresco / vencido → 409 stale_inventory / override auditado / override rechazado. Sin Deno
+tests/stock-refresh-tests.mjs  Refresco de stock + gate de frescura del push (57 comprobaciones, Node contra un servidor falso de SellerCloud y un stub de RPCs)
 tests/sc-push-tests.mjs  Suite del cliente de SellerCloud (35 comprobaciones, Node contra un servidor falso)
 tests/sc-customers-tests.mjs  Suite del alta/ficha/dirección de customers (78 comprobaciones, Node contra un servidor falso que reproduce GET/PUT de Customers y Addresses)
 tests/price-list-excel-tests.mjs  Excel de la lista de precios (40 comprobaciones, Node; el workbook se serializa y se lee de vuelta)
