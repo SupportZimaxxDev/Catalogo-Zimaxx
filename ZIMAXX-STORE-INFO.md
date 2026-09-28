@@ -103,7 +103,22 @@
 > estado real (2026-08-12)" — la lista de pendientes de este doc ya se equivocó
 > en las dos direcciones antes.
 >
-> Creado: 2026-07-02. Última actualización: 2026-09-17 (**aviso a la
+> Creado: 2026-07-02. Última actualización: 2026-09-28 (**deploy a
+> producción de todo lo pendiente desde el 09-14**, punto 92: el usuario corrió
+> las migraciones `2026-09-14-client-address` y `2026-09-17-recovery-notifications`
+> (verificadas por PostgREST con la anon key: columnas `address_*`/`sc_address_id`
+> en `clients`, `recovery_seen_at`/`recovered_by_email` en `order_failures`, RPC
+> `mark_recoveries_seen` viva), se pusieron los dos flags de alta en SellerCloud
+> en `false` (`SC_CREATE_ENABLED` en `ClientsAdmin.jsx` y `CREATE_ENABLED` en
+> `sellercloud-customers`, commit a155664 — la creación de clientes allá sigue
+> sin terminar, decisión del usuario: "quiero mantener los flags de creacion en
+> false"), `main` = `dev` = a155664 pusheado (frontend vivo) y redesplegadas
+> `sellercloud-customers` (v8, alta bloqueada, dirección por PUT /Addresses) y
+> `sellercloud-push-order` (v15, `customer_no_address`). Con esto el pedido
+> mínimo por lista deja de rechazar en silencio pedidos del carrito viejo.
+> Pendiente: si se retoma la creación de clientes en `dev`, volver a poner los
+> flags en `true` allá y bajarlos antes del próximo deploy).
+> Anterior: 2026-09-17 (**aviso a la
 > vendedora cuando le recuperan un pedido + registro de cuándo y quién**,
 > punto 91, a pedido del usuario: "enviarle una notificación a la respectiva
 > vendedora cuando se les recupere una orden, para que les salga desde su

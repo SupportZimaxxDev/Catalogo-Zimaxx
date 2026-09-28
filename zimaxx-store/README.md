@@ -2479,7 +2479,7 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 > frontend viejo ni la ve), frontend después; al revés no rompe nada — el
 > frontend nuevo sin la migración no pinta campanita ni chips ♻️ (42703).
 > Sondeo: `position('recovery_seen_at' in pg_get_functiondef('public.recover_order_failure(uuid)'::regprocedure)) > 0`.
-> **Estado (2026-09-17): SIN correr en producción y frontend SIN desplegar.**
+> **Estado (2026-09-28): CORRIDA en producción (verificada por PostgREST: columnas nuevas de `order_failures` y RPC `mark_recoveries_seen` vivas) y frontend DESPLEGADO** (`main` = `dev` = a155664, con los dos flags de alta en SellerCloud en `false`; `sellercloud-customers` y `sellercloud-push-order` redesplegadas ese mismo día).
 
 > **⚠️ MIGRACIÓN NUEVA DEL 2026-09-15 — UNA (sin Edge Functions):**
 > `migration-2026-09-15-price-list-min-order.sql` — pedido mínimo POR LISTA:
@@ -2487,8 +2487,8 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 > `get_catalog` con `client.min_order` y `create_order` rechazando por debajo
 > del mínimo. Idempotente, con preflight; probada ×2 + 12 bloques de assert en
 > PG 18 desechable y 28/28 Playwright contra el build. **Ya corrida en
-> producción el 2026-09-15** (verificada en `pg_proc` y `price_lists`), con el
-> frontend todavía SIN desplegar — el orden recomendado era el inverso
+> producción el 2026-09-15** (verificada en `pg_proc` y `price_lists`); frontend
+> desplegado el 2026-09-28 (hasta entonces estuvo SIN desplegar — el orden recomendado era el inverso
 > (frontend primero: sin la clave cae al 800 de siempre). Mientras Netlify
 > sirva el carrito viejo, los mayoristas pueden mandar pedidos de $800–$1,999
 > que el servidor rechaza (quedan en `order_failures` con motivo "pedido
