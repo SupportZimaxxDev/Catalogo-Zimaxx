@@ -103,7 +103,18 @@
 > estado real (2026-08-12)" — la lista de pendientes de este doc ya se equivocó
 > en las dos direcciones antes.
 >
-> Creado: 2026-07-02. Última actualización: 2026-09-28 (**deploy a
+> Creado: 2026-07-02. Última actualización: 2026-09-28, segunda tanda (**fix:
+> el alta de clientes sin SellerCloud exigía la dirección**, punto 93, reportado
+> por el usuario: "no deja crear clientes si no rellenan los campos de
+> direccion… para registrarlo como un cliente para enviarle el catalogo no hace
+> falta". Causa: al elegir la lista el form propone el país (US/VE) y con eso
+> `addressIsEmpty` daba false → la regla "completa o vacía, nunca a medias"
+> pedía calle, ciudad, estado y código postal. Fix en `addressPayload`
+> (`address.jsx`): si todo lo demás está vacío el país se descarta (nulls en el
+> insert y en `update_client_address`, que ya trata todo-null como sin
+> dirección). Solo frontend, sin migración ni funciones; build limpio.
+> Pendiente de push a `main` al cierre).
+> Anterior: 2026-09-28, primera tanda (**deploy a
 > producción de todo lo pendiente desde el 09-14**, punto 92: el usuario corrió
 > las migraciones `2026-09-14-client-address` y `2026-09-17-recovery-notifications`
 > (verificadas por PostgREST con la anon key: columnas `address_*`/`sc_address_id`

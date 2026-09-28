@@ -28,19 +28,27 @@ export const ADDRESS_REQUIRED = ['address_line1', 'address_city', 'address_state
 
 // Form (strings) → shape de la fila / la RPC (null = vacío). País en
 // mayúsculas; estado de US en mayúsculas si son dos letras (fl → FL).
+//
+// Un país SOLO no es una dirección (2026-09-28): el form propone el país al
+// elegir la lista (US/VE) y eso hacía que el alta sin SellerCloud exigiera
+// calle, ciudad, estado y código postal ("no deja crear clientes si no
+// rellenan los campos de direccion"). Si todo lo demás está vacío, el país
+// se descarta y la dirección queda vacía de verdad (nulls en la fila y en
+// la RPC, que trata "todo null" como sin dirección).
 export function addressPayload(form) {
   const txt = (v) => String(v ?? '').trim() || null
-  const country = (txt(form?.address_country) ?? '').toUpperCase() || null
+  let country = (txt(form?.address_country) ?? '').toUpperCase() || null
   let state = txt(form?.address_state)
   if (state && country === 'US' && /^[A-Za-z]{2}$/.test(state)) state = state.toUpperCase()
-  return {
+  const rest = {
     address_line1: txt(form?.address_line1),
     address_line2: txt(form?.address_line2),
     address_city: txt(form?.address_city),
     address_state: state,
     address_zip: txt(form?.address_zip),
-    address_country: country,
   }
+  if (Object.values(rest).every((v) => v === null)) country = null
+  return { ...rest, address_country: country }
 }
 
 // Fila → valores de form ('' = vacío).
