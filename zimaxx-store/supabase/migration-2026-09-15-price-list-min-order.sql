@@ -21,14 +21,18 @@
 --      Semilla — SOLO la primera vez que corre (si la columna ya existe no se
 --      toca ningún valor, así un ajuste a mano sobrevive a re-correr esto):
 --
---        us_min, ve_min                              →  800  (el "catálogo de $800")
---        us_wholesale, ve_wholesale, special, luzmar → 2000
+--        us_min, ve_min, special                     →  800  (el "catálogo de $800";
+--                                                          special desde 2026-09-28)
+--        us_wholesale, ve_wholesale, luzmar          → 2000
 --        quote                                       → null
 --        cualquier otra                              →  800
 --
---      `special` y `luzmar` van a 2000 por la regla literal del pedido: un
---      pedido menor a $2,000 solo existe en el catálogo de $800, y esas dos
---      no lo son (Special es $15,000+; Luzmar es la "Lista VIP" con dueña).
+--      `luzmar` va a 2000 por la regla literal del pedido: un pedido menor
+--      a $2,000 solo existe en el catálogo de $800 (Luzmar es la "Lista VIP"
+--      con dueña). `special` también fue a 2000 en la primera versión; el
+--      2026-09-28 el usuario la definió como la lista de todos los clientes
+--      de Estados Unidos y bajó a 800 (migration-2026-09-28-special-min-order-800.sql
+--      para las bases que ya corrieron esta; la semilla de abajo ya lo trae).
 --      Si el negocio quiere otra cosa para alguna, es un UPDATE de una línea:
 --        update public.price_lists set min_order = 800 where code = 'luzmar';
 --
@@ -100,8 +104,8 @@ begin
     alter table public.price_lists add column min_order numeric(12, 2);
     update public.price_lists
     set min_order = case
-      when code in ('us_min', 've_min')                                then 800
-      when code in ('us_wholesale', 've_wholesale', 'special', 'luzmar') then 2000
+      when code in ('us_min', 've_min', 'special')                     then 800
+      when code in ('us_wholesale', 've_wholesale', 'luzmar')            then 2000
       when code = 'quote'                                              then null
       else 800
     end;
@@ -389,7 +393,7 @@ commit;
 -- ============================================================
 -- 1) La semilla:
 -- select code, label, min_order from public.price_lists order by code;
--- -- esperado: us_min/ve_min 800.00, us_wholesale/ve_wholesale/special/luzmar
+-- -- esperado: us_min/ve_min/special 800.00, us_wholesale/ve_wholesale/luzmar
 -- -- 2000.00, quote null.
 --
 -- 2) El catálogo la trae (token de un cliente real):

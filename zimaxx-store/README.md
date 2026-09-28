@@ -36,8 +36,12 @@ Dos regiones × dos niveles + una lista Special general (sin región):
 - **Pedido mínimo POR LISTA** (2026-09-15, a pedido del usuario: "limitar la
   creación de órdenes menores a 2000 al catálogo de 800$"; antes era $800
   plano para todas y solo en el navegador): `us_min`/`ve_min` **$800**;
-  `us_wholesale`/`ve_wholesale`/`special`/`luzmar` **$2,000**; `quote` sin
-  mínimo. El valor vive en `price_lists.min_order` (null = sin mínimo,
+  `us_wholesale`/`ve_wholesale`/`luzmar` **$2,000**; `quote` sin
+  mínimo; **`special` $800 desde 2026-09-28** (a pedido del usuario: "la lista
+  de precios especial es para todos los clientes de estados unidos, sin
+  diferencia… el minimo de compra para la lista especial sea de 800 en
+  adelante"; nació en 2,000 el 09-15 —
+  `migration-2026-09-28-special-min-order-800.sql`, solo datos). El valor vive en `price_lists.min_order` (null = sin mínimo,
   default 800 para listas nuevas), `get_catalog` lo manda como
   `client.min_order`, el carrito bloquea el envío por WhatsApp por debajo
   ("El pedido mínimo de tu lista es $2000.00 · Te faltan $X") y
@@ -2460,6 +2464,15 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
 ---
 
 ## 7. Roadmap / pendientes
+
+> **⚠️ MIGRACIÓN NUEVA DEL 2026-09-28 — UNA, solo datos (sin funciones ni frontend):**
+> `migration-2026-09-28-special-min-order-800.sql` — `price_lists.min_order`
+> de `special` pasa de 2,000 a 800 (la lista Special es la de todos los
+> clientes de Estados Unidos, decisión del usuario). Idempotente, con preflight.
+> Nada más que correr: `create_order`, `get_catalog` y el carrito ya leen el
+> valor de la tabla. Sondeo: `select min_order from price_lists where code='special'`
+> (o por PostgREST con la anon key: `price_lists?select=code,min_order`).
+> **Estado (2026-09-28): SIN correr en producción.**
 
 > **⚠️ MIGRACIÓN NUEVA DEL 2026-09-17 — UNA (sin Edge Functions):**
 > `migration-2026-09-17-recovery-notifications.sql` — aviso a la vendedora

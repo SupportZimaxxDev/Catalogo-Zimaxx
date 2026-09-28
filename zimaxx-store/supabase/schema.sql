@@ -611,13 +611,15 @@ create index if not exists admin_audit_log_order_idx
 -- necesita que le suban precios en la pestaña Precios como a cualquier
 -- otra, y se selecciona igual en el alta/edición de cliente.
 -- `min_order` (2026-09-15): pedido mínimo por lista — 800 para el "catálogo
--- de $800" (us_min/ve_min), 2000 para el resto con precio, null para quote.
+-- de $800" (us_min/ve_min) y para special (desde 2026-09-28: es la lista de
+-- todos los clientes de Estados Unidos), 2000 para wholesale y luzmar, null
+-- para quote.
 insert into public.price_lists (code, label, min_order) values
   ('us_min',       'US Minimum Order',         800),
   ('us_wholesale', 'US Wholesale',             2000),
   ('ve_min',       'VE Minimum Order',         800),
   ('ve_wholesale', 'VE Wholesale',             2000),
-  ('special',      'Special Order',            2000),
+  ('special',      'Special Order',            800),
   ('quote',        'Cotización (sin precio)',  null),
   ('luzmar',       'Luzmar - Precio Especial', 2000)
 on conflict (code) do nothing;

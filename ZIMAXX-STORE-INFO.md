@@ -103,7 +103,17 @@
 > estado real (2026-08-12)" — la lista de pendientes de este doc ya se equivocó
 > en las dos direcciones antes.
 >
-> Creado: 2026-07-02. Última actualización: 2026-09-28, segunda tanda (**fix:
+> Creado: 2026-07-02. Última actualización: 2026-09-28, tercera tanda (**pedido
+> mínimo de la lista Special: $2,000 → $800**, punto 94, a pedido del usuario:
+> "la lista de precios especial es para todos los clientes de estados unidos,
+> sin diferencia… el minimo de compra para la lista especial sea de 800 en
+> adelante". Solo datos: `migration-2026-09-28-special-min-order-800.sql`
+> (update idempotente con preflight); la semilla de `schema.sql` y de la
+> migración del 09-15 quedan en 800 para instalaciones nuevas. Sin cambios en
+> funciones ni frontend: todo lee `price_lists.min_order`. **SIN correr en
+> producción al cierre**; hasta que corra, los clientes de Special siguen
+> viendo mínimo $2,000 y `create_order` rechaza por debajo).
+> Anterior: 2026-09-28, segunda tanda (**fix:
 > el alta de clientes sin SellerCloud exigía la dirección**, punto 93, reportado
 > por el usuario: "no deja crear clientes si no rellenan los campos de
 > direccion… para registrarlo como un cliente para enviarle el catalogo no hace
