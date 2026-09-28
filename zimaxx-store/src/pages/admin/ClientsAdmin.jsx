@@ -160,7 +160,7 @@ const LIST_CODE_ALIASES = {
 // reactiva para todas las vendedoras. En un conflicto de merge sobre esta
 // zona, conservar el bloque completo del flag y elegir el valor según la rama
 // destino.
-const SC_CREATE_ENABLED = true
+const SC_CREATE_ENABLED = false
 
 // scCreate (2026-09-02): "Crear también en SellerCloud" — prendido por
 // defecto (mientras SC_CREATE_ENABLED lo permita); al elegir la lista 'quote'

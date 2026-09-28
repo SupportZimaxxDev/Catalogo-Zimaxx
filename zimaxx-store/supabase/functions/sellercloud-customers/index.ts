@@ -75,7 +75,7 @@ import {
 // (salvo que se esté reactivando el alta a conciencia). Este valor rige para
 // TODOS los frontends que la llamen; un bundle con SC_CREATE_ENABLED = false
 // queda protegido solo por su propio flag.
-const CREATE_ENABLED = true
+const CREATE_ENABLED = false
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')
