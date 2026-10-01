@@ -8,6 +8,8 @@ import ProductCard from '../components/ProductCard'
 import CartBar from '../components/CartBar'
 import CartDrawer from '../components/CartDrawer'
 import OutboxBanner from '../components/OutboxBanner'
+import TierToast from '../components/TierToast'
+import { useCart } from '../context/CartContext'
 import PriceListExcel from '../components/PriceListExcel'
 import { useInfiniteRows } from '../hooks/useInfiniteRows'
 import { loadFavorites, pushFavorite, saveFavorites } from '../utils/favorites'
@@ -44,6 +46,7 @@ export default function Catalog() {
     raw === 'Perfume' ? t('lineDesigner') : raw === 'Perfume - Arabes' ? t('lineArabic') : raw
   const [params] = useSearchParams()
   const token = params.get('c') ?? ''
+  const cart = useCart()
 
   const [loading, setLoading] = useState(true)
   const [client, setClient] = useState(null)
@@ -125,6 +128,10 @@ export default function Catalog() {
       setClient(catalog?.client ?? null)
       const list = catalog?.products ?? []
       setProducts(list)
+      // 2026-10-01: niveles de precio del cliente + precios vigentes para lo
+      // que ya tenía en el carrito (ver CartContext.refreshFromCatalog).
+      cart.setTiers(catalog?.client)
+      cart.refreshFromCatalog(list)
       // Con la base migrada, los favoritos DEL SERVIDOR pisan lo local (es la
       // fuente de verdad: sobreviven al cambio de teléfono y son el registro
       // que ve el negocio) y refrescan el caché. Sin migración, is_fav no
@@ -339,6 +346,8 @@ export default function Catalog() {
         )}
       </main>
 
+      {/* Aviso al cruzar (o perder) una marca de nivel de precios (2026-10-01) */}
+      {validClient && <TierToast />}
       <CartBar />
       <CartDrawer token={token} client={client} />
     </div>

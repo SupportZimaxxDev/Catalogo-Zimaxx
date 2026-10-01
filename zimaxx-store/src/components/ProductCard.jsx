@@ -20,6 +20,9 @@ function ProductCard({ product, isFav, onToggleFav }) {
   const { t } = useI18n()
   const cart = useCart()
   const price = product.price == null ? null : Number(product.price)
+  // 2026-10-01: precio en el nivel actual del carrito (igual a `price` si
+  // el cliente no tiene niveles o todavía no cruzó ninguna marca).
+  const effectivePrice = cart.priceFor(product)
   const qty = cart.items.find((i) => i.id === product.id && !i.flash)?.qty ?? 0
 
   // Input controlado aparte del qty del carrito: mientras se escribe a mano
@@ -102,9 +105,17 @@ function ProductCard({ product, isFav, onToggleFav }) {
         <p className="flex-1 font-mono text-[10px] leading-tight tracking-wide text-primary/45">
           {product.upc && `UPC ${product.upc}`}
         </p>
+        {/* 2026-10-01: el precio que se muestra es el del NIVEL del carrito
+            (cart.priceFor). Si el carrito ya superó una marca, la tarjeta
+            lo dice: precio efectivo grande y el de la lista tachado. */}
         {product.price != null && (
           <p className="font-brand text-xl font-semibold text-primary">
-            {money(product.price)}
+            {money(effectivePrice ?? product.price)}
+            {effectivePrice != null && effectivePrice !== price && (
+              <span className="ml-1.5 align-middle text-xs font-normal text-primary/40 line-through">
+                {money(price)}
+              </span>
+            )}
           </p>
         )}
         {qty === 0 ? (

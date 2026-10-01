@@ -80,6 +80,51 @@ export default function Header({ clientName, search, onSearchChange, showSearch 
           </div>
         </div>
 
+        {/* Nivel de precios del carrito (2026-10-01): cuánto falta para la
+            próxima lista y cuánto se está ahorrando por haber superado una
+            marca. Solo para clientes con cadena de niveles y con algo en el
+            carrito; en el header porque es lo que el cliente mira mientras
+            arma el pedido (a pedido del usuario: "en la barra de arriba"). */}
+        {showSearch && cart.tiers.length > 1 && cart.count > 0 && (
+          <div
+            data-testid="tier-bar"
+            className="mt-3 rounded-xl border border-secondary/40 bg-white/5 px-3 py-2 text-xs"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+              <span className="text-white/70">
+                {t('tierPricesLabel')}:{' '}
+                <span className="font-semibold text-secondary">{cart.tier?.label}</span>
+              </span>
+              {cart.savings > 0 ? (
+                <span data-testid="tier-savings" className="font-bold text-secondary">
+                  🎉 {t('tierSavings', { amount: money(cart.savings), list: cart.tier?.label ?? '' })}
+                </span>
+              ) : (
+                cart.nextTier && (
+                  <span data-testid="tier-missing" className="text-white/80">
+                    {t('tierMissing', { amount: money(cart.nextTier.missing), list: cart.nextTier.label })}
+                  </span>
+                )
+              )}
+            </div>
+            {cart.nextTier && (
+              <>
+                {cart.savings > 0 && (
+                  <p data-testid="tier-missing" className="mt-1 text-white/70">
+                    {t('tierMissing', { amount: money(cart.nextTier.missing), list: cart.nextTier.label })}
+                  </p>
+                )}
+                <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full rounded-full bg-secondary transition-all duration-500"
+                    style={{ width: `${Math.round(cart.nextTier.progress * 100)}%` }}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Buscador acá (2026-07-09): con la sección de Flash Sale arriba
             del catálogo, el buscador quedaba escondido debajo — el header
             es sticky, así que ponerlo aquí lo mantiene siempre visible. */}

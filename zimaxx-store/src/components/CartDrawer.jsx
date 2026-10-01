@@ -92,7 +92,15 @@ export default function CartDrawer({ token, client }) {
   // servidor rechaza igual por debajo del mínimo (create_order), esto es el
   // aviso previo.
   const minOrder = minOrderFor(client)
+  // 2026-10-01: cart.total ya es el del nivel efectivo (lo mismo que cobra el
+  // servidor); el mínimo sigue siendo el de la lista ASIGNADA del cliente.
   const belowMin = cart.hasPrices && minOrder != null && cart.total < minOrder
+  // Nivel de precios alcanzado por el carrito (2026-10-01), para el resumen,
+  // el mensaje de WhatsApp y el PDF. null = precios de la lista del cliente.
+  const tierInfo =
+    cart.savings > 0 && cart.tier
+      ? { label: cart.tier.label, savings: cart.savings, baseTotal: cart.baseTotal }
+      : null
 
   // Cerrar el drawer también descarta el acuse: si vuelve a abrirlo para
   // armar otro pedido, arranca limpio. `failed` no se toca: mientras el
@@ -157,8 +165,10 @@ export default function CartDrawer({ token, client }) {
   const handleCheckout = async () => {
     if (cart.items.length === 0 || belowMin || busy) return
     // Copia local: el carrito se vacía al final y el mensaje/PDF ya no
-    // podrían leerlo.
-    const items = cart.items
+    // podrían leerlo. 2026-10-01: con el precio del nivel efectivo (el
+    // servidor solo lee id/qty/flash del payload, así que da lo mismo para
+    // registrar; para el mensaje y el PDF es lo que el cliente va a pagar).
+    const items = cart.pricedItems
     const total = cart.total
     const requestId = cart.requestId
     setBusy(true)
@@ -177,7 +187,7 @@ export default function CartDrawer({ token, client }) {
       // lista y el pedido no se pierde del todo. Va antes de los reintentos
       // para que el navegador siga tratando la ventana como consecuencia del
       // click.
-      const msg = buildOrderMessage({ t, clientName, items, total })
+      const msg = buildOrderMessage({ t, clientName, items, total, tierInfo })
       window.open(whatsappUrl(client?.vendedora_phone, msg), '_blank')
       const res = first === 'error' ? await save(items, total, 'order', requestId, 2) : first
       settle('order', res)
@@ -191,12 +201,12 @@ export default function CartDrawer({ token, client }) {
 
   const handlePdf = async () => {
     if (cart.items.length === 0 || busy) return
-    const items = cart.items
+    const items = cart.pricedItems
     const total = cart.total
     const requestId = cart.requestId
     setBusy(true)
     try {
-      await downloadOrderPdf({ t, clientName, items, total })
+      await downloadOrderPdf({ t, clientName, items, total, tierInfo })
       // Registrarlo como cotización en el panel (2026-07-17, a pedido del
       // usuario). El PDF ya se descargó, nada bloquea al cliente.
       savePending({ requestId, token, items, total, kind: 'quote' })
@@ -334,8 +344,10 @@ export default function CartDrawer({ token, client }) {
                 </div>
               </div>
 
+              {/* 2026-10-01: los ítems con el precio del nivel efectivo; si
+                  el carrito subió de nivel, el de la lista va tachado. */}
               <ul className="space-y-2.5">
-                {cart.items.map((i) => (
+                {cart.pricedItems.map((i) => (
                   <li
                     key={`${i.id}-${i.flash ? 'f' : 'n'}`}
                     className="flex items-center gap-3 rounded-xl border border-line bg-surface p-3"
@@ -356,6 +368,9 @@ export default function CartDrawer({ token, client }) {
                       )}
                       <p className="text-xs text-primary/50">
                         {i.price != null && <>{money(i.price)} c/u</>}
+                        {i.base_price != null && i.base_price !== i.price && (
+                          <span className="ml-1 text-primary/35 line-through">{money(i.base_price)}</span>
+                        )}
                         {i.preorder && (
                           <span className="ml-1.5 rounded-full bg-gold-pale px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-secondary-dark">
                             {t('preorder')}
@@ -392,6 +407,30 @@ export default function CartDrawer({ token, client }) {
 
         {cart.items.length > 0 && (
           <div className="space-y-3 border-t border-line bg-surface p-4">
+            {/* 2026-10-01: si el carrito superó una marca, el resumen dice con
+                qué lista se cobra y cuánto se ahorra; si no, cuánto falta
+                para la próxima (mismo dato que la barra del header). */}
+            {cart.hasPrices && tierInfo && (
+              <div data-testid="tier-summary" className="space-y-1 rounded-lg bg-gold-pale/60 p-3 text-xs">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-primary/70">{t('tierPricesLabel')}</span>
+                  <span className="font-bold text-secondary-dark">{tierInfo.label}</span>
+                </div>
+                <div className="flex items-baseline justify-between text-primary/50">
+                  <span>{t('tierBaseTotal')}</span>
+                  <span className="line-through">{money(tierInfo.baseTotal)}</span>
+                </div>
+                <div className="flex items-baseline justify-between font-bold text-green-700 dark:text-green-400">
+                  <span>🎉 {t('tierSavingsRow')}</span>
+                  <span>−{money(tierInfo.savings)}</span>
+                </div>
+              </div>
+            )}
+            {cart.hasPrices && !tierInfo && cart.nextTier && (
+              <p data-testid="tier-next" className="rounded-lg bg-gold-pale/40 p-3 text-xs text-primary/70">
+                {t('tierMissing', { amount: money(cart.nextTier.missing), list: cart.nextTier.label })}
+              </p>
+            )}
             {cart.hasPrices && (
               <div className="flex items-baseline justify-between">
                 <span className="text-sm font-semibold uppercase tracking-wider text-primary/60">

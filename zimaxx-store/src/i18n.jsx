@@ -25,6 +25,18 @@ const dict = {
     // eso el texto dice "de tu lista" y el monto lo pone el carrito.
     minOrderIs: 'El pedido mínimo de tu lista es',
     missingForMin: 'Te faltan',
+    // Listas de precio dinámicas (2026-10-01): el carrito sube de lista al
+    // superar una marca; estos textos van en el header, el toast y el drawer.
+    tierPricesLabel: 'Precios',
+    tierMissing: 'Te faltan {amount} para precios {list}',
+    tierSavings: 'Ahorrás {amount} con precios {list}',
+    tierSavingsShort: 'Ahorrás {amount}.',
+    tierSavingsRow: 'Ahorro por nivel',
+    tierBaseTotal: 'Total con tu lista',
+    tierUnlockedTitle: '¡Superaste {amount}!',
+    tierUnlockedBody: 'Tus precios ahora se ajustan a la lista {list}.',
+    tierLostTitle: 'Tu carrito bajó de {amount}',
+    tierLostBody: 'Tus precios vuelven a la lista {list}.',
 
     // Flash Sale: desde 2026-08-07 es solo una etiqueta del producto (badge
     // en la tarjeta + chip de filtro). No hay más precio promo ni countdown.
@@ -243,6 +255,10 @@ const dict = {
     // (2026-09-02). Es la lista ACTUAL del cliente, no una foto al momento
     // del pedido (el pedido congela precios, no lista).
     orderPriceList: 'Lista de precios del cliente',
+    // 2026-10-01: el pedido se cobró con otra lista por superar una marca.
+    orderTierChip: 'Cobrado con {list}',
+    orderTierTitle: 'Cobrado con la lista {list} por superar la marca de nivel: ahorro {savings} sobre {baseTotal} de la lista {base}',
+    manualOrderTier: 'Precios {list} por superar la marca · ahorro {savings}',
     metricsSellerCloud: 'Enviados a SellerCloud',
     metricsSellerCloudTotal: '{n} en total (histórico)',
     // Sales Rep por vendedora (2026-08-18): el ID de empleado en SellerCloud,
@@ -818,6 +834,16 @@ const dict = {
     preorder: 'Pre-Order',
     minOrderIs: 'The minimum order for your price list is',
     missingForMin: 'You need',
+    tierPricesLabel: 'Prices',
+    tierMissing: '{amount} more to unlock {list} prices',
+    tierSavings: "You're saving {amount} with {list} prices",
+    tierSavingsShort: "You're saving {amount}.",
+    tierSavingsRow: 'Tier savings',
+    tierBaseTotal: 'Total at your list prices',
+    tierUnlockedTitle: 'You passed {amount}!',
+    tierUnlockedBody: 'Your prices now match the {list} list.',
+    tierLostTitle: 'Your cart dropped below {amount}',
+    tierLostBody: 'Your prices go back to the {list} list.',
 
     flashSale: 'Flash Sale',
 
@@ -999,6 +1025,9 @@ const dict = {
     priceDriftLoadFailed:
       'Could not check for price changes. Orders are shown as usual.',
     orderPriceList: "Client's price list",
+    orderTierChip: 'Charged at {list}',
+    orderTierTitle: 'Charged at the {list} list for passing the tier mark: saved {savings} on {baseTotal} at the {base} list',
+    manualOrderTier: '{list} prices for passing the tier mark · saves {savings}',
     metricsSellerCloud: 'Sent to SellerCloud',
     metricsSellerCloudTotal: '{n} all-time',
     scRepId: 'SellerCloud',

@@ -35,6 +35,10 @@ alter table public.price_lists drop constraint if exists price_lists_min_order_c
 alter table public.price_lists add constraint price_lists_min_order_check
   check (min_order is null or min_order >= 0);
 
+-- Listas de precio dinámicas (2026-10-01): columnas `upgrade_to_id` /
+-- `upgrade_at` — ver el bloque después de la semilla de price_lists (la
+-- cadena se siembra sobre las filas ya insertadas).
+
 -- Vendedora asignada a los clientes: tabla propia en vez de texto libre
 -- repetido por cliente, para poder editar su teléfono en un solo lugar y
 -- gestionarla desde su propia pestaña del admin.
@@ -453,6 +457,13 @@ alter table public.orders
 create unique index if not exists orders_request_id_key
   on public.orders (request_id) where request_id is not null;
 
+-- Con qué nivel de precios se cobró el pedido (2026-10-01,
+-- migration-2026-10-01-dynamic-price-tiers.sql): el objeto `pricing` de
+-- compute_order_items cuando el carrito superó una marca y se cobró con otra
+-- lista; null = con la lista asignada del cliente (todos los anteriores).
+alter table public.orders
+  add column if not exists pricing jsonb;
+
 -- Blinda items/total/status/kind/stock_applied/request_id de un pedido para
 -- que solo se editen a través de las RPC update_order_items/
 -- update_order_status/convert_quote_to_order (2026-07-17, ampliado el mismo
@@ -476,7 +487,8 @@ begin
       or new.status is distinct from old.status
       or new.kind is distinct from old.kind
       or new.stock_applied is distinct from old.stock_applied
-      or new.request_id is distinct from old.request_id)
+      or new.request_id is distinct from old.request_id
+      or new.pricing is distinct from old.pricing)   -- 2026-10-01
      and coalesce(current_setting('app.allow_order_edit', true), '') <> 'on' then
     raise exception 'los pedidos solo se editan via update_order_items/update_order_status/convert_quote_to_order';
   end if;
@@ -623,6 +635,45 @@ insert into public.price_lists (code, label, min_order) values
   ('quote',        'Cotización (sin precio)',  null),
   ('luzmar',       'Luzmar - Precio Especial', 2000)
 on conflict (code) do nothing;
+
+-- Listas de precio dinámicas (2026-10-01,
+-- migration-2026-10-01-dynamic-price-tiers.sql): a partir de `upgrade_at`
+-- dólares (a precios de ESTA lista) el pedido se cobra con la lista
+-- `upgrade_to_id`. Las dos o ninguna. Semilla solo cuando la columna nace
+-- (us_min → us_wholesale @ 2000, us_wholesale → special @ 15000, ve_min →
+-- ve_wholesale @ 2000, ve_wholesale → special @ 15000); un ajuste a mano
+-- sobrevive a re-correr esto. Va DESPUÉS de la semilla de arriba para que un
+-- install nuevo nazca con la cadena. Las funciones que la usan
+-- (price_list_tiers, compute_order_items, get_catalog...) viven en la
+-- migración, como el resto de lo posterior al 08-18.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'price_lists' and column_name = 'upgrade_to_id'
+  ) then
+    alter table public.price_lists
+      add column upgrade_to_id uuid references public.price_lists (id) on delete set null,
+      add column upgrade_at    numeric(12, 2);
+    update public.price_lists src
+    set upgrade_to_id = nx.id, upgrade_at = seed.at
+    from (values
+      ('us_min',       'us_wholesale',  2000),
+      ('us_wholesale', 'special',      15000),
+      ('ve_min',       've_wholesale',  2000),
+      ('ve_wholesale', 'special',      15000)
+    ) as seed(code, next_code, at)
+    join public.price_lists nx on nx.code = seed.next_code
+    where src.code = seed.code;
+  end if;
+end $$;
+alter table public.price_lists drop constraint if exists price_lists_upgrade_check;
+alter table public.price_lists add constraint price_lists_upgrade_check
+  check (
+    (upgrade_to_id is null) = (upgrade_at is null)
+    and (upgrade_at is null or upgrade_at > 0)
+    and (upgrade_to_id is null or upgrade_to_id <> id)
+  );
 
 -- Hace a Luzmar Quintero dueña principal de la lista 'luzmar' (por nombre,
 -- sin distinguir mayúsculas — hay índice único sobre lower(name)). No-op si

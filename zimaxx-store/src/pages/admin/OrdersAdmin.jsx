@@ -39,7 +39,7 @@ const STATUS_STYLES = {
 // dueñas fuerza al cliente a quedar con una de ellas).
 const ORDER_SELECT =
   'id, client_id, created_at, kind, status, total, stock_applied, request_id, ' +
-  'sellercloud_order_id, sellercloud_pushed_at, sellercloud_error, units, ' +
+  'sellercloud_order_id, sellercloud_pushed_at, sellercloud_error, units, pricing, ' +
   'clients(name, phone, vendedora_id, vendedores(name), price_lists(code, label))'
 
 // Si la migración de `units` todavía no corrió, el select de arriba da 42703
@@ -1327,6 +1327,23 @@ export default function OrdersAdmin() {
                       className="mt-1 inline-block max-w-[11rem] truncate rounded-full bg-primary/10 px-2 py-0.5 align-bottom text-[10px] font-semibold uppercase tracking-wide text-primary/60"
                     >
                       🏷️ {o.clients.price_lists.label}
+                    </span>
+                  )}
+                  {/* 2026-10-01: el pedido superó una marca y se cobró con
+                      otra lista (orders.pricing, lo escribe el servidor). */}
+                  {o.pricing?.tier_index > 0 && o.pricing.list_label && (
+                    <span
+                      data-testid="order-tier-chip"
+                      title={t('orderTierTitle', {
+                        list: o.pricing.list_label,
+                        savings: money(o.pricing.savings ?? 0),
+                        base: o.pricing.base_label ?? '',
+                        baseTotal: money(o.pricing.base_total ?? 0),
+                      })}
+                      className="ml-1 mt-1 inline-block max-w-[11rem] truncate rounded-full bg-green-100 px-2 py-0.5 align-bottom text-[10px] font-semibold uppercase tracking-wide text-green-800 dark:bg-green-900/50 dark:text-green-300"
+                    >
+                      ⬆️ {t('orderTierChip', { list: o.pricing.list_label })}
+                      {o.pricing.savings > 0 && ` · −${money(o.pricing.savings)}`}
                     </span>
                   )}
                 </td>

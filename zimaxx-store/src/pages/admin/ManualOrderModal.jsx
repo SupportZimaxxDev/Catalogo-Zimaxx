@@ -718,6 +718,17 @@ export default function ManualOrderModal({ open, onClose, onCreated, initialTab 
                           {t('pdfOrderTotalCompare', { total: money(pdfInfo.total) })}
                         </p>
                       )}
+                      {/* 2026-10-01: el pedido supera una marca de nivel y
+                          se cobra con otra lista (preview.pricing). */}
+                      {preview.pricing?.tier_index > 0 && (
+                        <p className="mt-1 text-xs font-semibold text-green-700 dark:text-green-400">
+                          ⬆️{' '}
+                          {t('manualOrderTier', {
+                            list: preview.pricing.list_label,
+                            savings: money(preview.pricing.savings ?? 0),
+                          })}
+                        </p>
+                      )}
                       {dropped.length > 0 && (
                         <p className="mt-2 text-xs font-semibold text-red-700">
                           {t('manualOrderDropped', { n: dropped.length })}

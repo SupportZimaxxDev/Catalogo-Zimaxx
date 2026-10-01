@@ -2,7 +2,9 @@ import { money } from './format'
 
 // PDF simple de la orden con jsPDF (tabla dibujada a mano, sin plugins).
 // jsPDF se carga bajo demanda para no pesar en el bundle inicial.
-export async function downloadOrderPdf({ t, clientName, items, total }) {
+// `tierInfo` (2026-10-01, opcional): {label, savings, baseTotal} si el carrito
+// se cobra con una lista superior por haber superado una marca.
+export async function downloadOrderPdf({ t, clientName, items, total, tierInfo = null }) {
   const hasPrices = items.some((i) => i.price != null)
   const { jsPDF } = await import('jspdf')
   const doc = new jsPDF()
@@ -106,6 +108,14 @@ export async function downloadOrderPdf({ t, clientName, items, total }) {
     y += 10
     doc.setDrawColor(13, 13, 13)
     doc.line(pageW - 80, y - 5, pageW - marginX, y - 5)
+    if (tierInfo && tierInfo.savings > 0) {
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      doc.text(`${t('tierPricesLabel')}: ${tierInfo.label}`, pageW - marginX, y, { align: 'right' })
+      y += 5
+      doc.text(`${t('tierSavingsRow')}: -${money(tierInfo.savings)}`, pageW - marginX, y, { align: 'right' })
+      y += 7
+    }
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(12)
     doc.text(`${t('total')}: ${money(total)}`, pageW - marginX, y, { align: 'right' })

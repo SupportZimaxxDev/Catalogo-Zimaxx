@@ -53,6 +53,69 @@ Dos regiones × dos niveles + una lista Special general (sin región):
   fallback para una base sin la migración. Cambiar el mínimo de una lista:
   `update public.price_lists set min_order = 800 where code = 'luzmar';`.
 
+### Listas de precio dinámicas: el total del carrito decide el nivel (2026-10-01)
+
+A pedido del usuario: "un cliente tiene la lista de minimum order, empieza a
+llenar su carrito, al superar la marca se le avisa que ahora se le van a
+ajustar los precios a la lista de wholesale, y así también cuando pase los
+15k; en la barra de arriba le va a salir cuántos dólares se ahorró".
+
+- **La lista asignada no cambia** (sigue siendo la del panel, la que decide
+  el pedido mínimo y la que ve al abrir el catálogo). Lo que cambia es el
+  **precio que paga ese pedido**: al llegar a la marca de la lista siguiente,
+  todo el carrito se cobra con esa lista.
+- **La cadena vive en la base**, lista por lista: `price_lists.upgrade_to_id`
+  (a qué lista se sube) + `price_lists.upgrade_at` (a partir de cuántos
+  dólares, medidos con los precios de la lista actual). Semilla:
+  `us_min → us_wholesale @ 2,000`, `us_wholesale → special @ 15,000`,
+  `ve_min → ve_wholesale @ 2,000`, `ve_wholesale → special @ 15,000`
+  (Special no distingue región); `special`, `luzmar` y `quote` no tienen
+  siguiente. El pedido original decía "al superar los 800" para el paso a
+  wholesale, pero $800 es el pedido mínimo de Minimum Order: con la marca ahí
+  ningún pedido válido de esa lista pagaría sus propios precios, así que se
+  tomó el $2,000 del nombre de la lista ("US Wholesale ($2,000+)"). Ajustar:
+  `update public.price_lists set upgrade_at = 1500 where code = 'us_min';`;
+  quitar un nivel: las dos columnas a null.
+- **Regla (idéntica en servidor y navegador)**: se sube de a un nivel
+  mientras el total *a precios del nivel actual* llegue a la marca del
+  siguiente (borde inclusivo). Ej.: 20 × $100 en Minimum Order = $2,000 →
+  se cobra con Wholesale ($90) = $1,800, ahorro $200; para Special hacen
+  falta $15,000 **a precios Wholesale**. Un producto sin precio en el nivel
+  superior hereda el del nivel anterior (subir nunca deja una línea sin
+  precio). Las cotizaciones (`kind = 'quote'`) no tienen nivel.
+- **Quién calcula**: `compute_order_items` (servidor, manda al registrar:
+  `create_order`, pedido manual, convertir cotización, precios en vivo de
+  cotizaciones) y `src/utils/tiers.js` (navegador, para que el cliente lo
+  vea al instante). `get_catalog` manda `client.tiers` (la cadena) y
+  `tier_prices` por producto (precio en cada nivel); sin cadena, las dos
+  claves van en null y el catálogo se comporta como siempre — también con
+  una base sin la migración.
+- **Lo que ve el cliente**: en el header, mientras haya carrito, una barra
+  con la lista vigente, "Te faltan $X para precios US Wholesale" y una barra
+  de progreso; al cruzar la marca, un toast ("¡Superaste $2,000! Tus precios
+  ahora se ajustan a la lista US Wholesale. Ahorrás $200") y el header pasa a
+  "🎉 Ahorrás $200.00 con precios US Wholesale" (+ cuánto falta para la
+  siguiente); si el carrito baja de la marca, otro toast avisa que vuelve a
+  su lista. Las tarjetas muestran el precio del nivel con el de la lista
+  tachado; el drawer muestra cada línea igual y un bloque "Precios · Total
+  con tu lista (tachado) · Ahorro por nivel"; el mensaje de WhatsApp y el
+  PDF llevan "Precios: US Wholesale / Ahorro por nivel: -$200". El pedido
+  mínimo sigue siendo el de la lista asignada, sobre el total cobrado
+  ($1,800 ≥ $800 entra).
+- **Lo que ve el panel**: `orders.pricing` guarda con qué nivel se cobró
+  (null = con su lista, como todos los pedidos anteriores); la bandeja
+  muestra un chip verde "⬆️ Cobrado con US Wholesale · −$200.00" junto al
+  🏷️ de la lista, la carga manual lo anticipa en el armado en seco, y el
+  Registro de movimientos lo lleva en el `detail` de pedido manual y
+  conversión. Los Excel de precios, el sync y la asignación de listas no
+  cambian.
+- Migración: `supabase/migration-2026-10-01-dynamic-price-tiers.sql`
+  (idempotente; la semilla solo la primera vez). Orden de deploy:
+  **migración primero, frontend después** (el frontend nuevo contra una
+  base sin migrar no cambia nada; al revés, el servidor ya cobraría con el
+  nivel y el cliente lo vería recién en el mensaje de WhatsApp). Tests:
+  `node tests/tiers-tests.mjs`.
+
 ### Listas con dueña (personales y compartidas)
 
 Una lista puede tener **dueñas** (tabla `price_list_owners`, 2026-08-04 —
@@ -2948,10 +3011,12 @@ y el redirect SPA. Configurar las mismas variables de entorno en el sitio.
   local `9ce3020` (a criterio del usuario).
 - ~~Enforcement estricto por nivel (mínimo $2,000 para wholesale, etc.)~~ →
   **hecho el 2026-09-15** (`price_lists.min_order`, sección 1 y banner de
-  arriba). Queda como idea aparte la variante "nivel automático por total
-  del carrito" ("te faltan $X para precio mayorista", opción C): hoy el
-  cliente mayorista con menos de $2,000 se bloquea, no se le re-cotiza al
-  precio de la lista de $800.
+  arriba). La variante "nivel automático por total del carrito" ("te faltan
+  $X para precio mayorista", opción C) quedó **hecha el 2026-10-01** hacia
+  ARRIBA (sección 1, "Listas de precio dinámicas"): el cliente de Minimum
+  Order que llega a $2,000 paga Wholesale, y el de Wholesale que llega a
+  $15,000 paga Special. Hacia abajo sigue igual: el mayorista con menos de
+  $2,000 se bloquea, no se le re-cotiza al precio de la lista de $800.
 - Subida directa de archivos de imagen (hoy es por URL).
 - Integración CRM (Bigin/Zoho) — fuera de alcance del spec original.
 

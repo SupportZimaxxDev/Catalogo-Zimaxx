@@ -1,7 +1,11 @@
 import { cleanPhone, money } from './format'
 
 // Construye el mensaje de pedido y el link wa.me a la vendedora.
-export function buildOrderMessage({ t, clientName, items, total }) {
+// `tierInfo` (2026-10-01, opcional): {label, savings, baseTotal} cuando el
+// carrito superó una marca y se cobra con otra lista — se dice en el mensaje
+// para que la asesora vea por qué los precios no son los de la lista del
+// cliente. El parser de abajo lo ignora (es una línea más sin cantidad).
+export function buildOrderMessage({ t, clientName, items, total, tierInfo = null }) {
   const hasPrices = items.some((i) => i.price != null)
   const lines = []
   lines.push(`*${hasPrices ? t('orderTitle') : t('quoteRequestTitle')}*`)
@@ -23,6 +27,10 @@ export function buildOrderMessage({ t, clientName, items, total }) {
 
   if (hasPrices) {
     lines.push('')
+    if (tierInfo && tierInfo.savings > 0) {
+      lines.push(`${t('tierPricesLabel')}: ${tierInfo.label}`)
+      lines.push(`${t('tierSavingsRow')}: -${money(tierInfo.savings)}`)
+    }
     lines.push(`*${t('total')}: ${money(total)}*`)
   }
 
