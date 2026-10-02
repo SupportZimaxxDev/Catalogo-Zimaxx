@@ -19,7 +19,7 @@ function SearchIcon() {
   )
 }
 
-export default function Header({ clientName, search, onSearchChange, showSearch }) {
+export default function Header({ clientName, search, onSearchChange, showSearch, brandSuggestions = [], onPickBrand }) {
   const { lang, setLang, t } = useI18n()
   const cart = useCart()
 
@@ -138,6 +138,25 @@ export default function Header({ clientName, search, onSearchChange, showSearch 
               placeholder={t('search')}
               className="w-full rounded-full border border-white/20 bg-white/10 py-2.5 pl-11 pr-4 text-sm text-white outline-none transition-colors placeholder:text-white/40 focus:border-secondary"
             />
+          </div>
+        )}
+
+        {/* Sugerencias de marca (2026-10-02): si lo tipeado es una marca o el
+            comienzo de una ("lat", "montbl", "ysl"), se ofrece como filtro de
+            un toque — deja el buscador libre para afinar dentro de la marca. */}
+        {showSearch && brandSuggestions.length > 0 && (
+          <div data-testid="brand-suggestions" className="mt-2 flex items-center gap-2 overflow-x-auto pb-0.5">
+            <span className="shrink-0 text-[10px] uppercase tracking-[0.25em] text-white/40">{t('brandSuggest')}</span>
+            {brandSuggestions.map((b) => (
+              <button
+                key={b.name}
+                onClick={() => onPickBrand(b.name)}
+                className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-secondary/50 bg-white/5 px-3 py-1 text-xs font-medium text-secondary transition-colors hover:bg-secondary hover:text-ink"
+              >
+                {b.name}
+                <span className="text-white/40">{b.count}</span>
+              </button>
+            ))}
           </div>
         )}
       </div>

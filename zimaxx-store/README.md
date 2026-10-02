@@ -248,6 +248,27 @@ subirle precio, `get_catalog` los ignoraría de todos modos).
 
 ### Catálogo del cliente: búsqueda y cantidades
 
+- **Buscador por marca + nombre y selector de marcas (2026-10-02)**: la
+  marca/diseñador NO está en el nombre del producto (marca "Mont Blanc",
+  nombre "Legend 3.3 Oz Edp Men"), y el buscador viejo exigía la frase entera
+  dentro de UN campo — "mont blanc legend" daba 0. Ahora
+  `src/utils/catalogSearch.js` arma por producto (una vez por carga) un texto
+  con marca + nombre + línea (en es y en) y busca **todos los términos en
+  cualquier orden, sin acentos**, con la versión "pegada" (`montblanc` =
+  Mont Blanc) y siglas de marca: iniciales automáticas de las marcas de
+  varias palabras (CH, JPG, CK, YSL) + alias (`d&g`/`dg`, `cr7`, `bulgari`,
+  `dior`, `armani`, `mugler`). El UPC se busca aparte, solo como único
+  término. Bajo el buscador aparecen **sugerencias de marca** ("lat" →
+  `Lattafa 112`): un toque fija la marca como filtro y limpia el texto para
+  afinar dentro de ella. La fila de ~100 chips de marca se reemplazó por un
+  botón **🏷 Marcas** que abre `BrandPicker.jsx` (hoja inferior en móvil,
+  ventana en desktop: buscador propio, lista A–Z con conteos, Escape/✕
+  cierran) + las **8 marcas con más productos** como chips rápidos y "Ver
+  todas →". Marcas y conteos respetan la línea elegida (Árabes → solo las 28
+  árabes), y cambiar a una línea donde la marca elegida no tiene nada la
+  suelta sola. La marca elegida ocupa el botón (`Mont Blanc 13 ✕`).
+  Verificado: `node tests/catalog-search-tests.mjs` (24) + Playwright 27/27
+  con los 875 productos reales de producción (desktop y móvil/inglés).
 - El buscador de `Catalog.jsx` matchea **nombre, categoría (marca), línea o
   UPC** (buscar "adidas" trae todo lo de esa marca, "arabes" trae todo
   lo de `Perfume - Arabes`, y pegar un código de barras —entero o un pedazo—
@@ -3075,4 +3096,5 @@ tests/stock-refresh-tests.mjs  Refresco de stock + gate de frescura del push (57
 tests/sc-push-tests.mjs  Suite del cliente de SellerCloud (35 comprobaciones, Node contra un servidor falso)
 tests/sc-customers-tests.mjs  Suite del alta/ficha/dirección de customers (78 comprobaciones, Node contra un servidor falso que reproduce GET/PUT de Customers y Addresses)
 tests/price-list-excel-tests.mjs  Excel de la lista de precios (40 comprobaciones, Node; el workbook se serializa y se lee de vuelta)
+tests/catalog-search-tests.mjs  Buscador del catálogo: marca + nombre, siglas, UPC, sugerencias de marca (24 comprobaciones, Node)
 ```

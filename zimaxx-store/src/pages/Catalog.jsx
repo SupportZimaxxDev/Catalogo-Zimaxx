@@ -13,6 +13,7 @@ import { useCart } from '../context/CartContext'
 import PriceListExcel from '../components/PriceListExcel'
 import { useInfiniteRows } from '../hooks/useInfiniteRows'
 import { loadFavorites, pushFavorite, saveFavorites } from '../utils/favorites'
+import { matchesProduct, productSearchKey, searchTerms, suggestBrands } from '../utils/catalogSearch'
 
 // Género y sets derivados DEL NOMBRE (2026-08-20): no hay columna de género
 // — el dato vive en el nombre tal como llega del export de SellerCloud, y en
@@ -36,6 +37,10 @@ function genderOf(name) {
 // Los dos valores canónicos de product_line (ver parseLine en ProductsAdmin).
 const LINE_ARABIC = 'Perfume - Arabes'
 const LINE_DESIGNER = 'Perfume'
+// Las etiquetas de línea entran al texto buscable en los DOS idiomas: la clave
+// se arma una vez por carga y no tiene que depender del idioma elegido.
+const LINE_SEARCH = { [LINE_DESIGNER]: 'diseñador designer', [LINE_ARABIC]: 'arabes arabic' }
+const lineSearchLabel = (l) => LINE_SEARCH[l] ?? l
 
 export default function Catalog() {
   const { t } = useI18n()
@@ -152,14 +157,48 @@ export default function Catalog() {
   // Género y set se calculan UNA vez por carga de catálogo, no en cada
   // filtrado: son regex sobre miles de nombres.
   const enriched = useMemo(
-    () => products.map((p) => ({ ...p, gender: genderOf(p.name), is_set: RE_SET.test(p.name ?? '') })),
+    () =>
+      products.map((p) => ({
+        ...p,
+        gender: genderOf(p.name),
+        is_set: RE_SET.test(p.name ?? ''),
+        // Texto buscable (marca + nombre + línea, ver utils/catalogSearch).
+        searchKey: productSearchKey(p, lineSearchLabel),
+      })),
     [products],
   )
 
-  const categories = useMemo(
-    () => [...new Set(enriched.map((p) => p.category).filter(Boolean))].sort(),
-    [enriched],
+  // Marcas (= category, el PRODUCTBRAND del export) con cuántos productos
+  // tiene cada una DENTRO de la línea elegida: elegir "Árabes" deja en el
+  // selector solo las marcas árabes, con sus conteos reales.
+  const brands = useMemo(() => {
+    const counts = new Map()
+    for (const p of enriched) {
+      if (!p.category || (line && p.product_line !== line)) continue
+      counts.set(p.category, (counts.get(p.category) ?? 0) + 1)
+    }
+    return [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name))
+  }, [enriched, line])
+
+  // Al cambiar de línea, una marca que no tiene nada en la nueva se suelta
+  // sola: si no, el cliente queda mirando "0 resultados" sin entender por qué.
+  const changeLine = (l) => {
+    setLine(l)
+    if (category && !enriched.some((p) => p.category === category && (!l || p.product_line === l))) setCategory('')
+  }
+
+  // Sugerencias de marca bajo el buscador: tipear "lat" ofrece "Lattafa" como
+  // filtro. Sobre `searchInput` (sin debounce) — son ~100 marcas, no miles de
+  // productos — para que aparezcan mientras se escribe.
+  const brandSuggestions = useMemo(
+    () => suggestBrands(searchInput, brands).filter((b) => b.name !== category),
+    [searchInput, brands, category],
   )
+  const pickBrand = (name) => {
+    setCategory(name)
+    setSearchInput('')
+    setSearch('')
+  }
 
   // 'product_line' viene de PRODUCT_CATEGORY en el Excel (ej. "Perfume" vs
   // "Perfume - Arabes" = dupes árabes) — distinto de 'category', que acá
@@ -203,7 +242,7 @@ export default function Catalog() {
   const hasPrices = useMemo(() => enriched.some((p) => p.price != null), [enriched])
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
+    const terms = searchTerms(search)
     const list = enriched.filter(
       (p) =>
         (!category || p.category === category) &&
@@ -219,13 +258,9 @@ export default function Catalog() {
           (segment === 'men' && (p.gender === 'men' || p.gender === 'unisex')) ||
           (segment === 'sets' && p.is_set)) &&
         (!onlyFavs || favs.has(p.id)) &&
-        (!q ||
-          p.name.toLowerCase().includes(q) ||
-          (p.category ?? '').toLowerCase().includes(q) ||
-          (p.product_line ?? '').toLowerCase().includes(q) ||
-          // 2026-08-14: desde que el UPC se ve en la tarjeta, tiene que poder
-          // buscarse — si no, el cliente lo lee en el catálogo y no lo puede usar.
-          (p.upc ?? '').toLowerCase().includes(q)),
+        // 2026-10-02: marca + nombre en cualquier orden ("mont blanc legend"),
+        // sin acentos, con siglas (ysl, ch, d&g) y el UPC — ver catalogSearch.
+        matchesProduct(terms, p.searchKey),
     )
     // El sort va sobre la copia que ya devolvió filter. Empates por nombre
     // para que el orden sea estable entre renders; un precio null (no debería
@@ -258,15 +293,17 @@ export default function Catalog() {
           search={searchInput}
           onSearchChange={setSearchInput}
           showSearch={showFilters}
+          brandSuggestions={brandSuggestions}
+          onPickBrand={pickBrand}
         />
         {showFilters && (
           <FilterBar
-            categories={categories}
+            brands={brands}
             category={category}
             onCategoryChange={setCategory}
             lines={lines}
             line={line}
-            onLineChange={setLine}
+            onLineChange={changeLine}
             lineLabel={lineLabel}
             hasPreorder={hasPreorder}
             hasFlashType={hasFlashType}

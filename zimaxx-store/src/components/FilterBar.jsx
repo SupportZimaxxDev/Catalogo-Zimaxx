@@ -1,4 +1,6 @@
+import { useCallback, useState } from 'react'
 import { useI18n } from '../i18n'
+import BrandPicker from './BrandPicker'
 
 const chipCls = (active, size = 'text-xs') =>
   `whitespace-nowrap rounded-full px-4 py-1.5 ${size} font-medium transition-all ${
@@ -6,6 +8,10 @@ const chipCls = (active, size = 'text-xs') =>
       ? 'bg-ink text-secondary ring-1 ring-secondary/40'
       : 'border border-line bg-surface text-primary/70 hover:border-secondary hover:text-primary'
   }`
+
+// Cuántas marcas van como chip rápido al lado del botón "Marcas" (las de más
+// productos); el resto vive en el selector completo.
+const QUICK_BRANDS = 8
 
 // Chips de categoría/línea/disponibilidad + segmento. Vive pegado al Header
 // (ver Catalog.jsx: ambos comparten el mismo contenedor sticky) para quedar
@@ -21,7 +27,7 @@ const chipCls = (active, size = 'text-xs') =>
 // responderle; con una base sin las migraciones de ranking, los ⭐
 // simplemente no salen.
 export default function FilterBar({
-  categories,
+  brands,
   category,
   onCategoryChange,
   lines,
@@ -53,12 +59,15 @@ export default function FilterBar({
   onSortChange,
 }) {
   const { t } = useI18n()
+  const [pickerOpen, setPickerOpen] = useState(false)
+  // Estable: BrandPicker engancha Escape y el bloqueo de scroll a este handler.
+  const closePicker = useCallback(() => setPickerOpen(false), [])
 
   const hasStatusRow =
     hasPreorder || hasFlashType || hasNew || hasTop || hasTopArabic || hasTopDesigner || hasPrices
   const hasSegmentRow = hasWomen || hasMen || hasSets || favCount > 0
 
-  if (categories.length === 0 && lines.length <= 1 && !hasStatusRow && !hasSegmentRow) return null
+  if (brands.length === 0 && !category && lines.length <= 1 && !hasStatusRow && !hasSegmentRow) return null
 
   // Un solo botón "Todos" resetea todos los filtros especiales de una: es el
   // escape para volver al catálogo completo sin destildar chip por chip.
@@ -76,17 +85,71 @@ export default function FilterBar({
 
   return (
     <div className="space-y-2 border-b border-line bg-bg px-4 py-2.5">
-      {categories.length > 0 && (
-        <div className="flex gap-2 overflow-x-auto pb-0.5">
-          <button onClick={() => onCategoryChange('')} className={chipCls(!category, 'text-sm')}>
-            {t('allCategories')}
-          </button>
-          {categories.map((c) => (
-            <button key={c} onClick={() => onCategoryChange(c === category ? '' : c)} className={chipCls(category === c, 'text-sm')}>
-              {c}
+      {/* Marcas (2026-10-02): antes eran ~100 chips en una fila con scroll
+          horizontal. Ahora un botón abre el selector completo (A–Z, con
+          buscador y conteos) y al lado quedan solo las marcas con más
+          productos de la línea elegida como atajo. La marca elegida ocupa
+          el botón, con su ✕ para soltarla. */}
+      {(brands.length > 0 || category) && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-0.5">
+          {category ? (
+            <span className="flex shrink-0 items-center overflow-hidden rounded-full bg-ink text-sm font-medium text-secondary ring-1 ring-secondary/40">
+              <button onClick={() => setPickerOpen(true)} className="flex items-center gap-1.5 py-1.5 pl-4 pr-2">
+                <TagIcon />
+                <span className="max-w-[12rem] truncate">{category}</span>
+                <span className="text-xs text-secondary/60">
+                  {brands.find((b) => b.name === category)?.count ?? 0}
+                </span>
+              </button>
+              <button
+                onClick={() => onCategoryChange('')}
+                aria-label={t('clearBrand')}
+                className="border-l border-secondary/30 py-1.5 pl-2 pr-3 text-secondary/70 transition-colors hover:text-white"
+              >
+                ✕
+              </button>
+            </span>
+          ) : (
+            <button
+              onClick={() => setPickerOpen(true)}
+              className="flex shrink-0 items-center gap-1.5 rounded-full border border-secondary/60 bg-gold-pale/40 px-4 py-1.5 text-sm font-semibold text-primary transition-colors hover:border-secondary hover:bg-gold-pale"
+            >
+              <TagIcon />
+              {t('brands')}
+              <span className="text-xs font-medium text-primary/50">{brands.length}</span>
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-primary/50" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m6 9 6 6 6-6" />
+              </svg>
             </button>
-          ))}
+          )}
+          <span className="h-5 w-px shrink-0 bg-line" aria-hidden="true" />
+          {[...brands]
+            .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+            .filter((b) => b.name !== category)
+            .slice(0, QUICK_BRANDS)
+            .map((b) => (
+              <button key={b.name} onClick={() => onCategoryChange(b.name)} className={chipCls(false)}>
+                {b.name}
+              </button>
+            ))}
+          {brands.length > QUICK_BRANDS && (
+            <button
+              onClick={() => setPickerOpen(true)}
+              className="whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold text-secondary-dark transition-colors hover:text-primary"
+            >
+              {t('seeAllBrands')} →
+            </button>
+          )}
         </div>
+      )}
+      {pickerOpen && (
+        <BrandPicker
+          brands={brands}
+          selected={category}
+          onSelect={onCategoryChange}
+          onClose={closePicker}
+          lineName={line ? lineLabel(line) : ''}
+        />
       )}
       {lines.length > 1 && (
         <div className="flex gap-2 overflow-x-auto pb-0.5">
@@ -194,5 +257,14 @@ export default function FilterBar({
         </div>
       )}
     </div>
+  )
+}
+
+function TagIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z" />
+      <circle cx="7.5" cy="7.5" r="1.5" />
+    </svg>
   )
 }
